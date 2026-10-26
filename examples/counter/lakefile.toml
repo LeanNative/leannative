@@ -1,0 +1,14 @@
+# The Counter example: a second ElmLean app in its own Lake package.
+name = "counter"
+defaultTargets = ["Counter", "counter-cli"]
+
+[[require]]
+name = "elmlean"
+path = "../../framework/lean"
+
+[[lean_lib]]
+name = "Counter"
+
+[[lean_exe]]
+name = "counter-cli"
+root = "Main"

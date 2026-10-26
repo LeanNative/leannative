@@ -1,0 +1,1 @@
+{"version":"0.0.1","configurations":[{"name":"todo-bridge","runtimeExecutable":"/opt/homebrew/bin/python3","runtimeArgs":["framework/bridge/bridge.py","--port","8787","--cli","examples/todo/.lake/build/bin/todo-cli"],"port":8787}]}

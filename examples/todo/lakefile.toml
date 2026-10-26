@@ -1,0 +1,14 @@
+# The Todo example: an ElmLean app in its own Lake package, depending on the framework only.
+name = "todo"
+defaultTargets = ["Todo", "todo-cli"]
+
+[[require]]
+name = "elmlean"
+path = "../../framework/lean"
+
+[[lean_lib]]
+name = "Todo"
+
+[[lean_exe]]
+name = "todo-cli"
+root = "Main"
