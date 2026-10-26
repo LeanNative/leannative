@@ -30,7 +30,7 @@ def at? : Wire → List Nat → Option Wire
   | w, [] => some w
   | w, i :: p => w.children[i]? >>= (at? · p)
 
-/-- What a renderer is allowed to infer from a node alone: which event kinds it accepts. -/
+/-- What a client is allowed to infer from a node alone: which event kinds it accepts. -/
 def accepts : Wire → Event → Bool
   | .button _ _ en, .click => en
   | .field .., .input _ => true

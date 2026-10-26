@@ -47,7 +47,7 @@ theorem delete_dispatch (m : Model) (i : Nat) (hi : i < (visible m).length) :
     List.getElem?_eq_getElem hi, todoRow, Html.handle]
 
 /-- V3b: the toggle of row `i` dispatches to `setDone` of exactly the `i`-th visible todo's
-id, carrying the value `b` the renderer sent. Again this identifies the *message* only; its
+id, carrying the value `b` the toggle sent. Again this identifies the *message* only; its
 effect is stated by the `setDone_*` lemmas in `Proofs/TodoUpdate.lean`: `setDone_target_done`
 and `setDone_mem_target` (the target's done flag becomes `b`), `setDone_mem_other` and
 `setDone_mem_other'` (every other todo is untouched), `setDone_ids` and `setDone_titles` (ids,

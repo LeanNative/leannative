@@ -112,7 +112,7 @@ def at(node, path):
 
 
 def advertised(view):
-    """(path, event) pairs the renderer may fire, exactly as PROTOCOL.md's table says."""
+    """(path, event) pairs a client may fire, exactly as PROTOCOL.md's table says."""
     out = []
     for path, n in walk(view):
         t = n.get("t")

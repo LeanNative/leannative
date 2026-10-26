@@ -2,7 +2,7 @@ import ElmLean.Wire
 
 namespace ElmLean
 
-/-- Erase handlers: this is exactly what gets serialized and sent to renderers. -/
+/-- Erase handlers: this is exactly what the CLI serializes in its replies. -/
 def Html.toWire {msg : Type} : Html msg → Wire
   | .text s st => .text s st
   | .col cs => .col (cs.map toWire)

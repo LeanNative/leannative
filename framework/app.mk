@@ -13,13 +13,12 @@
 # Optional:
 #   PROTOCOL_FLAGS  extra protocol_test.py flags (`--shape list` for list-shaped apps)
 #   EXTRA_CHECKS    more targets for `make check`
-#   PORT            bridge port for `make serve` (8787)
 #
 # Targets:
 #   build       lake build: the app, its proofs, its gate (fails on any disallowed axiom), its CLI
 #   axioms      the two-layer axiom gate with its log checks (framework/scripts/check-axioms.sh)
 #   selftest    the CLI's generic exploration + the app's scripted self-test
-#   protocol    the protocol harness against the Lean CLI
+#   protocol    the protocol harness against the Lean CLI (the reference the generated code is tested against)
 #   gen         regenerate generated/Generated.swift and generated/$(SCREEN).swift with elmgen
 #   golden      the checked-in generated files are byte-identical to a fresh elmgen run
 #   gen-cli     the generated update/view compiled as a macOS CLI speaking the same protocol
@@ -27,15 +26,13 @@
 #   crosscheck  an independent LCNF translation, locked in step with both
 #   check       axioms selftest protocol golden gen-test crosscheck $(EXTRA_CHECKS)
 #   ios         xcodegen + build + install + launch the generated native app in the iPhone simulator
-#   serve       the HTTP bridge on $(PORT) for the generic viewer app (framework/viewer-ios)
 
 PY      ?= /opt/homebrew/bin/python3
-PORT    ?= 8787
 CLI     := .lake/build/bin/$(EXE)
 GEN_CLI := build/$(EXE)-swift
 SCRIPTS := $(FW)/scripts
 
-.PHONY: build axioms selftest protocol gen golden gen-cli gen-test crosscheck check ios serve view
+.PHONY: build axioms selftest protocol gen golden gen-cli gen-test crosscheck check ios view
 
 build:
 	lake build
@@ -76,6 +73,3 @@ check: axioms selftest protocol golden gen-test crosscheck $(EXTRA_CHECKS)
 
 ios:
 	$(SCRIPTS)/app_sim.sh ios $(IOS_SCHEME) $(BUNDLE_ID) all
-
-serve: build
-	$(PY) $(FW)/bridge/bridge.py --port $(PORT) --cli "$(CLI)"

@@ -4,7 +4,7 @@ A todo list: a draft field with Add, one row per todo (toggle, Delete), an All/A
 filter, a "n left" caption and Clear done. It is an ordinary Lean package that requires the
 framework (`lakefile.toml`), and it exercises everything the framework offers: a `Spec`, a
 theorem table about its view and its messages, a scripted self-test, the generated native app,
-the generator's corpus, and the bridge end to end.
+and the generator's corpus.
 
 ```
 Todo/Model.lean, Update.lean, View.lean, App.lean   the app (`Todo.app`)
@@ -20,15 +20,11 @@ ios/                                                 the generated native app (x
 ## Run it
 
 ```bash
-make check      # gate · selftest · protocol harness · golden · generated CLI + lockstep · cross-check · corpus · bridge
+make check      # gate · selftest · protocol harness · golden · generated CLI + lockstep · cross-check · corpus
 ```
 
 ```bash
 make ios        # the generated native app in the iPhone simulator
-```
-
-```bash
-make serve      # the Lean CLI behind the bridge; then framework/viewer-ios/scripts/sim.sh all for the viewer
 ```
 
 Try the CLI directly:
@@ -46,7 +42,7 @@ printf '%s\n' '{"seq":0,"path":[1,0],"event":{"k":"input","value":"Milk"}}' '{"s
 | `init_inv`, `update_inv` | The invariant (ids pairwise distinct, every id below `nextId`, no empty title) holds initially and is preserved by every message. |
 | `todo_start_inv`, `todo_handle_inv`, `todo_run_inv` | …and therefore after every possible sequence of requests to the real app (`todo_run_inv` is `spec.reachable_inv`). |
 | `countToggles_view`, `toggleLabels_view` | The emitted tree has exactly one toggle per visible todo, labelled by the visible titles, in order. |
-| `delete_dispatch`, `toggle_dispatch` | Row `i`'s Delete dispatches to `delete` of exactly the `i`-th visible todo's id; row `i`'s toggle dispatches to `setDone` of that id with the value the renderer sent. These identify the *message*; the next row says what the message does. |
+| `delete_dispatch`, `toggle_dispatch` | Row `i`'s Delete dispatches to `delete` of exactly the `i`-th visible todo's id; row `i`'s toggle dispatches to `setDone` of that id with the value the toggle sent. These identify the *message*; the next row says what the message does. |
 | `delete_mem_iff`, `delete_length`, `setDone_*` | `delete id` removes exactly the todos with that id (one todo under the invariant); `setDone id b` leaves ids and titles unchanged, sets that todo's flag to `b`, touches no other todo, and is idempotent (`setDone_idem`). |
 | `footer_text`, `add_enabled_iff` | The "n left" caption is the real remaining count; Add is clickable iff the trimmed draft is non-empty. |
 | `view_sat`, `view_sound` | Every control the view advertises dispatches to a **well-targeted** message: any id it names belongs to an existing todo. |

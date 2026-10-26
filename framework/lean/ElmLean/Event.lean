@@ -1,6 +1,6 @@
 namespace ElmLean
 
-/-- An event a renderer can send back for a node. `input` and `toggle` carry the
+/-- An event a client can send back for a node. `input` and `toggle` carry the
 full new value, never a delta. -/
 inductive Event where
   | click

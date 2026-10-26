@@ -57,8 +57,8 @@ digit-by-digit division loop in Lean itself, 2 s for `10^5` digits; the first ve
 function stripped the zeros one by one in the same way and was quadratic in their number.) What
 this function cannot help is Lean's stdlib `Json.parse`, which runs before it. It materialises
 `10^N` for a literal like `1eN` (`1E400` arrives as the mantissa `10^400`; an exponent of `10^18`
-panics the process in `Nat.pow` before any reply is written), a trusted-shell limitation that is
-unreachable over the HTTP bridge, which forwards only JSON integers for `seq` and path elements.
+panics the process in `Nat.pow` before any reply is written), a trusted-shell limitation.
+
 It also accumulates every mantissa digit by digit (`10 * acc + d`), quadratic in the digit count:
 about 0.25 s for `10^5` digits and 25 to 30 s for `10^6`, paid by a plain integer literal of that
 length as well, wherever one reaches the CLI. -/
