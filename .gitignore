@@ -11,3 +11,5 @@ DerivedData/
 __pycache__/
 *.pyc
 .DS_Store
+# Claude desktop app preview config (machine-specific)
+.claude/
