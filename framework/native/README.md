@@ -53,7 +53,7 @@ the caret and a sync in progress does not reset scrolling. A screen whose only c
 grouped list of cards; `sheet` and `alert` present themselves while their node exists (a sheet swiped
 away sends `dismiss`); `tabs` use the platform's tab bar and only the selected tab is built. The app is
 scene-based (`UIApplicationSceneManifest` names `ELSceneDelegate`); a scene saved by an earlier SwiftUI
-build of an app comes back without a delegate and is adopted, so an update does not open on an empty
+build of an app comes back with SwiftUI's own scene delegate, which draws nothing, and is adopted, so an update does not open on an empty
 window. Text is not selectable (SwiftUI's `textSelection`); the apps have explicit Copy buttons.
 
 The C is compiled at `-O3` in every configuration (`GCC_OPTIMIZATION_LEVEL: 3` in project.yml):
@@ -94,8 +94,14 @@ no Keychain entitlement and every write fails with -34018),
 `clipboard.get/set` (`set` takes `localOnly` and `expiresIn` seconds: kept off Universal Clipboard and
 cleared after that time), `paths`, `exclude-from-backup` (with `complete`: also `FileProtectionType.complete`), `documents` (the Documents path, for Lean's file I/O), `http.get` (HTTPS through
 URLSession: ephemeral, same-host redirects only, never https→http — Lean's runtime has no TLS),
-`open` (a URL outside the app). The app asks with `Effects.cap name args k`; the answer comes back as
-the host message `k result`.
+`open` (a URL outside the app), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
+`ble.connect` (a peripheral the system already holds connected, else the first a scan finds; answers its
+characteristics), `ble.subscribe` (notifications on; iOS pairs here, so it may wait on the user),
+`ble.write` (hex, with or without response), `ble.read` (the next notified value, in arrival order per
+characteristic) and `ble.close`. Framing and UUIDs are the app's (a Ledger's transport is Winnow's Lean);
+the central manager is made on the first `ble.*` request, so an app that never uses Bluetooth never asks
+for it, and an app that does declares `NSBluetoothAlwaysUsageDescription`. The app asks with
+`Effects.cap name args k`; the answer comes back as the host message `k result`.
 
 ## View nodes
 

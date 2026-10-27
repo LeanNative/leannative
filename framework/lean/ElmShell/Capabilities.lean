@@ -2,6 +2,10 @@ import ElmShell.ObjC
 
 /-! # ElmShell.Capabilities: `ELCapabilities.m`
 
+The `ble.*` rows are generic Bluetooth Low Energy (GATT) by service and characteristic UUID, run by the
+`ELBluetooth` class printed here; framing and UUIDs are the app's. An app that uses them declares
+`NSBluetoothAlwaysUsageDescription` in its Info.plist.
+
 One row per capability: its name, the documentation of its arguments and result (printed as the table in
 the header's doc comment on `ELCapabilities`), and the Objective-C that runs it, which answers through
 `answer`. The dispatch on the name is printed from the same rows, so a documented capability is a handled
@@ -126,7 +130,26 @@ def capabilities : List Capability :=
       .blk [("if (url) {", [
             .l "[UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];",
             .l "answer(@{@\"ok\": @YES});"]), ("} else {", [
-            .l "answer(@{@\"ok\": @NO});"])] "}"] } ]
+            .l "answer(@{@\"ok\": @NO});"])] "}"] },
+  { name := "ble.state", args := "—",
+    result := "`{\"state\":…}`: `poweredOn`, `poweredOff`, `unauthorized`, `unsupported`, `resetting` or `unknown`",
+    body := [.l "[[ELBluetooth shared] state:answer];"] },
+  { name := "ble.connect", args := "`services` (UUIDs), `timeout`? (s, 45)",
+    result := "`{\"ok\":true,\"id\",\"service\",\"characteristics\"}` for the first peripheral offering one of the services (one the system already holds connected, else the first found by a scan), or `{\"ok\":false,\"error\":…}` (a Bluetooth state, `timeout`, `refused`, `busy`, …)",
+    body := [.l "[[ELBluetooth shared] connect:args answer:answer];"] },
+  { name := "ble.subscribe", args := "`id`, `characteristic`, `timeout`? (s, 90)",
+    result := "`{\"ok\":…}` once notifications are on: iOS pairs on the first encrypted access, so this can wait on the user",
+    body := [.l "[[ELBluetooth shared] subscribe:args answer:answer];"] },
+  { name := "ble.write", args := "`id`, `characteristic`, `hex`, `response`? (true), `timeout`? (s, 15)",
+    result := "`{\"ok\":…}`; with `response`, after the peripheral acknowledges",
+    body := [.l "[[ELBluetooth shared] write:args answer:answer];"] },
+  { name := "ble.read", args := "`id`, `characteristic`, `timeout`? (s, 30)",
+    result := "`{\"hex\":…}`: the next notified value, in arrival order per characteristic; or `{\"error\":\"timeout\"|\"disconnected\"}`",
+    body := [.l "[[ELBluetooth shared] read:args answer:answer];"] },
+  { name := "ble.close", args := "`id`",
+    result := "`{\"ok\":true}` disconnects; requests waiting on the peripheral fail with `disconnected`",
+    body := [.l "[[ELBluetooth shared] close:args answer:answer];"] } ]
+
 
 def unknownCapability : List Stmt := [
     .l "answer(@{@\"error\": [NSString stringWithFormat:@\"unknown capability %@\", name]});"]
@@ -142,6 +165,7 @@ def capsBefore : List Stmt := [
     .pp "#import \"ElmLeanShell.h\"",
     .pp "#import <LocalAuthentication/LocalAuthentication.h>",
     .pp "#import <Security/Security.h>",
+    .pp "#import <CoreBluetooth/CoreBluetooth.h>",
     .blank,
     .l "/// One ephemeral URLSession for `http.get`: no cookies, no cache, redirects only within the same host and",
     .l "/// never from https down to http.",
@@ -188,8 +212,318 @@ def capsBefore : List Stmt := [
         .l "          (__bridge id)kSecAttrAccount: ELArgString(args, @\"key\") ?: @\"\"} mutableCopy];"],
     .blank]
 
+set_option maxRecDepth 8000 in
+def bluetoothClass : List Stmt := [
+    .l "/// Bluetooth Low Energy (GATT) for the `ble.*` capabilities: generic, by service and characteristic UUIDs;",
+    .l "/// what the bytes mean is the app's. One central manager, made on the first `ble.*` request so that an app",
+    .l "/// that never uses Bluetooth never asks for it. Callbacks arrive on the main queue, like every answer.",
+    .l "typedef void (^ELAnswer)(NSDictionary *result);",
+    .blank,
+    .l "@interface ELBluetooth : NSObject <CBCentralManagerDelegate, CBPeripheralDelegate>",
+    .l "+ (instancetype)shared;",
+    .l "- (void)state:(ELAnswer)answer;",
+    .l "- (void)connect:(NSDictionary *)args answer:(ELAnswer)answer;",
+    .l "- (void)subscribe:(NSDictionary *)args answer:(ELAnswer)answer;",
+    .l "- (void)write:(NSDictionary *)args answer:(ELAnswer)answer;",
+    .l "- (void)read:(NSDictionary *)args answer:(ELAnswer)answer;",
+    .l "- (void)close:(NSDictionary *)args answer:(ELAnswer)answer;",
+    .l "@end",
+    .blank,
+    b "static NSString *ELHexOf(NSData *data) {" [
+        .l "NSMutableString *hex = [NSMutableString stringWithCapacity:data.length * 2];",
+        .l "const unsigned char *bytes = data.bytes;",
+        .l "for (NSUInteger i = 0; i < data.length; i++) [hex appendFormat:@\"%02x\", bytes[i]];",
+        .l "return hex;"],
+    .blank,
+    b "static NSData *ELDataOf(NSString *hex) {" [
+        .l "if (hex.length % 2 != 0) return nil;",
+        .l "NSMutableData *data = [NSMutableData dataWithCapacity:hex.length / 2];",
+        b "for (NSUInteger i = 0; i < hex.length; i += 2) {" [
+            .l "unsigned int byte = 0;",
+            .l "NSScanner *scanner = [NSScanner scannerWithString:[hex substringWithRange:NSMakeRange(i, 2)]];",
+            .l "if (![scanner scanHexInt:&byte] || !scanner.atEnd) return nil;",
+            .l "unsigned char b = (unsigned char)byte;",
+            .l "[data appendBytes:&b length:1];"],
+        .l "return data;"],
+    .blank,
+    b "static NSString *ELStateName(CBManagerState state) {" [
+        b "switch (state) {" [
+            .l "case CBManagerStatePoweredOn: return @\"poweredOn\";",
+            .l "case CBManagerStatePoweredOff: return @\"poweredOff\";",
+            .l "case CBManagerStateUnauthorized: return @\"unauthorized\";",
+            .l "case CBManagerStateUnsupported: return @\"unsupported\";",
+            .l "case CBManagerStateResetting: return @\"resetting\";",
+            .l "default: return @\"unknown\";"]],
+    .blank,
+    .l "/// A request waiting for a callback, with the deadline that answers it instead.",
+    .l "@interface ELPending : NSObject",
+    .l "@property (nonatomic, copy) ELAnswer answer;",
+    .l "@property (nonatomic, strong) dispatch_block_t deadline;",
+    .l "@end",
+    .blank,
+    .l "@implementation ELPending",
+    .l "@end",
+    .blank,
+    b "@implementation ELBluetooth {" [
+        .l "CBCentralManager *_central;",
+        .l "NSMutableArray<void (^)(void)> *_whenReady;",
+        .l "NSMutableDictionary<NSString *, CBPeripheral *> *_peripherals;",
+        .l "// the connection being made: its services, its peripheral once found, its answer",
+        .l "NSArray<CBUUID *> *_connectServices;",
+        .l "CBPeripheral *_connecting;",
+        .l "ELPending *_connect;",
+        .l "// per \"peripheral id|characteristic uuid\": requests in flight, and notified values not yet read",
+        .l "NSMutableDictionary<NSString *, ELPending *> *_subscribes;",
+        .l "NSMutableDictionary<NSString *, NSMutableArray<ELPending *> *> *_writes;",
+        .l "NSMutableDictionary<NSString *, NSMutableArray<ELPending *> *> *_reads;",
+        .l "NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *_values;"],
+    .blank,
+    b "+ (instancetype)shared {" [
+        .l "static ELBluetooth *shared;",
+        .l "static dispatch_once_t once;",
+        .l "dispatch_once(&once, ^{ shared = [ELBluetooth new]; });",
+        .l "return shared;"],
+    .blank,
+    b "- (instancetype)init {" [
+        b "if ((self = [super init])) {" [
+            .l "_whenReady = [NSMutableArray array];",
+            .l "_peripherals = [NSMutableDictionary dictionary];",
+            .l "_subscribes = [NSMutableDictionary dictionary];",
+            .l "_writes = [NSMutableDictionary dictionary];",
+            .l "_reads = [NSMutableDictionary dictionary];",
+            .l "_values = [NSMutableDictionary dictionary];"],
+        .l "return self;"],
+    .blank,
+    .l "/// Runs `then` once the central knows its state (made on first use), or after 5 s.",
+    b "- (void)ready:(void (^)(void))then {" [
+        .l "if (!_central) _central = [[CBCentralManager alloc] initWithDelegate:self queue:nil];",
+        .l "if (_central.state != CBManagerStateUnknown && _central.state != CBManagerStateResetting) { then(); return; }",
+        .l "[_whenReady addObject:then];",
+        b "dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{" [
+            .l "if (![self->_whenReady containsObject:then]) return;",
+            .l "[self->_whenReady removeObject:then];",
+            .l "then();"] "});"],
+    .blank,
+    b "- (ELPending *)pending:(ELAnswer)answer timeout:(NSTimeInterval)seconds onTimeout:(void (^)(ELPending *p))expire {" [
+        .l "ELPending *p = [ELPending new];",
+        .l "p.answer = answer;",
+        .l "__weak ELPending *weakP = p;",
+        b "p.deadline = dispatch_block_create(0, ^{" [
+            .l "ELPending *q = weakP;",
+            .l "if (q) expire(q);"] "});",
+        .l "dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), p.deadline);",
+        .l "return p;"],
+    .blank,
+    b "- (void)settle:(ELPending *)p with:(NSDictionary *)result {" [
+        .l "if (p.deadline) dispatch_block_cancel(p.deadline);",
+        .l "p.deadline = nil;",
+        .l "p.answer(result);"],
+    .blank,
+    b "- (NSString *)key:(NSString *)peripheral characteristic:(CBUUID *)uuid {" [
+        .l "return [NSString stringWithFormat:@\"%@|%@\", peripheral, uuid.UUIDString];"],
+    .blank,
+    b "- (CBCharacteristic *)characteristic:(CBUUID *)uuid of:(CBPeripheral *)peripheral {" [
+        .l "for (CBService *service in peripheral.services)",
+        .l "    for (CBCharacteristic *c in service.characteristics)",
+        .l "        if ([c.UUID isEqual:uuid]) return c;",
+        .l "return nil;"],
+    .blank,
+    b "static NSArray<CBUUID *> *ELUUIDs(id list) {" [
+        .l "NSMutableArray *out = [NSMutableArray array];",
+        .l "if ([list isKindOfClass:NSArray.class])",
+        .l "    for (id s in list) if ([s isKindOfClass:NSString.class]) [out addObject:[CBUUID UUIDWithString:s]];",
+        .l "return out;"],
+    .blank,
+    b "static NSTimeInterval ELSeconds(NSDictionary *args, NSString *k, NSTimeInterval dflt) {" [
+        .l "return [args[k] isKindOfClass:NSNumber.class] ? [args[k] doubleValue] : dflt;"],
+    .blank,
+    b "- (void)state:(ELAnswer)answer {" [
+        .l "[self ready:^{ answer(@{@\"state\": ELStateName(self->_central.state)}); }];"],
+    .blank,
+    b "- (void)connect:(NSDictionary *)args answer:(ELAnswer)answer {" [
+        .l "NSArray<CBUUID *> *services = ELUUIDs(args[@\"services\"]);",
+        .l "if (services.count == 0) { answer(@{@\"ok\": @NO, @\"error\": @\"no-services\"}); return; }",
+        .l "if (_connect) { answer(@{@\"ok\": @NO, @\"error\": @\"busy\"}); return; }",
+        .l "NSTimeInterval timeout = ELSeconds(args, @\"timeout\", 45);",
+        b "[self ready:^{" [
+            b "if (self->_central.state != CBManagerStatePoweredOn) {" [
+                .l "answer(@{@\"ok\": @NO, @\"error\": ELStateName(self->_central.state)});",
+                .l "return;"],
+            .l "self->_connectServices = services;",
+            b "self->_connect = [self pending:answer timeout:timeout onTimeout:^(ELPending *p) {" [
+                .l "[self->_central stopScan];",
+                .l "if (self->_connecting) [self->_central cancelPeripheralConnection:self->_connecting];",
+                .l "[self endConnect:@{@\"ok\": @NO, @\"error\": @\"timeout\"}];"] "}];",
+            .l "// a peripheral the system already holds (paired and connected) is used as it is",
+            .l "CBPeripheral *known = [self->_central retrieveConnectedPeripheralsWithServices:services].firstObject;",
+            .l "if (known) [self attach:known];",
+            .l "else [self->_central scanForPeripheralsWithServices:services options:nil];"] "}];"],
+    .blank,
+    b "- (void)attach:(CBPeripheral *)peripheral {" [
+        .l "_connecting = peripheral;",
+        .l "peripheral.delegate = self;",
+        .l "[_central connectPeripheral:peripheral options:nil];"],
+    .blank,
+    b "- (void)endConnect:(NSDictionary *)result {" [
+        .l "ELPending *p = _connect;",
+        .l "_connect = nil;",
+        .l "_connecting = nil;",
+        .l "_connectServices = nil;",
+        .l "if (p) [self settle:p with:result];"],
+    .blank,
+    b "- (void)subscribe:(NSDictionary *)args answer:(ELAnswer)answer {" [
+        .l "CBPeripheral *peripheral = _peripherals[args[@\"id\"] ?: @\"\"];",
+        .l "CBUUID *uuid = [args[@\"characteristic\"] isKindOfClass:NSString.class] ? [CBUUID UUIDWithString:args[@\"characteristic\"]] : nil;",
+        .l "CBCharacteristic *c = uuid ? [self characteristic:uuid of:peripheral] : nil;",
+        .l "if (!c) { answer(@{@\"ok\": @NO, @\"error\": peripheral ? @\"no-characteristic\" : @\"disconnected\"}); return; }",
+        .l "NSString *key = [self key:args[@\"id\"] characteristic:uuid];",
+        .l "if (_subscribes[key]) { answer(@{@\"ok\": @NO, @\"error\": @\"busy\"}); return; }",
+        .l "// the first encrypted access is where iOS pairs: the user may be comparing codes",
+        b "_subscribes[key] = [self pending:answer timeout:ELSeconds(args, @\"timeout\", 90) onTimeout:^(ELPending *p) {" [
+            .l "[self->_subscribes removeObjectForKey:key];",
+            .l "[self settle:p with:@{@\"ok\": @NO, @\"error\": @\"timeout\"}];"] "}];",
+        .l "[peripheral setNotifyValue:YES forCharacteristic:c];"],
+    .blank,
+    b "- (void)write:(NSDictionary *)args answer:(ELAnswer)answer {" [
+        .l "CBPeripheral *peripheral = _peripherals[args[@\"id\"] ?: @\"\"];",
+        .l "CBUUID *uuid = [args[@\"characteristic\"] isKindOfClass:NSString.class] ? [CBUUID UUIDWithString:args[@\"characteristic\"]] : nil;",
+        .l "CBCharacteristic *c = uuid ? [self characteristic:uuid of:peripheral] : nil;",
+        .l "NSData *data = [args[@\"hex\"] isKindOfClass:NSString.class] ? ELDataOf(args[@\"hex\"]) : nil;",
+        .l "if (!c) { answer(@{@\"ok\": @NO, @\"error\": peripheral ? @\"no-characteristic\" : @\"disconnected\"}); return; }",
+        .l "if (!data) { answer(@{@\"ok\": @NO, @\"error\": @\"bad-hex\"}); return; }",
+        .l "BOOL response = [args[@\"response\"] isKindOfClass:NSNumber.class] ? [args[@\"response\"] boolValue] : YES;",
+        b "if (!response) {" [
+            .l "[peripheral writeValue:data forCharacteristic:c type:CBCharacteristicWriteWithoutResponse];",
+            .l "answer(@{@\"ok\": @YES});",
+            .l "return;"],
+        .l "NSString *key = [self key:args[@\"id\"] characteristic:uuid];",
+        .l "if (!_writes[key]) _writes[key] = [NSMutableArray array];",
+        .l "__block ELPending *mine = nil;",
+        b "mine = [self pending:answer timeout:ELSeconds(args, @\"timeout\", 15) onTimeout:^(ELPending *p) {" [
+            .l "[self->_writes[key] removeObject:p];",
+            .l "[self settle:p with:@{@\"ok\": @NO, @\"error\": @\"timeout\"}];"] "}];",
+        .l "[_writes[key] addObject:mine];",
+        .l "[peripheral writeValue:data forCharacteristic:c type:CBCharacteristicWriteWithResponse];"],
+    .blank,
+    b "- (void)read:(NSDictionary *)args answer:(ELAnswer)answer {" [
+        .l "CBUUID *uuid = [args[@\"characteristic\"] isKindOfClass:NSString.class] ? [CBUUID UUIDWithString:args[@\"characteristic\"]] : nil;",
+        .l "if (!uuid) { answer(@{@\"error\": @\"no-characteristic\"}); return; }",
+        .l "NSString *key = [self key:args[@\"id\"] ?: @\"\" characteristic:uuid];",
+        .l "NSMutableArray<NSString *> *queued = _values[key];",
+        b "if (queued.count > 0) {" [
+            .l "NSString *hex = queued.firstObject;",
+            .l "[queued removeObjectAtIndex:0];",
+            .l "answer(@{@\"hex\": hex});",
+            .l "return;"],
+        .l "if (!_peripherals[args[@\"id\"] ?: @\"\"]) { answer(@{@\"error\": @\"disconnected\"}); return; }",
+        .l "if (!_reads[key]) _reads[key] = [NSMutableArray array];",
+        b "ELPending *p = [self pending:answer timeout:ELSeconds(args, @\"timeout\", 30) onTimeout:^(ELPending *q) {" [
+            .l "[self->_reads[key] removeObject:q];",
+            .l "[self settle:q with:@{@\"error\": @\"timeout\"}];"] "}];",
+        .l "[_reads[key] addObject:p];"],
+    .blank,
+    b "- (void)close:(NSDictionary *)args answer:(ELAnswer)answer {" [
+        .l "CBPeripheral *peripheral = _peripherals[args[@\"id\"] ?: @\"\"];",
+        .l "if (peripheral) [_central cancelPeripheralConnection:peripheral];",
+        .l "answer(@{@\"ok\": @YES});"],
+    .blank,
+    .l "/// Everything waiting on a peripheral that went away fails, and its unread values are dropped.",
+    b "- (void)drop:(NSString *)peripheral {" [
+        .l "NSString *prefix = [peripheral stringByAppendingString:@\"|\"];",
+        .l "for (NSString *key in _subscribes.allKeys)",
+        .l "    if ([key hasPrefix:prefix]) { ELPending *p = _subscribes[key]; [_subscribes removeObjectForKey:key]; [self settle:p with:@{@\"ok\": @NO, @\"error\": @\"disconnected\"}]; }",
+        .l "for (NSString *key in _writes.allKeys)",
+        .l "    if ([key hasPrefix:prefix]) { NSArray *ps = _writes[key]; [_writes removeObjectForKey:key]; for (ELPending *p in ps) [self settle:p with:@{@\"ok\": @NO, @\"error\": @\"disconnected\"}]; }",
+        .l "for (NSString *key in _reads.allKeys)",
+        .l "    if ([key hasPrefix:prefix]) { NSArray *ps = _reads[key]; [_reads removeObjectForKey:key]; for (ELPending *p in ps) [self settle:p with:@{@\"error\": @\"disconnected\"}]; }",
+        .l "for (NSString *key in _values.allKeys)",
+        .l "    if ([key hasPrefix:prefix]) [_values removeObjectForKey:key];",
+        .l "[_peripherals removeObjectForKey:peripheral];"],
+    .blank,
+    b "- (void)centralManagerDidUpdateState:(CBCentralManager *)central {" [
+        .l "if (central.state == CBManagerStateUnknown || central.state == CBManagerStateResetting) return;",
+        .l "NSArray *waiting = [_whenReady copy];",
+        .l "[_whenReady removeAllObjects];",
+        .l "for (void (^then)(void) in waiting) then();",
+        b "if (central.state != CBManagerStatePoweredOn) {" [
+            .l "if (_connect) [self endConnect:@{@\"ok\": @NO, @\"error\": ELStateName(central.state)}];",
+            .l "for (NSString *id_ in _peripherals.allKeys) [self drop:id_];"]],
+    .blank,
+    .l "- (void)centralManager:(CBCentralManager *)central didDiscoverPeripheral:(CBPeripheral *)peripheral",
+    b "     advertisementData:(NSDictionary<NSString *, id> *)advertisementData RSSI:(NSNumber *)RSSI {" [
+        .l "if (!_connect || _connecting) return;",
+        .l "[central stopScan];",
+        .l "[self attach:peripheral];"],
+    .blank,
+    b "- (void)centralManager:(CBCentralManager *)central didConnectPeripheral:(CBPeripheral *)peripheral {" [
+        .l "if (peripheral != _connecting) return;",
+        .l "[peripheral discoverServices:_connectServices];"],
+    .blank,
+    b "- (void)centralManager:(CBCentralManager *)central didFailToConnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {" [
+        .l "if (peripheral == _connecting) [self endConnect:@{@\"ok\": @NO, @\"error\": @\"refused\"}];"],
+    .blank,
+    b "- (void)centralManager:(CBCentralManager *)central didDisconnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {" [
+        .l "if (peripheral == _connecting) [self endConnect:@{@\"ok\": @NO, @\"error\": @\"disconnected\"}];",
+        .l "[self drop:peripheral.identifier.UUIDString];"],
+    .blank,
+    b "- (void)peripheral:(CBPeripheral *)peripheral didDiscoverServices:(NSError *)error {" [
+        .l "if (peripheral != _connecting) return;",
+        .l "CBService *service = nil;",
+        .l "for (CBService *s in peripheral.services) if ([_connectServices containsObject:s.UUID]) { service = s; break; }",
+        b "if (error || !service) {" [
+            .l "[_central cancelPeripheralConnection:peripheral];",
+            .l "[self endConnect:@{@\"ok\": @NO, @\"error\": @\"no-service\"}];",
+            .l "return;"],
+        .l "[peripheral discoverCharacteristics:nil forService:service];"],
+    .blank,
+    b "- (void)peripheral:(CBPeripheral *)peripheral didDiscoverCharacteristicsForService:(CBService *)service error:(NSError *)error {" [
+        .l "if (peripheral != _connecting) return;",
+        b "if (error) {" [
+            .l "[_central cancelPeripheralConnection:peripheral];",
+            .l "[self endConnect:@{@\"ok\": @NO, @\"error\": @\"no-characteristics\"}];",
+            .l "return;"],
+        .l "NSString *id_ = peripheral.identifier.UUIDString;",
+        .l "_peripherals[id_] = peripheral;",
+        .l "NSMutableArray *uuids = [NSMutableArray array];",
+        .l "for (CBCharacteristic *c in service.characteristics) [uuids addObject:c.UUID.UUIDString];",
+        .l "[self endConnect:@{@\"ok\": @YES, @\"id\": id_, @\"service\": service.UUID.UUIDString, @\"characteristics\": uuids}];"],
+    .blank,
+    .l "- (void)peripheral:(CBPeripheral *)peripheral didUpdateNotificationStateForCharacteristic:(CBCharacteristic *)characteristic",
+    b "             error:(NSError *)error {" [
+        .l "NSString *key = [self key:peripheral.identifier.UUIDString characteristic:characteristic.UUID];",
+        .l "ELPending *p = _subscribes[key];",
+        .l "if (!p) return;",
+        .l "[_subscribes removeObjectForKey:key];",
+        .l "[self settle:p with:error ? @{@\"ok\": @NO, @\"error\": error.localizedDescription ?: @\"refused\"} : @{@\"ok\": @YES}];"],
+    .blank,
+    b "- (void)peripheral:(CBPeripheral *)peripheral didWriteValueForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error {" [
+        .l "NSString *key = [self key:peripheral.identifier.UUIDString characteristic:characteristic.UUID];",
+        .l "NSMutableArray<ELPending *> *ps = _writes[key];",
+        .l "if (ps.count == 0) return;",
+        .l "ELPending *p = ps.firstObject;",
+        .l "[ps removeObjectAtIndex:0];",
+        .l "[self settle:p with:error ? @{@\"ok\": @NO, @\"error\": error.localizedDescription ?: @\"refused\"} : @{@\"ok\": @YES}];"],
+    .blank,
+    b "- (void)peripheral:(CBPeripheral *)peripheral didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error {" [
+        .l "if (error || !characteristic.value) return;",
+        .l "NSString *key = [self key:peripheral.identifier.UUIDString characteristic:characteristic.UUID];",
+        .l "NSString *hex = ELHexOf(characteristic.value);",
+        .l "NSMutableArray<ELPending *> *readers = _reads[key];",
+        b "if (readers.count > 0) {" [
+            .l "ELPending *p = readers.firstObject;",
+            .l "[readers removeObjectAtIndex:0];",
+            .l "[self settle:p with:@{@\"hex\": hex}];",
+            .l "return;"],
+        .l "if (!_values[key]) _values[key] = [NSMutableArray array];",
+        .l "[_values[key] addObject:hex];"],
+    .blank,
+    .l "@end"]
+
+/-- The statements before the first declaration: the imports. -/
+def capsImports : Nat := (capsBefore.findIdx? fun | .l _ | .blk .. => true | _ => false).getD 0
+
 def capsFile : List Stmt :=
-  capsBefore ++
+  capsBefore.take capsImports ++ bluetoothClass ++ [.blank] ++ capsBefore.drop capsImports ++
   [ b "- (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(NSDictionary *))answer {"
       [ ifChain "" (capabilities.map (fun c => (s!"[name isEqualToString:{lit c.name}]", c.body)) ++ [("", unknownCapability)]) ] ] ++
   [
