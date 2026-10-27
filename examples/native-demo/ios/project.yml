@@ -1,6 +1,7 @@
 # xcodegen project of a native-mode ElmLean app: no app Swift at all. The framework's generic shell
-# (framework/native/swift + c) plus the C that Lean generated for the app (build/lean-c, made by
-# framework/native/scripts/ios_lean_sources.sh), linked with Lean's runtime retargeted to iOS (build/lib).
+# (Swift printed by `lake exe elmshell` into build/native-shell, and framework/native/c) plus the C that
+# Lean generated for the app (build/lean-c); both made by framework/native/scripts/ios_lean_sources.sh.
+# Linked with Lean's runtime retargeted to iOS (build/lib).
 name: NativeDemo
 options:
   bundleIdPrefix: art.fralex
@@ -17,7 +18,7 @@ targets:
     type: application
     platform: iOS
     sources:
-      - { path: ../../../framework/native/swift, name: ElmLeanShell }
+      - { path: build/native-shell, name: ElmLeanShell }
       - { path: ../../../framework/native/c, name: ElmLeanShim }
       - { path: build/lean-c, name: LeanC, compilerFlags: [-w] }
     info:
@@ -33,7 +34,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: art.fralex.elmlean.nativedemo
         PRODUCT_NAME: NativeDemo
         GENERATE_INFOPLIST_FILE: NO
-        SWIFT_OBJC_BRIDGING_HEADER: ../../../framework/native/swift/ElmLeanNative-Bridging-Header.h
+        SWIFT_OBJC_BRIDGING_HEADER: ../../../framework/native/c/ElmLeanNative-Bridging-Header.h
         HEADER_SEARCH_PATHS: ["/Users/posix4e/.elan/toolchains/leanprover--lean4---v4.35.0/include"]
         LIBRARY_SEARCH_PATHS: ["$(PROJECT_DIR)/build/lib"]
         OTHER_LDFLAGS: [-lLean, -lStd, -lInit, -lleanrt, -luv, -lgmp, -lc++]

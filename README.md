@@ -193,6 +193,7 @@ framework/
     ElmLean/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest
                             (trusted shell); Gate (the gate commands); Proofs/ and Proofs.lean (the framework's gate)
     ElmGen/                 the Lean → Swift generator (`lake exe elmgen`)
+    ElmShell/               native mode's shell as Lean data; `lake exe elmshell <dir>` prints its Swift
   swift/                    Runtime.swift (Html mirror, JSON, Session loop), Elements.swift (SwiftUI kit, Store)
   crosscheck/               the independent LCNF translator
   scripts/                  check-axioms.sh, protocol_test.py, lockstep.py, fake_cli.py,

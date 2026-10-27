@@ -6,6 +6,7 @@
 #   ios_lean_sources.sh <app package dir> <root module> <out dir> [iossim|ios]
 #
 # Out: <out>/lean-c/*.c (one per Lean module, flattened), <out>/lean-c/elm_app_initialize.c,
+#      <out>/native-shell/*.swift (the shell, printed by `lake exe elmshell`: build output, never a source),
 #      <out>/lib/{libLean,libStd,libInit,libleanrt,libuv,libgmp}.a
 # The retargeting rewrites each object's LC_BUILD_VERSION (platform 7 = iOS simulator, 2 = iOS); Lean
 # does not support this, and only the simulator has been verified.
@@ -14,8 +15,11 @@ APP="$(cd "$1" && pwd)"; ROOT="$2"; OUT="$3"; PLATFORM="${4:-iossim}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FW_LEAN="$(cd "$HERE/../../lean" && pwd)"
 TOOLCHAIN="$(cd "$APP" && elan which lean | xargs dirname | xargs dirname)"
-mkdir -p "$OUT/lean-c" "$OUT/lib"
+mkdir -p "$OUT/lean-c" "$OUT/lib" "$OUT/native-shell"
+OUT_ABS="$(cd "$OUT" && pwd)"
 (cd "$APP" && lake build >/dev/null)
+# the shell's Swift, printed from framework/lean/ElmShell (its checks against the protocol run first)
+(cd "$APP" && lake exe elmshell "$OUT_ABS/native-shell")
 rm -f "$OUT/lean-c/"*.c
 # the C of every module in the root's import closure (app and ElmLean only; Init/Std/Lean are the libraries)
 # every package the app depends on by path (from its lake-manifest.json), plus ElmLean itself
@@ -48,4 +52,4 @@ for l in lean/libLean.a lean/libStd.a lean/libInit.a lean/libleanrt.a libuv.a li
   out="$OUT/lib/$(basename "$l")"
   [ "$out" -nt "$TOOLCHAIN/lib/$l" ] || /usr/bin/python3 "$HERE/retarget_ar.py" "$plat" 17.0 "$TOOLCHAIN/lib/$l" "$out" >/dev/null
 done
-echo "$OUT/lean-c: $(ls "$OUT/lean-c" | wc -l | tr -d ' ') C files; $OUT/lib: retargeted to $PLATFORM; toolchain $TOOLCHAIN"
+echo "$OUT/lean-c: $(ls "$OUT/lean-c" | wc -l | tr -d ' ') C files; $OUT/native-shell: $(ls "$OUT/native-shell" | wc -l | tr -d ' ') Swift files; $OUT/lib: retargeted to $PLATFORM; toolchain $TOOLCHAIN"

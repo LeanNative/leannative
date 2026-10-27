@@ -6,7 +6,7 @@
 #
 # and then runs `lake exe elmgen …` from its own directory (see the README).
 name = "elmlean"
-defaultTargets = ["ElmLean", "ElmGen", "elmgen"]
+defaultTargets = ["ElmLean", "ElmGen", "elmgen", "ElmShell", "elmshell"]
 
 [[lean_lib]]
 name = "ElmLean"
@@ -20,3 +20,11 @@ root = "ElmGen.Main"
 # elmgen pretty-prints Lean terms in its error messages; the delaborator resolves imported formatter
 # entries through the interpreter, which needs the executable's symbols exported.
 supportInterpreter = true
+
+# The native shell: `lake exe elmshell <dir>` prints its Swift (framework/native/README.md).
+[[lean_lib]]
+name = "ElmShell"
+
+[[lean_exe]]
+name = "elmshell"
+root = "ElmShell.Main"

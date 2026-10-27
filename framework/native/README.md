@@ -8,7 +8,7 @@ ElmLean has two ways to run an app on iOS:
 | What runs on the phone | Swift printed from the proven definitions | the same definitions compiled by Lean's compiler to C, with Lean's runtime |
 | View | a SwiftUI screen printed per app | a generic SwiftUI renderer of the view tree Lean returns |
 | Effects | commands run by a hand-written Swift host | commands run by the app's own Lean code (`perform`): TCP, files, timers, tasks; iOS-only things through capabilities |
-| Swift per app | a ~20-line shell plus the host | none |
+| Swift per app | a ~20-line shell plus the host | none (the generic shell is printed at build time) |
 
 Both modes run the same `update`/`view`/`cmds`, so the theorems about an app (and about
 `Session.step`) hold in either. Native mode is what an app needs when its logic is too large or too
@@ -23,9 +23,26 @@ scripts/ios_lean_sources.sh ─────────────┤ copies th
                                          │ writes elm_app_initialize.c (calls the root initializer),
                                          │ retargets Lean's runtime and stdlib (.a) to iOS
                                          ▼
-Xcode project (project.yml):  swift/ (renderer, store, capabilities)  +  c/ (shim)  +  build/lean-c
+                                         │ runs `lake exe elmshell build/native-shell`: the shell's
+                                         │ Swift (renderer, store, capabilities), printed from Lean
+                                         ▼
+Xcode project (project.yml):  build/native-shell  +  c/ (shim)  +  build/lean-c
                               linked with -lLean -lStd -lInit -lleanrt -luv -lgmp -lc++ (build/lib)
 ```
+
+**The shell is generated.** There is no Swift source in the framework: `framework/lean/ElmShell` holds
+the shell as Lean data and `elmshell` prints it, so its Swift exists only under an app's `build/`
+(gitignored) and is rewritten by every `ios_lean_sources.sh` run. What follows the node grammar comes
+from one table (`ElmShell/Grammar.lean`): the cases of `NativeNode` and their JSON decoding, the
+renderer's dispatch with one arm per kind, which kinds take no room in a layout, the `Role`/`Style`/
+`InputKind` raw values (from the Lean enums' printers) and the events. `ElmShell/Check.lean` holds the
+table to the Lean side: the kernel checks that every `Wire` constructor, enum constructor and `Event`
+constructor has its row, and the build evaluates that each row's sample prints through `Wire.toJson`
+with exactly the row's keys and JSON kinds, and that the JSON the shell sends for each event parses back
+(`Event.fromJson?`) to that event; `elmshell` refuses to write if any of that fails. The capabilities
+are a table too (`ElmShell/Capabilities.lean`): the doc table and the dispatch on the name are printed
+from the same rows. The rest (layout around screens and tabs, the store's calls into C) is Swift
+written as a syntax tree (`ElmShell/Swift.lean`) with leaf expressions as source text.
 
 The C is compiled at `-O3` in every configuration (`GCC_OPTIMIZATION_LEVEL: 3` in project.yml):
 Lean builds its own C that way, and at Xcode's Debug `-O0` heavy Lean code (key derivation, hashing)
@@ -57,7 +74,7 @@ drains. Threads Lean did not create are registered (`lean_initialize_thread`) on
 turns each into a host message (or ignores it); Winnow stops networking in the background and hides
 recovery words while the screen is captured.
 
-## Capabilities (`swift/Capabilities.swift`)
+## Capabilities (`lean/ElmShell/Capabilities.lean`)
 
 What only iOS can do, by name, for any app: `auth` (Face ID / passcode), `build` (`{"debug":…}`: test hooks read their launch environment only in a Debug build, as Swift's `#if DEBUG`), `keychain.get/set/delete/clear` (`clear` empties a service: a test namespace's reset)
 (`set`/`delete` answer the `OSStatus` too; the simulator build is ad-hoc signed, since an unsigned app has
@@ -82,6 +99,7 @@ A screen whose title changes is a new screen to the renderer: it starts scrolled
 
 ## What is trusted
 
-The shell (renderer, store, capabilities, C shim), Lean's compiler and runtime, the retargeted
-libraries, SwiftUI and iOS. The renderer's `path` of each control must match the tree's `children`
+The shell (renderer, store, capabilities, C shim) — its Swift is printed by `elmshell`, and only its
+agreement with the grammar is checked — Lean's compiler and runtime, the retargeted libraries, SwiftUI
+and iOS. The renderer's `path` of each control must match the tree's `children`
 order; that correspondence is tested by driving apps in the simulator, not proven.
