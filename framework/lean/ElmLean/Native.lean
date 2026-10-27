@@ -6,8 +6,9 @@ import ElmLean.CmdCli
 /-! # TRUSTED SHELL: native mode (the app compiled to C, inside the iOS app)
 
 In native mode an app is ordinary Lean, compiled by Lean's compiler to C and linked into the iOS app
-with Lean's runtime. The generic ElmLean shell (framework/native: a SwiftUI renderer of the `Wire`
-tree, a C shim, and a capability host for what only iOS can do) drives it through five C entry points
+with Lean's runtime. The generic ElmLean shell (an Objective-C/UIKit renderer of the `Wire` tree,
+printed by `lake exe elmshell`; a C shim, framework/native/c; and a capability host for what only iOS can
+do) drives it through five C entry points
 exported here, all speaking JSON:
 
 | C function (framework/native/c) | Lean | does |

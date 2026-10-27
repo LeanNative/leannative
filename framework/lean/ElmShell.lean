@@ -1,7 +1,9 @@
-import ElmShell.Swift
+import ElmShell.ObjC
 import ElmShell.Grammar
-import ElmShell.Node
-import ElmShell.View
+import ElmShell.Header
+import ElmShell.App
 import ElmShell.Store
+import ElmShell.Node
+import ElmShell.Render
 import ElmShell.Capabilities
 import ElmShell.Check

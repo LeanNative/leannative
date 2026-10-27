@@ -1,83 +1,94 @@
-import ElmShell.Swift
+import ElmShell.Grammar
 
-/-! # ElmShell.Store: `NativeStore.swift` and `NativeApp.swift`, the shell around the C interface -/
+/-! # ElmShell.Store: `ELStore.m`, the store around the C interface, and the events (from `events`) -/
 
 namespace ElmShell
 
-/-- `guard let data = try? JSONSerialization.data(withJSONObject: x), let line = String(…) else { return }` -/
-def serialize (x : String) : Stmt :=
-  .guardS [s!"let data = try? JSONSerialization.data(withJSONObject: {x})", "let line = String(data: data, encoding: .utf8)"] [.ret none]
+set_option maxRecDepth 8000 in
+def storeBody : List Stmt := [
+    .pp "#import \"ElmLeanShell.h\"",
+    .blank,
+    .l "// Every call into Lean happens on the main thread except `elmlean_wait`, which blocks a background thread",
+    .l "// until Lean has something queued; the main thread then drains it.",
+    b "@implementation ELStore {" [
+        .l "ELCapabilities *_capabilities;"],
+    .blank,
+    b "+ (instancetype)shared {" [
+        .l "static ELStore *store;",
+        .l "static dispatch_once_t once;",
+        .l "dispatch_once(&once, ^{ store = [ELStore new]; });",
+        .l "return store;"],
+    .blank,
+    b "- (instancetype)init {" [
+        b "if ((self = [super init])) {" [
+            .l "_view = ELDecode(@{@\"t\": @\"col\", @\"c\": @[]});",
+            .l "_capabilities = [ELCapabilities new];"],
+        .l "return self;"],
+    .blank,
+    b "- (void)start {" [
+        b "if (elmlean_boot() != 0) {" [
+            .l "_failure = @\"The app failed to start.\";",
+            .l "return;"],
+        .l "[self apply:[self take:elmlean_start()]];",
+        b "NSThread *thread = [[NSThread alloc] initWithBlock:^{" [
+            b "while (YES) {" [
+                .l "elmlean_wait();",
+                .l "dispatch_sync(dispatch_get_main_queue(), ^{ [[ELStore shared] drain]; });"]] "}];",
+        .l "thread.stackSize = 8 << 20;",
+        .l "[thread start];"],
+    .blank,
+    b "- (void)send:(ELPath *)path event:(NSDictionary *)event {" [
+        .l "NSString *line = [self line:@{@\"seq\": @(_seq), @\"path\": path, @\"event\": event}];",
+        .l "if (!line) return;",
+        .l "[self apply:[self take:elmlean_event(line.UTF8String)]];"],
+    .blank,
+    b "- (void)drain {" [
+        .l "[self apply:[self take:elmlean_drain()]];"],
+    .blank,
+    .l "/// A system event (scene phase, screen capture) for the app's `system` mapping.",
+    b "- (void)system:(NSDictionary *)event {" [
+        .l "NSString *line = [self line:event];",
+        .l "if (!line) return;",
+        .l "[self apply:[self take:elmlean_system(line.UTF8String)]];"],
+    .blank,
+    b "- (nullable NSString *)line:(id)object {" [
+        .l "NSData *data = [NSJSONSerialization dataWithJSONObject:object options:0 error:nil];",
+        .l "return data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;"],
+    .blank,
+    b "- (NSString *)take:(char *)p {" [
+        .l "if (!p) return @\"\";",
+        .l "NSString *s = [NSString stringWithUTF8String:p];",
+        .l "free(p);",
+        .l "return s ?: @\"\";"],
+    .blank,
+    b "- (void)apply:(NSString *)reply {" [
+        .l "NSData *data = [reply dataUsingEncoding:NSUTF8StringEncoding];",
+        .l "NSDictionary *o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;",
+        .l "if (![o isKindOfClass:NSDictionary.class]) return;",
+        .l "if ([o[@\"seq\"] isKindOfClass:NSNumber.class]) _seq = [o[@\"seq\"] integerValue];",
+        .l "if (o[@\"view\"]) _view = ELDecode(o[@\"view\"]);",
+        .l "if ([o[@\"error\"] isKindOfClass:NSString.class] && ![o[@\"error\"] isEqualToString:@\"stale\"]) _failure = o[@\"error\"];",
+        .l "NSArray *caps = [o[@\"caps\"] isKindOfClass:NSArray.class] ? o[@\"caps\"] : @[];",
+        b "for (NSDictionary *cap in caps) {" [
+            .l "if (![cap isKindOfClass:NSDictionary.class]) continue;",
+            .l "NSNumber *capID = [cap[@\"id\"] isKindOfClass:NSNumber.class] ? cap[@\"id\"] : @(-1);",
+            .l "NSString *name = [cap[@\"name\"] isKindOfClass:NSString.class] ? cap[@\"name\"] : @\"\";",
+            .l "NSDictionary *args = [cap[@\"args\"] isKindOfClass:NSDictionary.class] ? cap[@\"args\"] : @{};",
+            b "[_capabilities run:name args:args answer:^(NSDictionary *result) {" [
+                .l "NSString *line = [self line:@{@\"id\": capID, @\"result\": result}];",
+                .l "if (line) elmlean_cap_result(line.UTF8String);"] "}];"],
+        .l "if (self.onChange) self.onChange();"],
+    .blank,
+    .l "@end",
+    .blank]
 
-def store : Decl :=
-  .doc "The app's state as the shell sees it: the last view Lean returned and its `seq`. Every call into Lean
-happens on the main actor except `elmlean_wait`, which blocks a background thread until Lean has
-something queued; the main actor then drains it."
-  (.ty "@MainActor @Observable\nfinal class NativeStore"
-    [ .prop "private(set) var view: NativeNode" (some (r ".col([])"))
-    , .prop "private(set) var seq" (some (r "0"))
-    , .prop "private(set) var failure: String?" none
-    , .prop "@ObservationIgnored private let capabilities" (some (r "Capabilities()"))
-    , .blank
-    , .fn "init()"
-      [ .ifS ["elmlean_boot() != 0"] [.set "failure" (.lit "The app failed to start."), .ret none] []
-      , s "apply(take(elmlean_start()))"
-      , .letS "thread" (cb "Thread" [] "[weak self]"
-          [.whileS "true" [s "elmlean_wait()", s "DispatchQueue.main.sync { self?.drain() }"]])
-      , .set "thread.stackSize" (r "8 << 20")
-      , s "thread.start()" ]
-    , .blank
-    , .fn "func send(path: [Int], event: NativeEvent)"
-      [ .letS "request: [String: Any]" (r "[\"seq\": seq, \"path\": path, \"event\": event.json]")
-      , serialize "request"
-      , s "apply(take(line.withCString { elmlean_event($0) }))" ]
-    , .blank
-    , .fn "func drain()" [s "apply(take(elmlean_drain()))"]
-    , .blank
-    , .doc "A system event (scene phase, screen capture) for the app's `system` mapping."
-      (.fn "func system(_ event: [String: Any])"
-        [ serialize "event", s "apply(take(line.withCString { elmlean_system($0) }))" ])
-    , .blank
-    , .fn "private func take(_ p: UnsafeMutablePointer<CChar>?) -> String"
-      [ .guardS ["let p"] [.ret (some (.lit ""))]
-      , .deferS [s "free(p)"]
-      , .ret (some (r "String(cString: p)")) ]
-    , .blank
-    , .fn "private func apply(_ reply: String)"
-      [ .guardS ["let data = reply.data(using: .utf8)", "let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any]"] [.ret none]
-      , .ifS ["let s = o[\"seq\"] as? Int"] [.set "seq" (r "s")] []
-      , .ifS ["let v = o[\"view\"]"] [.set "view" (r "NativeNode(json: v)")] []
-      , .ifS ["let e = o[\"error\"] as? String", "e != \"stale\""] [.set "failure" (r "e")] []
-      , .forS "cap in o[\"caps\"] as? [[String: Any]] ?? []"
-        [ .letS "id" (r "cap[\"id\"] as? Int ?? -1")
-        , .e (.call (r "capabilities.run")
-            [(some "name", r "cap[\"name\"] as? String ?? \"\""), (some "args", r "cap[\"args\"] as? [String: Any] ?? [:]")]
-            [(none, .lam "result"
-              [ .letS "answer: [String: Any]" (r "[\"id\": id, \"result\": result]")
-              , serialize "answer"
-              , s "line.withCString { elmlean_cap_result($0) }" ])]) ] ] ])
+def eventDefs : List Stmt :=
+  events.map fun e =>
+    let value := match e.2 with
+      | some (_, v) => s!", @\"value\": {v}"
+      | none => ""
+    .l s!"{eventSig e} \{ return @\{@\"k\": {lit e.1}{value}}; }"
 
-def storeFile : List Decl := [.imp "Foundation", .imp "Observation", store]
-
-def app : Decl :=
-  .doc "The whole iOS app of an ElmLean native app: the generic renderer around whatever view Lean returns.
-An app ships no Swift of its own; its name comes from Info.plist (`CFBundleDisplayName`).
-While the scene is not active the content is covered (app-switcher snapshots never show it)."
-  (.ty "@main\nstruct ElmLeanNativeApp: App"
-    [ .prop "@State private var store" (some (r "NativeStore()"))
-    , .prop "@Environment(\\.scenePhase) private var scenePhase" none
-    , .blank
-    , .fn "var body: some Scene"
-      [.e (cb "WindowGroup" [] ""
-        [.e (.chain (cb "ZStack" [] ""
-            [ .ifS ["let failure = store.failure"] [s "Text(failure).foregroundStyle(.red).padding()"] [s "NativeRoot(node: store.view)"]
-            , .ifS ["scenePhase != .active"] [s "Color(.systemBackground).ignoresSafeArea()"] [] ])
-          [ r "environment(store)"
-          , .call (r "onChange") [(some "of", r "scenePhase"), (some "initial", r "true")] [(none, .lam "_, phase"
-              [ .letS "name" (r "phase == .active ? \"active\" : phase == .background ? \"background\" : \"inactive\"")
-              , s "store.system([\"scene\": name])" ])]
-          , .call (r "onReceive") [(none, r "NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)")]
-              [(none, .lam "_" [s "store.system([\"captured\": UIScreen.main.isCaptured])"])] ])])] ])
-
-def appFile : List Decl := [.imp "SwiftUI", app]
+def storeFile : List Stmt := storeBody ++ eventDefs
 
 end ElmShell

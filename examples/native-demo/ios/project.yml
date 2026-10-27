@@ -1,6 +1,6 @@
-# xcodegen project of a native-mode ElmLean app: no app Swift at all. The framework's generic shell
-# (Swift printed by `lake exe elmshell` into build/native-shell, and framework/native/c) plus the C that
-# Lean generated for the app (build/lean-c); both made by framework/native/scripts/ios_lean_sources.sh.
+# xcodegen project of a native-mode ElmLean app, with no Swift at all. The framework's generic shell
+# (Objective-C printed by `lake exe elmshell` into build/native-shell, and framework/native/c) plus the C
+# that Lean generated for the app (build/lean-c); both made by framework/native/scripts/ios_lean_sources.sh.
 # Linked with Lean's runtime retargeted to iOS (build/lib).
 name: NativeDemo
 options:
@@ -9,9 +9,8 @@ options:
   xcodeVersion: "27.1"
 settings:
   base:
-    SWIFT_VERSION: "6.0"
-    SWIFT_STRICT_CONCURRENCY: complete
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    CLANG_ENABLE_OBJC_ARC: YES
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 targets:
   NativeDemo:
@@ -28,14 +27,20 @@ targets:
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
+        # the shell's scene delegate (ElmLeanShell.h)
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default
+                UISceneDelegateClassName: ELSceneDelegate
         NSFaceIDUsageDescription: "Shows that a Lean app can ask for Face ID."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: art.fralex.elmlean.nativedemo
         PRODUCT_NAME: NativeDemo
         GENERATE_INFOPLIST_FILE: NO
-        SWIFT_OBJC_BRIDGING_HEADER: ../../../framework/native/c/ElmLeanNative-Bridging-Header.h
-        HEADER_SEARCH_PATHS: ["/Users/posix4e/.elan/toolchains/leanprover--lean4---v4.35.0/include"]
+        HEADER_SEARCH_PATHS: ["/Users/posix4e/.elan/toolchains/leanprover--lean4---v4.35.0/include", "$(PROJECT_DIR)/../../../framework/native/c"]
         LIBRARY_SEARCH_PATHS: ["$(PROJECT_DIR)/build/lib"]
         OTHER_LDFLAGS: [-lLean, -lStd, -lInit, -lleanrt, -luv, -lgmp, -lc++]
         # Lean's generated C at -O3 in every configuration, as Lean builds it

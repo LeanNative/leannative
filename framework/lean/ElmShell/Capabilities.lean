@@ -1,10 +1,11 @@
-import ElmShell.Swift
+import ElmShell.ObjC
 
-/-! # ElmShell.Capabilities: `Capabilities.swift`
+/-! # ElmShell.Capabilities: `ELCapabilities.m`
 
-One table row per capability: its name, the documentation of its arguments and result (printed as the
-table in the class's doc comment), and the Swift that runs it, which answers through `answer`. The
-dispatch on the name is printed from the same rows, so a documented capability is a handled one. -/
+One row per capability: its name, the documentation of its arguments and result (printed as the table in
+the header's doc comment on `ELCapabilities`), and the Objective-C that runs it, which answers through
+`answer`. The dispatch on the name is printed from the same rows, so a documented capability is a handled
+one. -/
 
 namespace ElmShell
 
@@ -14,145 +15,185 @@ structure Capability where
   result : String
   body : List Stmt
 
-def ans (dict : String) : Stmt := s s!"answer({dict})"
-
-/-- `answer(["ok": …, "status": Int(status)])` for a Keychain call whose "not found" is success or not. -/
-def statusAnswer (notFoundOk : Bool) : Stmt :=
-  ans s!"[\"ok\": status == errSecSuccess{if notFoundOk then " || status == errSecItemNotFound" else ""}, \"status\": Int(status)]"
-
+set_option maxRecDepth 8000 in
 def capabilities : List Capability :=
-  [ { name := "auth", args := "`reason`", result := "`{\"ok\":true}` or `{\"ok\":false,\"error\":…}` (device-owner authentication)"
-      body :=
-        [ .letS "context" (r "LAContext()")
-        , s "var unavailable: NSError?"
-        , .guardS ["context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &unavailable)"]
-            [ .ifdef "targetEnvironment(simulator)" [ans "[\"ok\": true, \"note\": \"simulator without a passcode\"]"]
-                [ans "[\"ok\": false, \"error\": \"Set a device passcode first.\"]"]
-            , .ret none ]
-        , .letS "reason" (r "args[\"reason\"] as? String ?? \"Confirm\"")
-        , .e (.call (r "context.evaluatePolicy") [(none, r ".deviceOwnerAuthentication"), (some "localizedReason", r "reason")]
-            [(none, .lam "ok, error"
-              [ .letS "result: [String: Any]" (r "ok ? [\"ok\": true] : [\"ok\": false, \"error\": error?.localizedDescription ?? \"Authentication failed.\"]")
-              , s "DispatchQueue.main.async { answer(result) }" ])]) ] }
-  , { name := "keychain.get", args := "`key`, `service`?", result := "`{\"value\":…}` or `{\"value\":null}` (`service` defaults to the bundle id)"
-      body :=
-        [ .varS "query" (r "base(args)")
-        , .set "query[kSecReturnData as String]" (r "true")
-        , s "var out: CFTypeRef?"
-        , .letS "status" (r "SecItemCopyMatching(query as CFDictionary, &out)")
-        , .ifS ["status == errSecSuccess", "let data = out as? Data", "let s = String(data: data, encoding: .utf8)"]
-            [ans "[\"value\": s]"] [ans "[\"value\": NSNull()]"] ] }
-  , { name := "keychain.set", args := "`key`, `value`, `service`?", result := "`{\"ok\":…,\"status\":…}` (the `OSStatus`); this device only, while unlocked"
-      body :=
-        [ .letS "data" (r "Data((args[\"value\"] as? String ?? \"\").utf8)")
-        , s "SecItemDelete(base(args) as CFDictionary)"
-        , .varS "query" (r "base(args)")
-        , .set "query[kSecValueData as String]" (r "data")
-        , .set "query[kSecAttrAccessible as String]" (r "kSecAttrAccessibleWhenUnlockedThisDeviceOnly")
-        , .letS "status" (r "SecItemAdd(query as CFDictionary, nil)")
-        , statusAnswer false ] }
-  , { name := "keychain.delete", args := "`key`, `service`?", result := "`{\"ok\":…,\"status\":…}`"
-      body := [ .letS "status" (r "SecItemDelete(base(args) as CFDictionary)"), statusAnswer true ] }
-  , { name := "keychain.clear", args := "`service`", result := "`{\"ok\":…,\"status\":…}` deletes every item of that service (a test namespace's reset)"
-      body :=
-        [ .guardS ["let svc = args[\"service\"] as? String", "!svc.isEmpty"] [ans "[\"ok\": false, \"status\": Int(errSecParam)]", .ret none]
-        , .letS "status" (r "SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: svc] as CFDictionary)")
-        , statusAnswer true ] }
-  , { name := "build", args := "—", result := "`{\"debug\":…}` whether this is a Debug build (`#if DEBUG`): test hooks stay off in Release"
-      body := [.ifdef "DEBUG" [ans "[\"debug\": true]"] [ans "[\"debug\": false]"]] }
-  , { name := "clipboard.set", args := "`text`, `localOnly`, `expiresIn` (s)", result := "`{\"ok\":true}`"
-      body :=
-        [ .comment "`localOnly` keeps it off Universal Clipboard; `expiresIn` (seconds) clears it afterwards"
-        , .varS "options: [UIPasteboard.OptionsKey: Any]" (r "[:]")
-        , .ifS ["args[\"localOnly\"] as? Bool == true"] [.set "options[.localOnly]" (r "true")] []
-        , .ifS ["let seconds = args[\"expiresIn\"] as? Int"] [.set "options[.expirationDate]" (r "Date().addingTimeInterval(TimeInterval(seconds))")] []
-        , s "UIPasteboard.general.setItems([[UIPasteboard.typeAutomatic: args[\"text\"] as? String ?? \"\"]], options: options)"
-        , ans "[\"ok\": true]" ] }
-  , { name := "clipboard.get", args := "—", result := "`{\"text\":…}`"
-      body := [ans "[\"text\": UIPasteboard.general.string ?? NSNull()]"] }
-  , { name := "documents", args := "—", result := "`{\"path\":…}` the app's Documents directory"
-      body := [ans "[\"path\": FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? \"\"]"] }
-  , { name := "paths", args := "—", result := "`{\"documents\",\"support\",\"tmp\"}`: Documents, Application Support (created), temporary"
-      body :=
-        [ .letS "fm" (r "FileManager.default")
-        , .letS "support" (r "fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first")
-        , .ifS ["let support"] [s "try? fm.createDirectory(at: support, withIntermediateDirectories: true)"] []
-        , ans "[\"documents\": fm.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? \"\",\n                    \"support\": support?.path ?? \"\", \"tmp\": fm.temporaryDirectory.path]" ] }
-  , { name := "exclude-from-backup", args := "`path`, `complete`?"
-      result := "`{\"ok\":…}` marks a file or directory as excluded from iCloud/device backup; with `complete`, also `FileProtectionType.complete` (readable only while unlocked)"
-      body :=
-        [ .varS "url" (r "URL(fileURLWithPath: args[\"path\"] as? String ?? \"\")")
-        , .varS "values" (r "URLResourceValues()")
-        , .set "values.isExcludedFromBackup" (r "true")
-        , .varS "ok" (r "(try? url.setResourceValues(values)) != nil")
-        , .ifS ["ok", "args[\"complete\"] as? Bool == true"]
-            [.set "ok" (r "(try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)) != nil")] []
-        , ans "[\"ok\": ok]" ] }
-  , { name := "http.get", args := "`url`, `maxBytes`, `timeout` (s), `accept`?"
-      result := "`{\"status\":…,\"body\":hex}` or `{\"error\":…}`; ephemeral session, no cookies or cache, redirects only within the same host and never from https to http"
-      body :=
-        [ .guardS ["let url = URL(string: args[\"url\"] as? String ?? \"\")", "[\"http\", \"https\"].contains(url.scheme?.lowercased() ?? \"\")"]
-            [ans "[\"error\": \"bad-url\"]", .ret none]
-        , .letS "maxBytes" (r "args[\"maxBytes\"] as? Int ?? 1_000_000")
-        , .varS "request" (r "URLRequest(url: url)")
-        , .set "request.timeoutInterval" (r "TimeInterval(args[\"timeout\"] as? Int ?? 30)")
-        , .ifS ["let accept = args[\"accept\"] as? String"] [s "request.setValue(accept, forHTTPHeaderField: \"Accept\")"] []
-        , .e (.chain (.call (r "HTTPFetch.shared.session.dataTask") [(some "with", r "request")]
-              [(none, .lam "data, response, error"
-                [ s "let result: [String: Any]"
-                , .ifS ["let error"] [.set "result" (r "[\"error\": error.localizedDescription]")]
-                    [.ifS ["let http = response as? HTTPURLResponse", "let data"]
-                      [.set "result" (r "data.count > maxBytes ? [\"error\": \"tooLarge\"]\n                        : [\"status\": http.statusCode, \"body\": data.map { String(format: \"%02x\", $0) }.joined()]")]
-                      [.set "result" (r "[\"error\": \"response\"]")]]
-                , s "DispatchQueue.main.async { answer(result) }" ])])
-            [r "resume()"]) ] }
-  , { name := "open", args := "`url`", result := "`{\"ok\":…}` opens the URL outside the app"
-      body :=
-        [ .ifS ["let url = URL(string: args[\"url\"] as? String ?? \"\")"]
-            [s "UIApplication.shared.open(url)", ans "[\"ok\": true]"] [ans "[\"ok\": false]"] ] } ]
+[
+  { name := "auth", args := "`reason`", result := "`{\"ok\":true}` or `{\"ok\":false,\"error\":…}` (device-owner authentication)",
+    body := [
+      .l "LAContext *context = [LAContext new];",
+      b "if (![context canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication error:nil]) {" [
+          .pp "#if TARGET_OS_SIMULATOR",
+          .l "answer(@{@\"ok\": @YES, @\"note\": @\"simulator without a passcode\"});",
+          .pp "#else",
+          .l "answer(@{@\"ok\": @NO, @\"error\": @\"Set a device passcode first.\"});",
+          .pp "#endif",
+          .l "return;"],
+      .l "NSString *reason = ELArgString(args, @\"reason\") ?: @\"Confirm\";",
+      b "[context evaluatePolicy:LAPolicyDeviceOwnerAuthentication localizedReason:reason reply:^(BOOL ok, NSError *error) {" [
+          .l "NSDictionary *result = ok ? @{@\"ok\": @YES} : @{@\"ok\": @NO, @\"error\": error.localizedDescription ?: @\"Authentication failed.\"};",
+          .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}];"] },
+  { name := "keychain.get", args := "`key`, `service`?", result := "`{\"value\":…}` or `{\"value\":null}` (`service` defaults to the bundle id)",
+    body := [
+      .l "NSMutableDictionary *query = [self base:args];",
+      .l "query[(__bridge id)kSecReturnData] = @YES;",
+      .l "CFTypeRef out = NULL;",
+      .l "OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &out);",
+      .l "NSData *data = status == errSecSuccess ? (__bridge_transfer NSData *)out : nil;",
+      .l "NSString *s = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;",
+      .l "answer(@{@\"value\": s ?: NSNull.null});"] },
+  { name := "keychain.set", args := "`key`, `value`, `service`?", result := "`{\"ok\":…,\"status\":…}` (the `OSStatus`); this device only, while unlocked",
+    body := [
+      .l "NSData *data = [(ELArgString(args, @\"value\") ?: @\"\") dataUsingEncoding:NSUTF8StringEncoding];",
+      .l "SecItemDelete((__bridge CFDictionaryRef)[self base:args]);",
+      .l "NSMutableDictionary *query = [self base:args];",
+      .l "query[(__bridge id)kSecValueData] = data;",
+      .l "query[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly;",
+      .l "OSStatus status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);",
+      .l "answer(@{@\"ok\": @((BOOL)(status == errSecSuccess)), @\"status\": @(status)});"] },
+  { name := "keychain.delete", args := "`key`, `service`?", result := "`{\"ok\":…,\"status\":…}`",
+    body := [
+      .l "OSStatus status = SecItemDelete((__bridge CFDictionaryRef)[self base:args]);",
+      .l "answer(@{@\"ok\": @((BOOL)(status == errSecSuccess || status == errSecItemNotFound)), @\"status\": @(status)});"] },
+  { name := "keychain.clear", args := "`service`", result := "`{\"ok\":…,\"status\":…}` deletes every item of that service (a test namespace's reset)",
+    body := [
+      .l "NSString *service = ELArgString(args, @\"service\");",
+      .l "if (service.length == 0) { answer(@{@\"ok\": @NO, @\"status\": @(errSecParam)}); return; }",
+      .l "OSStatus status = SecItemDelete((__bridge CFDictionaryRef)@{(__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,",
+      .l "                                                            (__bridge id)kSecAttrService: service});",
+      .l "answer(@{@\"ok\": @((BOOL)(status == errSecSuccess || status == errSecItemNotFound)), @\"status\": @(status)});"] },
+  { name := "build", args := "—", result := "`{\"debug\":…}` whether this is a Debug build (`#if DEBUG`): test hooks stay off in Release",
+    body := [
+      .pp "#if DEBUG",
+      .l "answer(@{@\"debug\": @YES});",
+      .pp "#else",
+      .l "answer(@{@\"debug\": @NO});",
+      .pp "#endif"] },
+  { name := "clipboard.set", args := "`text`, `localOnly`, `expiresIn` (s)", result := "`{\"ok\":true}`",
+    body := [
+      .l "// `localOnly` keeps it off Universal Clipboard; `expiresIn` (seconds) clears it afterwards",
+      .l "NSMutableDictionary *options = [NSMutableDictionary dictionary];",
+      .l "if ([ELArgNumber(args, @\"localOnly\") boolValue]) options[UIPasteboardOptionLocalOnly] = @YES;",
+      .l "NSNumber *seconds = ELArgNumber(args, @\"expiresIn\");",
+      .l "if (seconds) options[UIPasteboardOptionExpirationDate] = [NSDate dateWithTimeIntervalSinceNow:seconds.doubleValue];",
+      .l "[UIPasteboard.generalPasteboard setItems:@[@{UIPasteboardTypeAutomatic: ELArgString(args, @\"text\") ?: @\"\"}] options:options];",
+      .l "answer(@{@\"ok\": @YES});"] },
+  { name := "clipboard.get", args := "—", result := "`{\"text\":…}`",
+    body := [
+      .l "answer(@{@\"text\": UIPasteboard.generalPasteboard.string ?: NSNull.null});"] },
+  { name := "documents", args := "—", result := "`{\"path\":…}` the app's Documents directory",
+    body := [
+      .l "NSURL *docs = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;",
+      .l "answer(@{@\"path\": docs.path ?: @\"\"});"] },
+  { name := "paths", args := "—", result := "`{\"documents\",\"support\",\"tmp\"}`: Documents, Application Support (created), temporary",
+    body := [
+      .l "NSFileManager *fm = NSFileManager.defaultManager;",
+      .l "NSURL *support = [fm URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;",
+      .l "if (support) [fm createDirectoryAtURL:support withIntermediateDirectories:YES attributes:nil error:nil];",
+      .l "NSURL *docs = [fm URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;",
+      .l "answer(@{@\"documents\": docs.path ?: @\"\", @\"support\": support.path ?: @\"\", @\"tmp\": fm.temporaryDirectory.path});"] },
+  { name := "exclude-from-backup", args := "`path`, `complete`?", result := "`{\"ok\":…}` marks a file or directory as excluded from iCloud/device backup; with `complete`, also `NSFileProtectionComplete` (readable only while unlocked)",
+    body := [
+      .l "NSURL *url = [NSURL fileURLWithPath:ELArgString(args, @\"path\") ?: @\"\"];",
+      .l "BOOL ok = [url setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];",
+      .l "if (ok && [ELArgNumber(args, @\"complete\") boolValue])",
+      .l "    ok = [NSFileManager.defaultManager setAttributes:@{NSFileProtectionKey: NSFileProtectionComplete} ofItemAtPath:url.path error:nil];",
+      .l "answer(@{@\"ok\": @(ok)});"] },
+  { name := "http.get", args := "`url`, `maxBytes`, `timeout` (s), `accept`?", result := "`{\"status\":…,\"body\":hex}` or `{\"error\":…}`; ephemeral session, no cookies or cache, redirects only within the same host and never from https to http",
+    body := [
+      .l "NSURL *url = [NSURL URLWithString:ELArgString(args, @\"url\") ?: @\"\"];",
+      .l "NSString *scheme = url.scheme.lowercaseString ?: @\"\";",
+      .l "if (!url || !([scheme isEqualToString:@\"http\"] || [scheme isEqualToString:@\"https\"])) { answer(@{@\"error\": @\"bad-url\"}); return; }",
+      .l "NSInteger maxBytes = ELArgNumber(args, @\"maxBytes\") ? [ELArgNumber(args, @\"maxBytes\") integerValue] : 1000000;",
+      .l "NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];",
+      .l "request.timeoutInterval = ELArgNumber(args, @\"timeout\") ? [ELArgNumber(args, @\"timeout\") doubleValue] : 30;",
+      .l "NSString *accept = ELArgString(args, @\"accept\");",
+      .l "if (accept) [request setValue:accept forHTTPHeaderField:@\"Accept\"];",
+      b "[[ELHTTPFetch.session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {" [
+          .l "NSDictionary *result;",
+          .blk [("if (error) {", [
+                .l "result = @{@\"error\": error.localizedDescription};"]), ("} else if ([response isKindOfClass:NSHTTPURLResponse.class] && data) {", [
+                .blk [("if ((NSInteger)data.length > maxBytes) {", [
+                      .l "result = @{@\"error\": @\"tooLarge\"};"]), ("} else {", [
+                      .l "NSMutableString *hex = [NSMutableString stringWithCapacity:data.length * 2];",
+                      .l "const unsigned char *bytes = data.bytes;",
+                      .l "for (NSUInteger i = 0; i < data.length; i++) [hex appendFormat:@\"%02x\", bytes[i]];",
+                      .l "result = @{@\"status\": @(((NSHTTPURLResponse *)response).statusCode), @\"body\": hex};"])] "}"]), ("} else {", [
+                .l "result = @{@\"error\": @\"response\"};"])] "}",
+          .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}] resume];"] },
+  { name := "open", args := "`url`", result := "`{\"ok\":…}` opens the URL outside the app",
+    body := [
+      .l "NSURL *url = [NSURL URLWithString:ELArgString(args, @\"url\") ?: @\"\"];",
+      .blk [("if (url) {", [
+            .l "[UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];",
+            .l "answer(@{@\"ok\": @YES});"]), ("} else {", [
+            .l "answer(@{@\"ok\": @NO});"])] "}"] } ]
 
-def capabilitiesDoc : String :=
-  "What only iOS can do, offered to every ElmLean native app by name. The app asks with
-`Effects.cap name args`; the answer goes back as JSON. Nothing here knows the app.
+def unknownCapability : List Stmt := [
+    .l "answer(@{@\"error\": [NSString stringWithFormat:@\"unknown capability %@\", name]});"]
 
-| name | args | result |
-|---|---|---|
-" ++ "\n".intercalate (capabilities.map fun c => s!"| `{c.name}` | {c.args} | {c.result} |")
+def capabilitiesDoc : List String :=
+  [ "What only iOS can do, offered to every ElmLean native app by name. The app asks with",
+    "`Effects.cap name args`; the answer goes back as JSON. Nothing here knows the app.", "",
+    "| name | args | result |", "|---|---|---|" ] ++
+  capabilities.map fun c => s!"| `{c.name}` | {c.args} | {c.result} |"
 
-def capabilitiesClass : Decl :=
-  .doc capabilitiesDoc
-  (.ty "@MainActor\nfinal class Capabilities"
-    [ .prop "let service" (some (r "Bundle.main.bundleIdentifier ?? \"elmlean\""))
-    , .blank
-    , .fn "func run(name: String, args: [String: Any], answer: @escaping @MainActor ([String: Any]) -> Void)"
-      [.switchS (r "name") (capabilities.map (fun c => (s!"\"{c.name}\"", c.body)) ++
-        [("default", [ans "[\"error\": \"unknown capability \\(name)\"]"])])]
-    , .blank
-    , .doc "The item named by `key` within `service` (the app's bundle id unless the app names one)."
-      (.fn "private func base(_ args: [String: Any]) -> [String: Any]"
-        [s "[kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: args[\"service\"] as? String ?? service,\n         kSecAttrAccount as String: args[\"key\"] as? String ?? \"\"]"]) ])
+set_option maxRecDepth 8000 in
+def capsBefore : List Stmt := [
+    .pp "#import \"ElmLeanShell.h\"",
+    .pp "#import <LocalAuthentication/LocalAuthentication.h>",
+    .pp "#import <Security/Security.h>",
+    .blank,
+    .l "/// One ephemeral URLSession for `http.get`: no cookies, no cache, redirects only within the same host and",
+    .l "/// never from https down to http.",
+    .l "@interface ELHTTPFetch : NSObject <NSURLSessionTaskDelegate>",
+    .l "+ (NSURLSession *)session;",
+    .l "@end",
+    .blank,
+    .l "@implementation ELHTTPFetch",
+    .blank,
+    b "+ (NSURLSession *)session {" [
+        .l "static NSURLSession *session;",
+        .l "static dispatch_once_t once;",
+        b "dispatch_once(&once, ^{" [
+            .l "NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];",
+            .l "config.HTTPShouldSetCookies = NO;",
+            .l "config.HTTPCookieStorage = nil;",
+            .l "config.URLCache = nil;",
+            .l "config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;",
+            .l "config.timeoutIntervalForResource = 120;",
+            .l "session = [NSURLSession sessionWithConfiguration:config delegate:[ELHTTPFetch new] delegateQueue:nil];"] "});",
+        .l "return session;"],
+    .blank,
+    .l "- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task willPerformHTTPRedirection:(NSHTTPURLResponse *)response",
+    b "        newRequest:(NSURLRequest *)request completionHandler:(void (^)(NSURLRequest *))completionHandler {" [
+        .l "NSURL *to = request.URL, *from = response.URL;",
+        .l "BOOL sameHost = to.host && from.host && [to.host.lowercaseString isEqualToString:from.host.lowercaseString];",
+        .l "BOOL downgrade = [from.scheme isEqualToString:@\"https\"] && ![to.scheme isEqualToString:@\"https\"];",
+        .l "completionHandler(sameHost && !downgrade ? request : nil);"],
+    .blank,
+    .l "@end",
+    .blank,
+    b "static NSString *ELArgString(NSDictionary *args, NSString *k) {" [
+        .l "return [args[k] isKindOfClass:NSString.class] ? args[k] : nil;"],
+    .blank,
+    b "static NSNumber *ELArgNumber(NSDictionary *args, NSString *k) {" [
+        .l "return [args[k] isKindOfClass:NSNumber.class] ? args[k] : nil;"],
+    .blank,
+    .l "@implementation ELCapabilities",
+    .blank,
+    .l "/// The item named by `key` within `service` (the app's bundle id unless the app names one).",
+    b "- (NSMutableDictionary *)base:(NSDictionary *)args {" [
+        .l "NSString *service = ELArgString(args, @\"service\") ?: (NSBundle.mainBundle.bundleIdentifier ?: @\"elmlean\");",
+        .l "return [@{(__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword, (__bridge id)kSecAttrService: service,",
+        .l "          (__bridge id)kSecAttrAccount: ELArgString(args, @\"key\") ?: @\"\"} mutableCopy];"],
+    .blank]
 
-def httpFetch : Decl :=
-  .doc "One ephemeral URLSession for `http.get`: no cookies, no cache, redirects only within the same host and
-never from https down to http."
-  (.ty "final class HTTPFetch: NSObject, URLSessionTaskDelegate, @unchecked Sendable"
-    [ .prop "static let shared" (some (r "HTTPFetch()"))
-    , .prop "private(set) lazy var session: URLSession" (some (.call (.lam ""
-        [ .letS "config" (r "URLSessionConfiguration.ephemeral")
-        , .set "config.httpShouldSetCookies" (r "false")
-        , .set "config.httpCookieStorage" (r "nil")
-        , .set "config.urlCache" (r "nil")
-        , .set "config.requestCachePolicy" (r ".reloadIgnoringLocalCacheData")
-        , .set "config.timeoutIntervalForResource" (r "120")
-        , .ret (some (r "URLSession(configuration: config, delegate: self, delegateQueue: nil)")) ]) [] []))
-    , .blank
-    , .fn "func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,\n                newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void)"
-      [ .guardS ["let to = request.url, let from = response.url",
-                 "to.host?.lowercased() == from.host?.lowercased()",
-                 "!(from.scheme == \"https\" && to.scheme != \"https\")"] [s "completionHandler(nil)", .ret none]
-      , s "completionHandler(request)" ] ])
-
-def capabilitiesFile : List Decl :=
-  [.imp "Foundation", .imp "LocalAuthentication", .imp "Security", .imp "UIKit", capabilitiesClass, httpFetch]
+def capsFile : List Stmt :=
+  capsBefore ++
+  [ b "- (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(NSDictionary *))answer {"
+      [ ifChain "" (capabilities.map (fun c => (s!"[name isEqualToString:{lit c.name}]", c.body)) ++ [("", unknownCapability)]) ] ] ++
+  [
+    .blank,
+    .l "@end"]
 
 end ElmShell
