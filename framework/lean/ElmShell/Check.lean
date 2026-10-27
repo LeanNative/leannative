@@ -5,6 +5,8 @@ import ElmShell.Grammar
 
 * every `Wire` constructor has a row (`kindTag_mem`), every row's sample prints (`Wire.toJson`) with
   exactly the row's keys, each of the JSON kind the row decodes, and the row's tag;
+* `identified` is no row: every sample, identified, prints as itself plus a string `id` (which the shell
+  decodes on any node, `idKey`);
 * the three string enums list every constructor (`*_complete`), so their Swift raw values are the
   Lean printer's strings;
 * every `Event` constructor has a row (`eventName_mem`), and the JSON the shell sends for each row is
@@ -29,9 +31,12 @@ def kindTag : Wire → String
   | .tabs .. => "tabs" | .sheet .. => "sheet" | .alert .. => "alert" | .picker .. => "picker"
   | .progress .. => "progress" | .icon .. => "icon" | .qr .. => "qr" | .share .. => "share" | .link .. => "link"
   | .page .. => "page" | .empty .. => "empty" | .disclosure .. => "disclosure" | .stepper .. => "stepper"
+  | .identified _ w => kindTag w
 
 theorem kindTag_mem (w : Wire) : kindTag w ∈ tableTags := by
-  cases w <;> simp [kindTag, tableTags]
+  cases w with
+  | identified _ w => simpa [kindTag] using kindTag_mem w
+  | _ => simp [kindTag, tableTags]
 
 theorem styles_complete (x : TextStyle) : x ∈ allStyles := by cases x <;> simp [allStyles]
 theorem roles_complete (x : ButtonRole) : x ∈ allRoles := by cases x <;> simp [allRoles]
@@ -87,10 +92,22 @@ def nodeProblems (w : Wire) : List String :=
       | .ok v => if jsonKindOk f.ty v then none else some s!"`{tag}.{f.key}`: {v.compress} is not what the row decodes"
       | .error _ => some s!"`{tag}.{f.key}`: absent from Wire.toJson"
 
+/-- `identified`: the node's own object plus `"id"`, a string. -/
+def identifiedProblems (w : Wire) : List String :=
+  let tag := kindTag w
+  match w.toJson, (Wire.identified "x" w).toJson with
+  | .obj plain, j@(.obj kvs) =>
+    (if (j.getObjValAs? String idKey).toOption == some "x" then [] else [s!"identified `{tag}`: no string `{idKey}`"]) ++
+    (if kvs.toList.map (·.1) == ((plain.insert idKey (.str "x")).toList.map (·.1))
+        && plain.toList.all (fun (k, v) => (j.getObjVal? k).toOption == some v) then []
+     else [s!"identified `{tag}`: not the node's own object plus `{idKey}`"])
+  | _, _ => [s!"identified `{tag}`: not an object"]
+
 def problems : List String :=
   (if nodes.map (·.tag) == tableTags then [] else ["the grammar table's tags are not `tableTags`"]) ++
   (if samples.map kindTag == tableTags then [] else ["`samples` does not have one node per row, in order"]) ++
   samples.flatMap nodeProblems ++
+  samples.flatMap identifiedProblems ++
   (if events.map (·.1) == eventNames then [] else ["the event table's names are not `eventNames`"]) ++
   eventSamples.filterMap fun (e, v) =>
     let name := eventName e

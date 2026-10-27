@@ -8,10 +8,12 @@ namespace ElmLean.Html
 variable {msg : Type} {P : msg → Prop} {h : Html msg}
 
 theorem Sat.children (hs : Sat P h) : ∀ c ∈ h.children, Sat P c := by
-  cases hs <;> simp [Html.children] <;> assumption
+  induction hs <;> simp [Html.children] <;> assumption
 
 theorem Sat.handle (hs : Sat P h) (e : Event) (m : msg) (hd : h.handle e = some m) : P m := by
-  cases hs <;> cases e <;> simp [Html.handle] at hd <;> (try subst hd) <;>
+  induction hs with
+  | identified i h _ ih => exact ih (by simpa [Html.handle] using hd)
+  | _ => cases e <;> simp [Html.handle] at hd <;> (try subst hd) <;>
     first | (apply_assumption <;> first | rfl | assumption) | solve_by_elim
 
 theorem Sat.dispatch (p : List Nat) :

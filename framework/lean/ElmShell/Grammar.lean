@@ -49,6 +49,10 @@ def strs (k : String) : Field := { key := k, ty := .strs }
 def enum (k name dflt : String) : Field := { key := k, ty := .enum name dflt }
 def kids : Field := { key := "c", ty := .kids }
 
+/-- The key any node may carry besides its row's fields: `Html.identified`'s identifier, which the shell
+sets as the node's `accessibilityIdentifier` (`ELIdentify`). -/
+def idKey : String := "id"
+
 set_option maxRecDepth 8000 in
 def nodes : List NodeKind :=
 [

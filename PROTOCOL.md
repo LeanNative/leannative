@@ -105,6 +105,11 @@ Native mode (framework/native/README.md) adds these nodes; `elmgen` does not tra
 | disclosure | `{"t":"disclosure","title","expanded":bool,"c":[…]}` | yes | `toggle` |
 | stepper | `{"t":"stepper","label","value":n,"lo":n,"hi":n,"detail"}` (`detail` "" = show the number) | — | `select` |
 
+Any node may also carry `"id":"…"` (`Html.identified id child`, native mode): an identifier for UI tests,
+which the shell sets as the node's `accessibilityIdentifier` (on its control, else its label, else its
+image). It is not a node of its own: the object is `child`'s, with `child`'s children and events, so
+paths and events pass through it.
+
 Events added with them: `{"k":"select","value":n}` (a tab, a picker option, a stepper value) and
 `{"k":"dismiss"}` (back from a screen, a sheet swiped away).
 

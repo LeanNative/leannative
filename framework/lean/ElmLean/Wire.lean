@@ -31,6 +31,8 @@ inductive Wire where
   | empty (title icon message : String) (children : List Wire)
   | disclosure (title : String) (expanded : Bool) (children : List Wire)
   | stepper (label : String) (value lo hi : Nat) (detail : String := "")
+  /-- `Html.identified`: `child` with an `"id"` key, its children and events its own -/
+  | identified (id : String) (child : Wire)
   deriving Repr, Inhabited
 
 namespace Wire
@@ -63,6 +65,7 @@ def children : Wire → List Wire
   | .empty _ _ _ cs => cs
   | .disclosure _ _ cs => cs
   | .stepper .. => []
+  | .identified _ w => w.children
 
 def at? : Wire → List Nat → Option Wire
   | w, [] => some w
@@ -83,6 +86,7 @@ def accepts : Wire → Event → Bool
   | .picker .., .select _ => true
   | .disclosure .., .toggle _ => true
   | .stepper .., .select _ => true
+  | .identified _ w, e => w.accepts e
   | _, _ => false
 
 /-- The wire tree advertises `(p, e)` when the node at `p` accepts `e`. -/

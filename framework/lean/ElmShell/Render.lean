@@ -505,8 +505,10 @@ def renderBefore : List Stmt := [
             .l "NSMutableArray *items = [NSMutableArray array];",
             b "for (NSArray *t in toolbars) {" [
                 .l "NSArray *kids = ((NSDictionary *)t[1])[@\"c\"];",
-                .l "for (NSUInteger j = 0; j < kids.count; j++)",
-                .l "    [items addObject:[self barItem:kids[j] path:ELAppend(self.path, @[t[0], @(j)])]];"],
+                b "for (NSUInteger j = 0; j < kids.count; j++) {" [
+                    .l "UIBarButtonItem *item = [self barItem:kids[j] path:ELAppend(self.path, @[t[0], @(j)])];",
+                    .l s!"item.accessibilityIdentifier = kids[j][{lit idKey}];",
+                    .l "[items addObject:item];"]],
             .l "self.navigationItem.rightBarButtonItems = items.reverseObjectEnumerator.allObjects;"]],
     .blank,
     b "- (UIBarButtonItem *)barItem:(NSDictionary *)n path:(ELPath *)path {" [
@@ -800,6 +802,30 @@ def buildFn : List Stmt :=
 set_option maxRecDepth 8000 in
 def renderAfter : List Stmt := [
     .blank,
+    .l "/// The views of a box that are its own (nested boxes are other nodes): its first control or text view,",
+    .l "/// its last label (a `labeled` row's value) and its first image.",
+    b "static void ELOwnViews(UIView *v, UIView *__strong *control, UILabel *__strong *label, UIImageView *__strong *image) {" [
+        b "for (UIView *s in v.subviews) {" [
+            .l "if ([s isKindOfClass:ELBox.class]) continue;",
+            b "if ([s isKindOfClass:UIControl.class] || [s isKindOfClass:UITextView.class]) {" [
+                .l "if (!*control) *control = s;",
+                .l "continue;"],
+            .l "if ([s isKindOfClass:UILabel.class]) *label = (UILabel *)s;",
+            .l "if (!*image && [s isKindOfClass:UIImageView.class]) *image = (UIImageView *)s;",
+            .l "ELOwnViews(s, control, label, image);"]],
+    .blank,
+    .l "/// `Html.identified`: the node's identifier (none clears it) on the view a UI test finds it by: its control,",
+    .l "/// else its label, else its image, else the box.",
+    b "static void ELIdentify(ELBox *box, NSDictionary *node) {" [
+        .l s!"NSString *ident = node[{lit idKey}];",
+        .l "UIView *control = nil;",
+        .l "UILabel *label = nil;",
+        .l "UIImageView *image = nil;",
+        .l "ELOwnViews(box, &control, &label, &image);",
+        .l "UIView *target = control ?: label ?: image ?: box;",
+        .l "if (target != box) box.accessibilityIdentifier = nil;",
+        .l "if (ident || target.accessibilityIdentifier) target.accessibilityIdentifier = ident;"],
+    .blank,
     b "static ELBox *ELRender(ELBox *old, NSDictionary *node, ELPath *path, NSString *mode) {" [
         .l "NSString *t = node[@\"t\"];",
         .l "// a box made for a mode (a list's card, a card's row) is keyed by the mode, which no tag can equal",
@@ -808,6 +834,7 @@ def renderAfter : List Stmt := [
             .l "if ([old.node isEqualToDictionary:node]) return old;",
             b "if (old.update && old.update(old, node)) {" [
                 .l "old.node = node;",
+                .l "if (mode.length == 0) ELIdentify(old, node);",
                 .l "return old;"]],
         .l "ELBox *box = [ELBox new];",
         .l "box.key = key;",
@@ -817,6 +844,8 @@ def renderAfter : List Stmt := [
         .l "else if ([mode isEqualToString:@\"row\"]) ELBuildCardRow(box);",
         .l "else ELBuild(box);",
         .l "if (box.update) box.update(box, node);",
+        .l "// a list's card and a card's row hold the node's own box, which takes the identifier",
+        .l "if (mode.length == 0) ELIdentify(box, node);",
         .l "return box;"]]
 
 def renderFile : List Stmt := renderBefore ++ [.blank] ++ buildFn ++ renderAfter

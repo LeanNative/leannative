@@ -70,6 +70,7 @@ def Wire.toJson : Wire → Json
   | .stepper l v lo hi d =>
     Json.mkObj [("t", Json.str "stepper"), ("label", Json.str l), ("value", Lean.toJson v), ("lo", Lean.toJson lo), ("hi", Lean.toJson hi),
                 ("detail", Json.str d)]
+  | .identified i w => (Wire.toJson w).setObjVal! "id" (Json.str i)
 
 instance : ToJson Wire := ⟨Wire.toJson⟩
 

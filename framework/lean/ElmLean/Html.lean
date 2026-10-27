@@ -81,6 +81,10 @@ inductive Html (msg : Type) where
   | disclosure (title : String) (expanded : Bool) (onToggle : Bool → msg) (children : List (Html msg))
   /-- A stepper over `lo…hi` (event `select n`); `detail`, when set, is shown in place of the value (e.g. "2 of 3"). -/
   | stepper (label : String) (value lo hi : Nat) (onChange : Nat → msg) (detail : String := "")
+  /-- `child` with an identifier for UI tests (the shell's `accessibilityIdentifier`). It is not a node of
+  its own: it has `child`'s children and handlers, so paths and events pass through it, and on the wire it
+  is `child`'s object with an `"id"` key. -/
+  | identified (id : String) (child : Html msg)
 
 namespace Html
 
@@ -116,6 +120,7 @@ def children : Html msg → List (Html msg)
   | .empty _ _ _ cs => cs
   | .disclosure _ _ _ cs => cs
   | .stepper .. => []
+  | .identified _ h => h.children
 
 /-- The node at a path of child indices. -/
 def at? : Html msg → List Nat → Option (Html msg)
@@ -137,6 +142,7 @@ def handle : Html msg → Event → Option msg
   | .picker _ _ _ f, .select n => some (f n)
   | .disclosure _ _ f _, .toggle b => some (f b)
   | .stepper _ _ _ _ f _, .select n => some (f n)
+  | .identified _ h, e => h.handle e
   | _, _ => none
 
 /-- Dispatch an event addressed by path. -/
@@ -147,12 +153,14 @@ def countToggles : Html msg → Nat
   | .col cs => (cs.map countToggles).sum
   | .row cs => (cs.map countToggles).sum
   | .toggle .. => 1
+  | .identified _ h => countToggles h
   | _ => 0
 
 def toggleLabels : Html msg → List String
   | .col cs => (cs.map toggleLabels).flatten
   | .row cs => (cs.map toggleLabels).flatten
   | .toggle l _ _ => [l]
+  | .identified _ h => toggleLabels h
   | _ => []
 
 /-- Every handler anywhere in the tree produces a message satisfying `P`. -/
@@ -193,6 +201,7 @@ inductive Sat (P : msg → Prop) : Html msg → Prop
   | disclosure (t : String) (e : Bool) (f : Bool → msg) (cs : List (Html msg)) :
       (∀ b, P (f b)) → (∀ c ∈ cs, Sat P c) → Sat P (.disclosure t e f cs)
   | stepper (l : String) (v lo hi : Nat) (f : Nat → msg) (d : String) : (∀ n, P (f n)) → Sat P (.stepper l v lo hi f d)
+  | identified (i : String) (h : Html msg) : Sat P h → Sat P (.identified i h)
 
 end Html
 end ElmLean

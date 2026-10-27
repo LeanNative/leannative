@@ -27,6 +27,14 @@ def nodeHelpers : List Stmt := [
         .l "NSString *s = ELS(o, k);",
         .l "return [values containsObject:s] ? s : dflt;"],
     .blank,
+    .l "/// `Html.identified`: the identifier any node may carry, kept when it is a non-empty string.",
+    b "static NSDictionary *ELWithId(NSDictionary *o, NSDictionary *n) {" [
+        .l s!"NSString *ident = ELS(o, {lit idKey});",
+        .l "if (ident.length == 0) return n;",
+        .l "NSMutableDictionary *m = [n mutableCopy];",
+        .l s!"m[{lit idKey}] = ident;",
+        .l "return m;"],
+    .blank,
     b "static NSArray *ELK(NSDictionary *o) {" [
         .l "NSMutableArray *out = [NSMutableArray array];",
         .l "if ([o[@\"c\"] isKindOfClass:NSArray.class])",
@@ -48,7 +56,7 @@ def Field.decode (f : Field) : String :=
   s!", {lit f.key}: {v}"
 
 def decodeLine (k : NodeKind) : Stmt :=
-  .l s!"if ([t isEqualToString:{lit k.tag}]) return @\{@\"t\": t{String.join (k.fields.map (·.decode))}};"
+  .l s!"if ([t isEqualToString:{lit k.tag}]) return ELWithId(o, @\{@\"t\": t{String.join (k.fields.map (·.decode))}});"
 
 def nodeFile : List Stmt :=
   nodeHelpers ++

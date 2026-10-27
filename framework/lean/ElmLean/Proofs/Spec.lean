@@ -43,6 +43,7 @@ theorem Html.Sat.of_forall {P : Msg → Prop} (hP : ∀ m, P m) : ∀ h : Html M
   | .empty t i m cs => .empty t i m cs fun c _ => Html.Sat.of_forall hP c
   | .disclosure t e f cs => .disclosure t e f cs (fun _ => hP _) fun c _ => Html.Sat.of_forall hP c
   | .stepper l v lo hi f d => .stepper l v lo hi f d fun _ => hP _
+  | .identified i h => .identified i h (Html.Sat.of_forall hP h)
 
 /-- Every reachable session shows the view of its model. -/
 theorem Session.reach_coherent (app : App Model Msg) (rs : List Request) :
