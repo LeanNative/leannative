@@ -11,11 +11,8 @@ theorem Sat.children (hs : Sat P h) : ∀ c ∈ h.children, Sat P c := by
   cases hs <;> simp [Html.children] <;> assumption
 
 theorem Sat.handle (hs : Sat P h) (e : Event) (m : msg) (hd : h.handle e = some m) : P m := by
-  cases hs <;> cases e <;> simp [Html.handle] at hd
-  · rename_i a; exact a m hd
-  · rename_i hf _ s; subst hd; exact hf s
-  · rename_i _ hs; exact hs m hd
-  · rename_i hf b; subst hd; exact hf b
+  cases hs <;> cases e <;> simp [Html.handle] at hd <;> (try subst hd) <;>
+    first | (apply_assumption <;> first | rfl | assumption) | solve_by_elim
 
 theorem Sat.dispatch (p : List Nat) :
     ∀ (h : Html msg), Sat P h → ∀ e m, h.dispatch p e = some m → P m := by

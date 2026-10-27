@@ -12,6 +12,8 @@
 #   BUNDLE_ID   its bundle identifier                                    art.fralex.elmlean.todo
 # Optional:
 #   PROTOCOL_FLAGS  extra protocol_test.py flags (`--shape list` for list-shaped apps)
+#   CLI_RUNNER      the Swift CLI entry point: runElmCli (default), runCmdElmCli for an app with commands
+#   LOCKSTEP_STEPS  steps per lockstep seed (default 400)
 #   EXTRA_CHECKS    more targets for `make check`
 #
 # Targets:
@@ -28,6 +30,8 @@
 #   ios         xcodegen + build + install + launch the generated native app in the iPhone simulator
 
 PY      ?= /opt/homebrew/bin/python3
+CLI_RUNNER     ?= runElmCli
+LOCKSTEP_STEPS ?= 400
 CLI     := .lake/build/bin/$(EXE)
 GEN_CLI := build/$(EXE)-swift
 SCRIPTS := $(FW)/scripts
@@ -58,16 +62,16 @@ golden: build
 
 gen-cli:
 	mkdir -p build
-	printf 'runElmCli(%s.self)\n' '$(SWIFT_APP)' > build/main.swift
+	printf '$(CLI_RUNNER)(%s.self)\n' '$(SWIFT_APP)' > build/main.swift
 	swiftc -O -o $(GEN_CLI) $(FW)/swift/Runtime.swift generated/Generated.swift build/main.swift
 
 gen-test: build gen-cli
 	$(PY) -I $(SCRIPTS)/protocol_test.py $(PROTOCOL_FLAGS) "$(GEN_CLI)"
-	$(PY) -I $(SCRIPTS)/lockstep.py "$(CLI)" "$(GEN_CLI)" 400 1
-	$(PY) -I $(SCRIPTS)/lockstep.py "$(CLI)" "$(GEN_CLI)" 400 2
+	$(PY) -I $(SCRIPTS)/lockstep.py "$(CLI)" "$(GEN_CLI)" $(LOCKSTEP_STEPS) 1
+	$(PY) -I $(SCRIPTS)/lockstep.py "$(CLI)" "$(GEN_CLI)" $(LOCKSTEP_STEPS) 2
 
 crosscheck: build gen-cli
-	PROTOCOL_FLAGS='$(PROTOCOL_FLAGS)' $(SCRIPTS)/gen_crosscheck.sh $(APP) $(SWIFT_APP) "$(CLI)" "$(GEN_CLI)"
+	PROTOCOL_FLAGS='$(PROTOCOL_FLAGS)' LOCKSTEP_STEPS='$(LOCKSTEP_STEPS)' $(SCRIPTS)/gen_crosscheck.sh $(APP) $(SWIFT_APP) "$(CLI)" "$(GEN_CLI)"
 
 check: axioms selftest protocol golden gen-test crosscheck $(EXTRA_CHECKS)
 

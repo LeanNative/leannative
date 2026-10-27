@@ -27,8 +27,10 @@ Lean at runtime.
 The app's Lean executable is a test oracle, not a runtime: it speaks a small JSON protocol on
 stdin/stdout ([PROTOCOL.md](PROTOCOL.md)) so the generated code can be checked against it.
 
-Two complete apps live in `examples/`: [Todo](examples/todo/README.md) (the main example, with
-its full theorem table) and [Counter](examples/counter/README.md).
+Three complete apps live in `examples/`: [Todo](examples/todo/README.md) (the main example, with
+its full theorem table), [Counter](examples/counter/README.md), and [Send](examples/send/README.md),
+Winnow's Send review flow with commands run against Winnow's WalletCore, proven to sign only what
+the user approved on screen and to broadcast only a transaction that matches it.
 
 ## Quick start
 
@@ -43,6 +45,10 @@ cd apps/notes && make gen && make check
 ```bash
 make ios                         # from apps/notes: the generated native app in the iPhone simulator
 ```
+
+The Send example builds its host against a checkout of Winnow (`WINNOW`, default
+`~/src/winnow-claude`), so `make send` and the full root `make check` need one; `make framework todo
+counter template-test` do not.
 
 `make gen` writes the Swift files, `make check` runs every gate of the app (below), and the
 scaffolded app passes them out of the box: `make template-test` at the root proves that on
@@ -108,11 +114,25 @@ same check to every theorem under the given namespaces, framework theorems inclu
 `framework/scripts/check-axioms.sh` also greps the build log for `sorry` warnings in
 definitions. `framework/lean/ElmLean/Gate.lean` spells out what each layer covers.
 
+**Commands.** An app that needs its host to do things (call a wallet, authenticate, broadcast) is a
+`CmdApp Model Msg Cmd Host` (`framework/lean/ElmLean/Cmd.lean`): an `App` plus
+`cmds : Msg → Model → List Cmd`, the commands a message asks for in the same pre-state `update` sees,
+and `host : Host → Msg`, the only way a host answer enters the app. This departs from Elm's
+`update : Msg → Model → (Model, Cmd Msg)` on purpose: two functions of the same arguments stay
+inside the subset `elmgen` translates. `Cmd` and `Host` are ordinary app types (derive
+`Lean.ToJson`/`Lean.FromJson`); `elmgen` prints their JSON codecs, and the generated app runs each
+command on a hand-written `CmdHost` (`Store.attach`). `CmdSpec` is the `Spec` of such an app, and
+`CmdSpec.trace_origin` says where every message of every run comes from: an in-sync control of the
+view the client was shown, or `app.host h`. The host is trusted; what the app does with its
+answers is proven (see the Send example).
+
 **4. The executable.** One line in `Main.lean`:
 
 ```lean
 def main (args : List String) : IO UInt32 := ElmLean.Cli.main Notes.app args
 ```
+
+(`ElmLean.CmdCli.main` for an app with commands; set `CLI_RUNNER := runCmdElmCli` in its Makefile.)
 
 `<app>-cli serve` (the default) speaks the protocol on stdin/stdout; the lockstep and harness
 tests drive it. `<app>-cli selftest`
@@ -149,6 +169,7 @@ The framework's gate (`framework/lean/ElmLean/Proofs.lean`) holds the theorems e
 | `Session.start_coherent`, `Session.handle_coherent`, `Session.run_coherent`, `Session.reach_coherent` | The protocol state machine always shows the view of its current model. |
 | `Session.handle_inv`, `Session.run_inv` | Any invariant preserved by `update` holds after any request trace. |
 | `Spec.reachable_inv`, `Spec.reachable_sound` | What a `Spec` buys: the invariant and well-targeted dispatch in every reachable session. |
+| `Session.step_origin`, `CmdSpec.reachable_inv`, `CmdSpec.trace_origin` | Apps with commands: every step runs `update` on at most one message and asks for exactly `cmds` of it, and that message is an in-sync dispatch from the view shown or a host answer through `app.host`, along any interleaving of events and answers. |
 
 | Layer | Status | How it is checked |
 |---|---|---|
@@ -156,10 +177,11 @@ The framework's gate (`framework/lean/ElmLean/Proofs.lean`) holds the theorems e
 | JSON codecs, the stdin/stdout loop (`framework/lean/ElmLean/{Json,Cli}.lean`) | Trusted, tested | `selftest`; `protocol_test.py` on every app, validated itself against `framework/scripts/fake_cli.py`, an independent stdlib implementation of the protocol |
 | `elmgen` and `framework/swift` | Trusted, tested | loud rejection outside the subset (the corpus in `examples/todo/ElmGenTests`), golden files, lockstep against the Lean CLI, the LCNF cross-check |
 | SwiftUI binding of the generated screen (`framework/swift/Elements.swift`) | Trusted, driven in the simulator | `make ios` |
+| An app's command host (the Send example's WalletCore host) | Trusted, tested | that app's own tests (`make host-test` in examples/send) |
 | Lean compiler and runtime, Python, Swift, SwiftUI | Trusted | — |
 
-Out of scope on purpose: Elm `Cmd`/`Sub` (effects, subscriptions), running Lean on the
-device, persistence.
+Out of scope on purpose: Elm `Sub` (subscriptions; a host may instead send answers at any time),
+running Lean on the device, persistence.
 
 ## Repository layout
 
@@ -168,8 +190,8 @@ README.md, PROTOCOL.md      this file; the oracle protocol (nodes, events, seq, 
 Makefile                    check = framework + examples + template-test; new-app
 framework/
   lean/                     Lake package `elmlean`
-    ElmLean/                Html, Wire, Erase, Program, Spec (proven core); Json, Cli, Selftest (trusted
-                            shell); Gate (the gate commands); Proofs/ and Proofs.lean (the framework's gate)
+    ElmLean/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest
+                            (trusted shell); Gate (the gate commands); Proofs/ and Proofs.lean (the framework's gate)
     ElmGen/                 the Lean → Swift generator (`lake exe elmgen`)
   swift/                    Runtime.swift (Html mirror, JSON, Session loop), Elements.swift (SwiftUI kit, Store)
   crosscheck/               the independent LCNF translator
@@ -180,6 +202,7 @@ framework/
 examples/
   todo/                     the main example (README with its theorem table)
   counter/                  a second, smaller example
+  send/                     Winnow's Send review flow: an app with commands and a WalletCore host
 ```
 
 ## Notes and known limitations

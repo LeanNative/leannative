@@ -1,0 +1,45 @@
+# xcodegen project of a native-mode ElmLean app: no app Swift at all. The framework's generic shell
+# (framework/native/swift + c) plus the C that Lean generated for the app (build/lean-c, made by
+# framework/native/scripts/ios_lean_sources.sh), linked with Lean's runtime retargeted to iOS (build/lib).
+name: NativeDemo
+options:
+  bundleIdPrefix: art.fralex
+  deploymentTarget: { iOS: "17.0" }
+  xcodeVersion: "27.1"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+targets:
+  NativeDemo:
+    type: application
+    platform: iOS
+    sources:
+      - { path: ../../../framework/native/swift, name: ElmLeanShell }
+      - { path: ../../../framework/native/c, name: ElmLeanShim }
+      - { path: build/lean-c, name: LeanC, compilerFlags: [-w] }
+    info:
+      path: build/Info.plist
+      properties:
+        CFBundleDisplayName: Native Demo
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        NSFaceIDUsageDescription: "Shows that a Lean app can ask for Face ID."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: art.fralex.elmlean.nativedemo
+        PRODUCT_NAME: NativeDemo
+        GENERATE_INFOPLIST_FILE: NO
+        SWIFT_OBJC_BRIDGING_HEADER: ../../../framework/native/swift/ElmLeanNative-Bridging-Header.h
+        HEADER_SEARCH_PATHS: ["/Users/posix4e/.elan/toolchains/leanprover--lean4---v4.35.0/include"]
+        LIBRARY_SEARCH_PATHS: ["$(PROJECT_DIR)/build/lib"]
+        OTHER_LDFLAGS: [-lLean, -lStd, -lInit, -lleanrt, -luv, -lgmp, -lc++]
+        # Lean's generated C at -O3 in every configuration, as Lean builds it
+        GCC_OPTIMIZATION_LEVEL: "3"
+        DEAD_CODE_STRIPPING: YES
+        # ad-hoc signed in the simulator: an unsigned app has no Keychain entitlement (errSecMissingEntitlement)
+        "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+        "CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]": "NO"

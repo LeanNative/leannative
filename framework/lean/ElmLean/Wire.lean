@@ -12,6 +12,25 @@ inductive Wire where
   | toggle (label : String) (on : Bool)
   | divider
   | spacer
+  | input (kind : InputKind) (label placeholder value : String) (submits : Bool)
+  | list (children : List Wire)
+  | section (header footer : String) (children : List Wire)
+  | labeled (label value : String)
+  | screen (title : String) (back : Bool) (children : List Wire) (refreshable : Bool := false)
+  | toolbar (children : List Wire)
+  | tabs (labels icons : List String) (selected : Nat) (children : List Wire)
+  | sheet (title : String) (dismissable : Bool) (children : List Wire)
+  | alert (title message : String) (children : List Wire)
+  | picker (label : String) (options : List String) (selected : Nat)
+  | progress (label : String)
+  | icon (name : String)
+  | qr (text : String)
+  | share (label text : String) (file : Bool := false)
+  | link (label url : String)
+  | page (path : String)
+  | empty (title icon message : String) (children : List Wire)
+  | disclosure (title : String) (expanded : Bool) (children : List Wire)
+  | stepper (label : String) (value lo hi : Nat) (detail : String := "")
   deriving Repr, Inhabited
 
 namespace Wire
@@ -25,6 +44,25 @@ def children : Wire → List Wire
   | .toggle .. => []
   | .divider => []
   | .spacer => []
+  | .input .. => []
+  | .list cs => cs
+  | .section _ _ cs => cs
+  | .labeled .. => []
+  | .screen _ _ cs _ => cs
+  | .toolbar cs => cs
+  | .tabs _ _ _ cs => cs
+  | .sheet _ _ cs => cs
+  | .alert _ _ cs => cs
+  | .picker .. => []
+  | .progress .. => []
+  | .icon .. => []
+  | .qr .. => []
+  | .share .. => []
+  | .link .. => []
+  | .page .. => []
+  | .empty _ _ _ cs => cs
+  | .disclosure _ _ cs => cs
+  | .stepper .. => []
 
 def at? : Wire → List Nat → Option Wire
   | w, [] => some w
@@ -36,6 +74,15 @@ def accepts : Wire → Event → Bool
   | .field .., .input _ => true
   | .field _ _ s, .submit => s
   | .toggle .., .toggle _ => true
+  | .input .., .input _ => true
+  | .input _ _ _ _ s, .submit => s
+  | .screen _ b _ _, .dismiss => b
+  | .screen _ _ _ r, .click => r
+  | .tabs .., .select _ => true
+  | .sheet _ d _, .dismiss => d
+  | .picker .., .select _ => true
+  | .disclosure .., .toggle _ => true
+  | .stepper .., .select _ => true
   | _, _ => false
 
 /-- The wire tree advertises `(p, e)` when the node at `p` accepts `e`. -/

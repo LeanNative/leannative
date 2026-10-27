@@ -30,7 +30,7 @@ structure Options (M : Type) where
   maxSteps : Nat := 2000
 
 def probeEvents (inputs : List String) : List Event :=
-  [.click, .submit, .toggle true, .toggle false] ++ inputs.map .input
+  [.click, .submit, .toggle true, .toggle false, .select 0, .select 1, .dismiss] ++ inputs.map .input
 
 def sameWire (a b : Wire) : Bool := a.toJson.compress == b.toJson.compress
 

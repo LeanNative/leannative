@@ -1,0 +1,10 @@
+# A native-mode ElmLean app: full Lean, compiled to C and run inside the iOS app (see framework/native).
+name = "nativedemo"
+defaultTargets = ["NativeDemo"]
+
+[[require]]
+name = "elmlean"
+path = "../../framework/lean"
+
+[[lean_lib]]
+name = "NativeDemo"

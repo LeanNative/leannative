@@ -81,6 +81,33 @@ Error precedence: `bad-json` > `stale` > `bad-path` > `no-handler`.
 | divider | `{"t":"divider"}` |
 | spacer | `{"t":"spacer"}` |
 
+Native mode (framework/native/README.md) adds these nodes; `elmgen` does not translate them:
+
+| node | JSON | children (`c`) | accepted events |
+|---|---|---|---|
+| input | `{"t":"input","kind":"plain"\|"secure"\|"multiline"\|"number"\|"decimal","label","placeholder","value","submits"}` | — | `input`; `submit` iff `submits` |
+| list | `{"t":"list","c":[…]}` | yes | — |
+| section | `{"t":"section","header","footer","c":[…]}` | yes | — |
+| labeled | `{"t":"labeled","label","value"}` | — | — |
+| screen | `{"t":"screen","title","back":bool,"refreshable":bool,"c":[…]}` | yes | `dismiss` iff `back`; `click` iff `refreshable` (pull to refresh) |
+| toolbar | `{"t":"toolbar","c":[…]}` | yes | — |
+| tabs | `{"t":"tabs","labels":[…],"icons":[…],"selected":n,"c":[…]}` | yes (the selected tab's content) | `select` |
+| sheet | `{"t":"sheet","title","dismissable":bool,"c":[…]}` | yes | `dismiss` iff `dismissable` |
+| alert | `{"t":"alert","title","message","c":[buttons]}` | yes | — |
+| picker | `{"t":"picker","label","options":[…],"selected":n}` | — | `select` |
+| progress | `{"t":"progress","label"}` | — | — |
+| icon | `{"t":"icon","name"}` (an SF Symbols name) | — | — |
+| qr | `{"t":"qr","text"}` | — | — |
+| share | `{"t":"share","label","text","file"}` (`file`: `text` is a file path, shared as the file) | — | — |
+| link | `{"t":"link","label","url"}` | — | — |
+| page | `{"t":"page","path"}` (a bundled HTML file) | — | — |
+| empty | `{"t":"empty","title","icon","message","c":[actions]}` | yes | — |
+| disclosure | `{"t":"disclosure","title","expanded":bool,"c":[…]}` | yes | `toggle` |
+| stepper | `{"t":"stepper","label","value":n,"lo":n,"hi":n,"detail"}` (`detail` "" = show the number) | — | `select` |
+
+Events added with them: `{"k":"select","value":n}` (a tab, a picker option, a stepper value) and
+`{"k":"dismiss"}` (back from a screen, a sheet swiped away).
+
 Key order within an object is unspecified (the CLI emits keys alphabetically).
 Strings are UTF-8; `"`, `\` and control characters are JSON-escaped, so a node
 never contains a raw newline.
@@ -100,3 +127,32 @@ A control is *advertised* when the node at `path` accepts the event kind:
 view the CLI emitted, a `(path, event)` pair is advertised **iff** dispatching it
 yields a message. So a client that only fires advertised controls with the right
 `seq` never receives `bad-path` or `no-handler`.
+
+## Commands (apps with commands)
+
+An app built as a `CmdApp` (`framework/lean/ElmLean/Cmd.lean`; the Send example) asks its host to do
+things. Its CLI (`ElmLean.CmdCli.main`) speaks everything above, plus:
+
+* **Every view reply carries `"cmds"`**, the commands that step asked for (possibly `[]`), in the JSON of
+  Lean's derived `ToJson` for the app's `Cmd` type: `{"seq":n+1,"view":<node>,"cmds":[…]}`. The initial
+  line and `reset` replies carry `"cmds":[]`. Error replies carry none. The commands of a step are
+  `cmds msg m` for the message `msg` the step ran and the model `m` **before** it (`Session.step`).
+* **Host answers**: `{"host":<answer>}`, where `<answer>` is a value of the app's `Host` type in the JSON
+  of Lean's derived `FromJson`. There is no `seq` check: answers arrive asynchronously, and `update`
+  decides what an answer means in the current model. The reply is a view at `seq + 1` with that step's
+  `cmds`; an answer that does not decode is `bad-json` and changes nothing.
+* **Shell-only test command** `{"samples":true}`: the Lean CLI replies `{"seq":n,"samples":[…]}`, plausible
+  host answers in the current model, from the app's `CmdCli.Options.samples`. The lockstep driver asks
+  the Lean CLI alone and sends one answer to both CLIs; the generated Swift CLI answers `bad-json`.
+
+Line precedence: `reset`, then `samples`, then `host` (when the key is present), then a user event.
+
+The JSON format of commands and answers (both CLIs, and the generated iOS host boundary):
+
+| Lean | JSON |
+|---|---|
+| structure | object with every field; an `Option` field that is `none` is `null`, and a missing `Option` key decodes as `none` |
+| constructor with fields | `{"<ctor>":{"<field>":…}}`, exactly one key |
+| constructor without fields | `"<ctor>"` |
+| `Nat` | a number with no more fractional digits than its exponent, not negative (`5`, `1e0`, `-0`; not `1.0`) |
+| `String`, `Bool`, `List`, `Option` | string, boolean, array, `null` or the value |

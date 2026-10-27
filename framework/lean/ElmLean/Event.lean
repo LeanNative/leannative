@@ -7,6 +7,10 @@ inductive Event where
   | input (s : String)
   | submit
   | toggle (b : Bool)
+  /-- A choice by index: a tab, a picker option, a stepper value. -/
+  | select (n : Nat)
+  /-- Back from a screen, or a sheet swiped away. -/
+  | dismiss
   deriving Repr, DecidableEq
 
 end ElmLean

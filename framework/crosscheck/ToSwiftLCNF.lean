@@ -14,8 +14,15 @@ definitions, so the whitelist stays pinned to the names the source uses).
 
 The output is A-normal form and is never read by humans: its only consumer is
 `framework/scripts/gen_crosscheck.sh`, which compiles it with `framework/swift/Runtime.swift` and
-the one-line `main.swift` (`runElmCli(<App>.self)`) and runs the lockstep differential test against the Lean binary and
-against the product translator's CLI.
+the one-line `main.swift` (`runElmCli(<App>.self)`, or `runCmdElmCli(<App>.self)` for an app with
+commands) and runs the lockstep differential test against the Lean binary and against the product
+translator's CLI.
+
+Apps with commands: an app value built with `CmdApp.mk toApp cmds host` becomes `enum … : CmdElmApp`;
+`cmds` is translated like `update`, `host` (in LCNF a lambda `fun h => Msg.host h`, or a named function)
+becomes `static func host`, and the command type, the host-answer type and every user type they reach
+get an `extension T: LeanCodable` printed HERE (see `emitCodec`) from Lean's deriving handler for
+`ToJson`/`FromJson`, which is checked to be the instance actually in use.
 
 Contract: FAIL LOUD. Everything outside the whitelists below throws an error naming the
 construct; the output file is written only after the whole translation succeeded. Every
@@ -32,8 +39,8 @@ from `examples/todo`:
     lake env lean --run ../../framework/crosscheck/ToSwiftLCNF.lean \
         --app Todo.app --name TodoApp --out build/crosscheck/Generated.swift
 
-    --app <Name>     the `App Model Msg` constant to translate (default `Todo.app`)
-    --name <Ident>   the Swift name of the generated `enum … : ElmApp` (default `TodoApp`)
+    --app <Name>     the `App Model Msg` (or `CmdApp Model Msg Cmd Host`) constant to translate (default `Todo.app`)
+    --name <Ident>   the Swift name of the generated `enum … : ElmApp` / `CmdElmApp` (default `TodoApp`)
     --out <path>     where to write the Swift file (required)
     --module <Name>  module(s) to import for the app (repeatable; default: the app's root module)
 
@@ -59,7 +66,7 @@ structure VarInfo where
   deriving Inhabited
 
 inductive Role where
-  | initial | update | view | helper
+  | initial | update | view | cmds | helper
   deriving BEq, Inhabited
 
 structure St where
@@ -108,7 +115,8 @@ def swiftKeywords : List String :=
 nothing the translator emits may shadow them. -/
 def runtimeNames : List String :=
   ["Html", "TextStyle", "ButtonRole", "Event", "ElmApp", "JNum", "JSON", "JSONReader", "Request", "Parsed",
-   "Session", "q", "emit", "parseLine", "runElmCli", "Foundation", "Swift", "Int", "String", "Bool",
+   "Session", "q", "emit", "parseLine", "runElmCli", "LeanCodable", "CmdElmApp", "CmdSession", "runCmdElmCli",
+   "Foundation", "Swift", "Int", "String", "Bool",
    "Optional", "Array", "Set", "Character", "Substring", "Unicode", "UInt8", "UInt32", "FileHandle",
    "Never", "Error", "Void", "Any", "Self", "max", "min", "zip", "fatalError", "exit", "readLine"]
 
@@ -130,7 +138,36 @@ def preludeFuns : List (String × List String) :=
        "    return a.unicodeScalars.elementsEqual(b.unicodeScalars)",
        "}" ]) ]
 
-def reservedNames : List String := runtimeNames ++ preludeFuns.map (·.1)
+/-- Shims for the JSON codecs of an app with commands (emitted only for a `CmdApp`): Lean's own
+`Json.getObjValD` / `Json.getObjVal?` / `Json.getTag?` over Runtime.swift's `JSON`. Lean's parser keeps
+an object in a `TreeMap` (a repeated key: the last one wins; keys compared exactly), so these look up
+the LAST occurrence with `leanStrEq` and count distinct keys, where Runtime.swift's `subscript` takes
+the first. -/
+def codecPreludeFuns : List (String × List String) :=
+  [ ("leanObjValD",
+     [ "/// Lean `Json.getObjValD`: the value of key `k` (the last occurrence), or `null` when `j` is no object or lacks `k`.",
+       "func leanObjValD(_ j: JSON?, _ k: String) -> JSON {",
+       "    return leanObjVal(j, k) ?? JSON.null",
+       "}" ]),
+    ("leanObjVal",
+     [ "/// Lean `Json.getObjVal?`: the value of key `k` (the last occurrence); `nil` (an error) when `j` is no object or lacks `k`.",
+       "func leanObjVal(_ j: JSON?, _ k: String) -> JSON? {",
+       "    guard case .object(let kvs)? = j else { return nil }",
+       "    return kvs.last(where: { leanStrEq($0.0, k) })?.1",
+       "}" ]),
+    ("leanTag",
+     [ "/// Lean `Json.getTag?`: a string, or the only key of an object with exactly one distinct key.",
+       "func leanTag(_ j: JSON?) -> String? {",
+       "    switch j {",
+       "    case .string(let s)?: return s",
+       "    case .object(let kvs)?:",
+       "        guard let first = kvs.first else { return nil }",
+       "        return kvs.allSatisfy({ leanStrEq($0.0, first.0) }) ? first.0 : nil",
+       "    default: return nil",
+       "    }",
+       "}" ]) ]
+
+def reservedNames : List String := runtimeNames ++ preludeFuns.map (·.1) ++ codecPreludeFuns.map (·.1)
 
 def mangleStr (str : String) : String :=
   let raw := str.map fun c => if c.isAlphanum || c == '_' then c else '_'
@@ -411,6 +448,19 @@ def translateConst (fv : FVarId) (binder : Name) (n : Name) (args : Array (Arg .
         let e ← eqCode carrier impl (← valueName fvs[1]!) (← valueName fvs[2]!)
         return some (if n == ``bne then s!"!{e}" else e)
     fail s!"`{n}` with a BEq instance that is not `instBEqOfDecidableEq`"
+  -- `==` on `Option α`: core's DERIVED `BEq (Option α)` (`deriving instance BEq for Option`):
+  -- none/none → true, some x/some y → x == y (α's BEq), otherwise false
+  if n == ``Option.instBEq.beq then
+    if fvs.size == 3 then
+      if let .inst "BEq" carrier impl := (← lookup fvs[0]!).kind then
+        judge "`==` on Option α → core's derived BEq (Option α): none/none → true, some x/some y → x == y with α's instance, otherwise false (an immediately applied closure over a switch)"
+        let x ← freshName `ox
+        let y ← freshName `oy
+        let e ← eqCode carrier impl x y
+        let a ← valueName fvs[1]!
+        let b ← valueName fvs[2]!
+        return some s!"\{ () -> Bool in switch ({a}, {b}) \{ case (.none, .none): return true; case (.some(let {x}), .some(let {y})): return {e}; default: return false } }()"
+    fail s!"`{n}` with a BEq instance that is not `instBEqOfDecidableEq`"
   let a ← fvs.mapM valueName
   -- constructors
   if let some (.ctorInfo cv) := env.find? n then
@@ -630,7 +680,13 @@ end
 
 -- ---------------------------------------------------------------- declarations
 
-def translateDecl (n : Name) (role : Role) : M Unit := do
+/-- The `host` field of a `CmdApp`: a named function, or (what LCNF makes of `host := Msg.host`) a local
+lambda of the app value. -/
+inductive HostField where
+  | const (n : Name)
+  | lam (fd : FunDecl .pure)
+
+def translateDeclCore (n : Name) (role : Role) : M Unit := do
   let d ← getUserDecl n
   -- locals must not shadow translated functions, the prelude or Runtime.swift names
   modify fun s => { s with
@@ -641,6 +697,7 @@ def translateDecl (n : Name) (role : Role) : M Unit := do
     | .initial => "initial"
     | .update => "update"
     | .view => "view"
+    | .cmds => "cmds"
     | .helper => st.funNames[n]?.getD (swiftIdent n)
   let ret ← swiftType (← stripForalls d.type d.params.size)
   emitDoc 1 n
@@ -658,17 +715,66 @@ def translateDecl (n : Name) (role : Role) : M Unit := do
   emit 1 "}"
   emit 1 ""
 
-/-- Find `App.mk init update view` in the app value and return the three constant names. -/
-def findAppFields (appDecl : Name) : M (Name × Name × Name) := do
+/-- Translate one declaration; a failure names the declaration it happened in. -/
+def translateDecl (n : Name) (role : Role) : M Unit :=
+  tryCatch (translateDeclCore n role) fun e => throwError "{e.toMessageData} (in `{n}`)"
+
+/-- The `host` field of a `CmdApp` as `static func host`: a named function is called, a lambda of the app
+value (LCNF's eta-expansion of `host := Msg.host`) is translated in place. -/
+def translateHost (appDecl : Name) (h : HostField) : M Unit := do
+  modify fun s => { s with
+    used := s.funNames.fold (fun acc _ v => acc.insert v) (Std.HashSet.ofList reservedNames) }
+  match h with
+  | .const n =>
+    let (sw, arity) ← userFunction n
+    unless arity == 1 do fail s!"`host` field `{n}` of arity {arity}"
+    let d ← getUserDecl n
+    let p := d.params[0]!
+    let ret ← swiftType (← stripForalls d.type 1)
+    emit 1 s!"// the `host` field of `{appDecl}`: `{n}`"
+    emit 1 s!"static func host(_ h: {← swiftType p.type}) -> {ret} \{"
+    emit 2 s!"return Self.{sw}(h)"
+    emit 1 "}"
+  | .lam fd =>
+    unless fd.params.size == 1 do fail s!"`host` lambda with {fd.params.size} parameters"
+    let ps ← fd.params.mapM fun p => do
+      let pn ← bindVar p.fvarId p.binderName .value
+      return s!"_ {pn}: {← swiftType p.type}"
+    let ret ← swiftType (← stripForalls fd.type 1)
+    emit 1 s!"// the `host` field of `{appDecl}` (a lambda in its LCNF)"
+    emit 1 s!"static func host({", ".intercalate ps.toList}) -> {ret} \{"
+    translateCode fd.value 2
+    emit 1 "}"
+  emit 1 ""
+
+/-- The fields of the app value: `init`/`update`/`view`, and for a `CmdApp` the `cmds` constant, the
+`host` field and the `Cmd`/`Host` types (the `CmdApp` type arguments). -/
+structure AppFields where
+  initN : Name
+  updN : Name
+  viewN : Name
+  cmd? : Option (Name × HostField × Expr × Expr) := none
+
+/-- The leading `let`s and local `fun`s of an app value's LCNF (a straight-line record build). -/
+def appBindings (appDecl : Name) :
+    M (Std.HashMap FVarId (LetValue .pure) × Std.HashMap FVarId (FunDecl .pure)) := do
   unless (← getEnv).contains appDecl do fail s!"app constant `{appDecl}` (not found in the imported modules)"
   let d ← getUserDecl appDecl
   let .code body := d.value | fail "extern app value"
   let mut lets : Std.HashMap FVarId (LetValue .pure) := {}
+  let mut funs : Std.HashMap FVarId (FunDecl .pure) := {}
   let mut cur := body
   repeat
     match cur with
     | .let ld k => lets := lets.insert ld.fvarId ld.value; cur := k
+    | .fun fd k _ => funs := funs.insert fd.fvarId fd; cur := k
     | _ => break
+  return (lets, funs)
+
+/-- Find `App.mk init update view` in the app value and return the three constant names. A `toApp` that
+is itself a named `App` constant is followed. -/
+partial def findAppFields (appDecl : Name) : M (Name × Name × Name) := do
+  let (lets, _) ← appBindings appDecl
   let some (_, .const ``ElmLean.App.mk _ args _) := lets.toList.find? (fun (_, v) => match v with | .const ``ElmLean.App.mk .. => true | _ => false)
     | fail s!"app value `{appDecl}` is not a plain `App.mk` record"
   let fvs := valueArgs args
@@ -678,6 +784,36 @@ def findAppFields (appDecl : Name) : M (Name × Name × Name) := do
     | some (.const c _ #[] _) => return c
     | _ => fail "App.mk field that is not a named constant"
   return (← resolve fvs[0]!, ← resolve fvs[1]!, ← resolve fvs[2]!)
+
+/-- The app value's fields: a `CmdApp.mk toApp cmds host` record if there is one (looked for first: it
+contains an `App.mk`), else a plain `App.mk`. The names are unchecked (`ElmLean.Cmd` is not imported:
+a pure app's package need not have built it). -/
+def findApp (appDecl : Name) : M AppFields := do
+  let (lets, funs) ← appBindings appDecl
+  let cmdMk := `ElmLean.CmdApp.mk
+  match lets.toList.find? (fun (_, v) => match v with | .const c .. => c == cmdMk | _ => false) with
+  | none =>
+    let (i, u, v) ← findAppFields appDecl
+    return { initN := i, updN := u, viewN := v }
+  | some (_, v) =>
+    let .const _ _ args _ := v | fail "CmdApp.mk"
+    let fvs := valueArgs args
+    unless fvs.size == 3 do fail s!"CmdApp.mk arity ({fvs.size} value args)"
+    let (i, u, w) ← match lets[fvs[0]!]? with
+      | some (.const ``ElmLean.App.mk ..) => findAppFields appDecl
+      | some (.const c _ #[] _) => findAppFields c
+      | _ => fail "CmdApp.mk `toApp` that is neither an `App.mk` record nor a named `App`"
+    let cmdsN ← match lets[fvs[1]!]? with
+      | some (.const c _ #[] _) => pure c
+      | _ => fail "CmdApp.mk `cmds` field that is not a named constant"
+    let host ← match lets[fvs[2]!]?, funs[fvs[2]!]? with
+      | some (.const c _ #[] _), _ => pure (HostField.const c)
+      | _, some fd => pure (HostField.lam fd)
+      | _, _ => fail "CmdApp.mk `host` field that is neither a named constant nor a lambda"
+    let some ci := (← getEnv).find? appDecl | fail s!"app constant `{appDecl}`"
+    let tyArgs := ci.type.getAppArgs
+    unless ci.type.isAppOf `ElmLean.CmdApp && tyArgs.size == 4 do fail s!"type of the app value `{ci.type}`"
+    return { initN := i, updN := u, viewN := w, cmd? := some (cmdsN, host, tyArgs[2]!, tyArgs[3]!) }
 
 /-- Field (name, type) pairs of a constructor, from its type telescope. -/
 def ctorFields (cv : ConstructorVal) : M (List (Name × Expr)) := do
@@ -761,16 +897,188 @@ partial def emitTypes (i : Nat := 0) : M Unit := do
     emitType tys[i]
     emitTypes (i + 1)
 
+-- ---------------------------------------------------------------- JSON codecs (apps with commands)
+
+/-- The user types that a field type of a command / host-answer type mentions (through `List`/`Option`).
+Only `Nat`, `String`, `Bool`, `List`, `Option` and user inductives have a mirrored codec. -/
+partial def codecRefs (t : Expr) : M (List Name) := do
+  match t.getAppFn, t.getAppArgs with
+  | .const ``Nat _, #[] => return []
+  | .const ``String _, #[] => return []
+  | .const ``Bool _, #[] => return []
+  | .const ``List _, #[a] => codecRefs a
+  | .const ``Option _, #[a] => codecRefs a
+  | .const n _, #[] =>
+    if ← isUserName n then
+      if let some (.inductInfo _) := (← getEnv).find? n then return [n]
+    fail s!"type `{n}` inside a command or host-answer type (no mirrored JSON codec)"
+  | _, _ => fail s!"type `{t}` inside a command or host-answer type (no mirrored JSON codec)"
+
+/-- Field (Lean name, type) pairs of a codec type: the structure fields or one constructor's fields. -/
+def codecFields (cv : ConstructorVal) : M (List (Name × Expr)) := ctorFields cv
+
+/-- The user types reachable from `roots` through constructor fields, in first-reached order. -/
+partial def codecClosureOf (roots : List Name) : M (Array Name) := do
+  let env ← getEnv
+  let mut out : Array Name := #[]
+  let mut todo := roots
+  while !todo.isEmpty do
+    let n := todo.head!
+    todo := todo.tail!
+    if out.contains n then continue
+    out := out.push n
+    let some (.inductInfo iv) := env.find? n | fail s!"codec type `{n}` is not an inductive type"
+    for ctor in iv.ctors do
+      let some (.ctorInfo cv) := env.find? ctor | fail "ctor info"
+      for (_, t) in ← codecFields cv do
+        todo := todo ++ (← codecRefs t)
+  return out
+
+/-- Is `cls t` (`Lean.ToJson`/`Lean.FromJson`) implemented by the DERIVED instance? `false` when there is
+no instance; a hand-written one is rejected, since its JSON is not the contract mirrored here. Derived
+means the deriving handler's shape: `inst := cls.mk t inst.<fn>` (`Lean.Elab.Deriving.mkContext`). -/
+def derivedJsonInst (cls : Name) (fn : String) (t : Name) : M Bool := do
+  let goal := mkApp (mkConst cls [Level.zero]) (mkConst t)
+  let some inst ← (Meta.synthInstance? goal : MetaM _).run' | return false
+  let .const instN _ := inst | fail s!"`{cls}` instance of `{t}` that is not a named instance"
+  if let some (.defnInfo dv) := (← getEnv).find? instN then
+    if let (.const mk _, #[_, .const aux _]) := (dv.value.getAppFn, dv.value.getAppArgs) then
+      if mk == cls ++ `mk && aux == instN ++ .mkSimple fn then return true
+  fail s!"`{cls}` instance `{instN}` of `{t}` that is not the derived one"
+
+/-- Lean's JSON key for a field / tag for a constructor: the last name component, verbatim. -/
+def jsonName (n : Name) : M String := do
+  match n.eraseMacroScopes with
+  | .str _ s => return s
+  | _ => fail s!"JSON name of `{n}`"
+
+/-- `extension T: LeanCodable`, mirroring Lean's DERIVED `ToJson`/`FromJson`
+(`Lean.Elab.Deriving.FromToJson`):
+* structure: `mkObj` of every field (`toJson` of `none` is `null`; a field named `x?` would be omitted
+  when `none`, so it is rejected); decoding reads every field with `getObjValAs?` = `fromJson? (getObjValD j k)`,
+  so a missing key (or a non-object) reads as `null`, which only an `Option` accepts (as `none`);
+* constructor without fields: the string `"tag"`; decoding accepts anything whose `getTag?` is the tag
+  (the string, or a one-key object whatever its payload);
+* constructor with named fields: `{"tag":{"f":…}}`; decoding is `parseCtorFields`: `getObjVal? j tag`
+  then `getObjVal? payload f` for every field, so a missing key is an error EVEN for an `Option` field;
+* constructor with an anonymous field (positional JSON): rejected.
+`dec := false` (no Lean `FromJson`, a command-only type) prints a decoder that always fails. -/
+def emitCodec (n : Name) (dec : Bool) : M Unit := do
+  let env ← getEnv
+  let some (.inductInfo iv) := env.find? n | fail s!"codec type `{n}`"
+  let short := swiftIdent n
+  emit 0 s!"extension {short}: LeanCodable \{"
+  if isStructure env n then
+    let [ctor] := iv.ctors | fail "structure with several constructors"
+    let some (.ctorInfo cv) := env.find? ctor | fail "ctor info"
+    let fields ← codecFields cv
+    unless (getStructureFieldsFlattened env n (includeSubobjectFields := false)).toList == fields.map (·.1) do
+      fail s!"structure `{n}` with a parent structure (Lean's JSON flattens it)"
+    let mut enc : Array String := #[]
+    let mut gets : Array String := #[]
+    for (f, t) in fields, i in List.range fields.length do
+      let key ← jsonName f
+      if key.endsWith "?" then fail s!"JSON field `{key}` of `{n}` (an optional `?` field is omitted when `none`)"
+      enc := enc.push s!"q({swiftStr key}) + \":\" + self.{mangle f}.leanJSON()"
+      gets := gets.push s!"let f{i} = {← swiftType t}.fromLean(leanObjValD(j, {swiftStr key}))"
+    emit 1 "func leanJSON() -> String {"
+    emit 2 s!"return \"\{\" + [{", ".intercalate enc.toList}].joined(separator: \",\") + \"}\""
+    emit 1 "}"
+    emit 1 s!"static func fromLean(_ j: JSON?) -> {short}? \{"
+    if dec then
+      if gets.isEmpty then emit 2 s!"return {short}()"
+      else
+        emit 2 s!"guard {", ".intercalate gets.toList} else \{ return nil }"
+        let args := (fields.zip (List.range fields.length)).map fun ((f, _), i) => s!"{mangle f}: f{i}"
+        emit 2 s!"return {short}({", ".intercalate args})"
+    else emit 2 "return nil   // Lean has no FromJson instance for this type"
+    emit 1 "}"
+  else
+    let mut encCases : Array String := #[]
+    let mut decAlts : Array (List String) := #[]
+    for ctor in iv.ctors do
+      let some (.ctorInfo cv) := env.find? ctor | fail "ctor info"
+      let fields ← codecFields cv
+      let tag ← jsonName ctor
+      let sw := swiftIdent ctor
+      if fields.isEmpty then
+        encCases := encCases.push s!"case .{sw}: return q({swiftStr tag})"
+        decAlts := decAlts.push [s!"if leanStrEq(tag, {swiftStr tag}) \{ return .{sw} }"]
+      else
+        if fields.any (·.1.hasMacroScopes) then
+          fail s!"constructor `{ctor}` with an anonymous field (Lean's JSON is positional)"
+        let idx := List.range fields.length
+        let binds := idx.map (s!"let a{·}")
+        let mut parts : Array String := #[]
+        let mut gets : Array String := #[]
+        for (f, t) in fields, i in idx do
+          let key ← jsonName f
+          parts := parts.push s!"q({swiftStr key}) + \":\" + a{i}.leanJSON()"
+          gets := gets.push s!"let j{i} = leanObjVal(p, {swiftStr key}), let a{i} = {← swiftType t}.fromLean(j{i})"
+        encCases := encCases.push
+          s!"case .{sw}({", ".intercalate binds}): return \"\{\" + q({swiftStr tag}) + \":\{\" + [{", ".intercalate parts.toList}].joined(separator: \",\") + \"}}\""
+        decAlts := decAlts.push
+          [ s!"if leanStrEq(tag, {swiftStr tag}) \{",
+            s!"    guard let p = leanObjVal(j, {swiftStr tag}), {", ".intercalate gets.toList} else \{ return nil }",
+            s!"    return .{sw}({", ".intercalate (idx.map (s!"a{·}"))})",
+            "}" ]
+    emit 1 "func leanJSON() -> String {"
+    emit 2 "switch self {"
+    for c in encCases do emit 2 c
+    emit 2 "}"
+    emit 1 "}"
+    emit 1 s!"static func fromLean(_ j: JSON?) -> {short}? \{"
+    if dec then
+      emit 2 "guard let tag = leanTag(j) else { return nil }"
+      for alt in decAlts do
+        for l in alt do emit 2 l
+      emit 2 "return nil"
+    else emit 2 "return nil   // Lean has no FromJson instance for this type"
+    emit 1 "}"
+  emit 0 "}"
+  emit 0 ""
+
+/-- Codecs for the command type, the host-answer type and every user type they reach. Every type needs
+the derived `ToJson` (commands are printed; the Lean CLI prints host answers too); the host answer's
+closure needs the derived `FromJson`. -/
+def emitCodecs (cmdTy hostTy : Expr) : M Unit := do
+  let root (e : Expr) : M Name := do
+    let .const n _ := e | fail s!"command / host-answer type `{e}` (not a user type constant)"
+    unless ← isUserName n do fail s!"command / host-answer type `{n}` (not a user type)"
+    return n
+  let cmdN ← root cmdTy
+  let hostN ← root hostTy
+  let all ← codecClosureOf [cmdN, hostN]
+  let decodable ← codecClosureOf [hostN]
+  judge "Cmd / Host types (and every type they reach) → `extension T: LeanCodable` mirroring Lean's DERIVED ToJson / FromJson: structure → object of all fields (none → null; a missing key or a non-object decodes as null, so only an Option field may be absent); constructor without fields → \"tag\" (decoded from any value whose getTag? is the tag); constructor with fields → {\"tag\":{\"field\":…}} (parseCtorFields: every key must be present, Option fields included); Nat → Runtime.swift's Int.fromLean (a natural within Int range); repeated JSON keys: the last wins, keys compared exactly"
+  for n in all do
+    unless ← derivedJsonInst ``Lean.ToJson "toJson" n do fail s!"command / host-answer type `{n}` without a ToJson instance"
+    let dec ← derivedJsonInst ``Lean.FromJson "fromJson" n
+    if decodable.contains n && !dec then fail s!"host-answer type `{n}` without a FromJson instance"
+    recordUserType n
+    emitCodec n dec
+
 def generate (appDecl : Name) (appSwiftName : String) : M String := do
   modify fun s => { s with appNs := appDecl.getPrefix, appSwiftName }
-  let (initN, updN, viewN) ← findAppFields appDecl
-  for (n, sw) in [(initN, "initial"), (updN, "update"), (viewN, "view")] do
+  let fields ← findApp appDecl
+  let roles := [(fields.initN, "initial"), (fields.updN, "update"), (fields.viewN, "view")]
+    ++ (match fields.cmd? with
+        | some (c, _) => [(c, "cmds"), (`_crosscheck.«host field», "host")]   -- reserves the member name `host`
+        | none => [])
+  for (n, sw) in roles do
     modify fun s => { s with funNames := s.funNames.insert n sw, seen := s.seen.insert n }
-  translateDecl initN .initial
-  translateDecl updN .update
-  translateDecl viewN .view
+  translateDecl fields.initN .initial
+  translateDecl fields.updN .update
+  translateDecl fields.viewN .view
+  if let some (cmdsN, host, _) := fields.cmd? then
+    judge "CmdApp → `enum …: CmdElmApp`: `cmds` and `host` become static members; Runtime.swift's CmdSession computes `cmds(msg, model)` from the pre-state, as `Session.step` does"
+    translateDecl cmdsN .cmds
+    translateHost appDecl host
   drainWorklist
   let funcs := (← get).lines
+  modify fun s => { s with lines := #[] }
+  if let some (_, _, cmdTy, hostTy) := fields.cmd? then emitCodecs cmdTy hostTy
+  let codecs := (← get).lines
   modify fun s => { s with lines := #[] }
   emitTypes
   let types := (← get).lines
@@ -781,11 +1089,14 @@ def generate (appDecl : Name) (appSwiftName : String) : M String := do
       "// Pipeline: Lean.Compiler.LCNF.toDecl → Decl.simp { inlineDefs := false } → Swift (A-normal form).",
       "// This is the CROSS-CHECK translation; it is compiled only by framework/scripts/gen_crosscheck.sh.",
       "" ]
-  let prelude := preludeFuns.foldl (fun acc (_, ls) => acc ++ ls ++ [""]) []
+  let preludes := if fields.cmd?.isSome then preludeFuns ++ codecPreludeFuns else preludeFuns
+  let prelude := preludes.foldl (fun acc (_, ls) => acc ++ ls ++ [""]) []
+  let proto := if fields.cmd?.isSome then "CmdElmApp" else "ElmApp"
   let trailer :=
     [ "", "// ---- translator judgments (deduplicated; each is a semantic decision the translation relies on) ----" ]
     ++ judgments.toList.map (s!"// * {·}")
-  let body := header ++ prelude ++ types.toList ++ ["", s!"enum {appSwiftName}: ElmApp \{"] ++ funcs.toList ++ ["}"] ++ trailer
+  let body := header ++ prelude ++ types.toList ++ ["", s!"enum {appSwiftName}: {proto} \{"] ++ funcs.toList ++ ["}"]
+    ++ (if codecs.isEmpty then [] else [""] ++ codecs.toList) ++ trailer
   return "\n".intercalate body ++ "\n"
 
 /-- Translate the app named `appDecl`; returns the Swift text and the judgment log. -/

@@ -2,14 +2,14 @@
 # Relative paths only (the checkout path may contain spaces).
 #
 #   make check        the framework's checks, then every example's (see framework/Makefile, framework/app.mk)
-#   make framework    the framework alone;  make todo / make counter  one example
+#   make framework    the framework alone;  make todo / make counter / make send  one example
 #   make new-app NAME=Notes [DIR=apps/notes]   scaffold a new app from framework/template
 
-EXAMPLES := examples/todo examples/counter
+EXAMPLES := examples/todo examples/counter examples/send
 
-.PHONY: check framework todo counter new-app template-test
+.PHONY: check framework todo counter send new-app template-test
 
-check: framework todo counter template-test
+check: framework todo counter send template-test
 
 framework:
 	$(MAKE) -C framework check
@@ -19,6 +19,9 @@ todo:
 
 counter:
 	$(MAKE) -C examples/counter check
+
+send:
+	$(MAKE) -C examples/send check
 
 new-app:
 	framework/scripts/new_app.sh "$(NAME)" "$(or $(DIR),apps/$(shell echo '$(NAME)' | tr '[:upper:]' '[:lower:]'))"

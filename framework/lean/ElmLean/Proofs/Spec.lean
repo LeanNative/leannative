@@ -24,6 +24,25 @@ theorem Html.Sat.of_forall {P : Msg → Prop} (hP : ∀ m, P m) : ∀ h : Html M
   | .button l r c => .button l r c fun m _ => hP m
   | .field pl v f s => .field pl v f s (fun _ => hP _) (fun m _ => hP m)
   | .toggle l on f => .toggle l on f fun _ => hP _
+  | .input k l pl v f s => .input k l pl v f s (fun _ => hP _) (fun m _ => hP m)
+  | .list cs => .list cs fun c _ => Html.Sat.of_forall hP c
+  | .section h f cs => .section h f cs fun c _ => Html.Sat.of_forall hP c
+  | .labeled l v => .labeled l v
+  | .screen t b cs r => .screen t b cs r (fun m _ => hP m) (fun m _ => hP m) fun c _ => Html.Sat.of_forall hP c
+  | .toolbar cs => .toolbar cs fun c _ => Html.Sat.of_forall hP c
+  | .tabs ls is sel f cs => .tabs ls is sel f cs (fun _ => hP _) fun c _ => Html.Sat.of_forall hP c
+  | .sheet t d cs => .sheet t d cs (fun m _ => hP m) fun c _ => Html.Sat.of_forall hP c
+  | .alert t m cs => .alert t m cs fun c _ => Html.Sat.of_forall hP c
+  | .picker l os sel f => .picker l os sel f fun _ => hP _
+  | .progress l => .progress l
+  | .icon n => .icon n
+  | .qr t => .qr t
+  | .share l t f => .share l t f
+  | .link l u => .link l u
+  | .page p => .page p
+  | .empty t i m cs => .empty t i m cs fun c _ => Html.Sat.of_forall hP c
+  | .disclosure t e f cs => .disclosure t e f cs (fun _ => hP _) fun c _ => Html.Sat.of_forall hP c
+  | .stepper l v lo hi f d => .stepper l v lo hi f d fun _ => hP _
 
 /-- Every reachable session shows the view of its model. -/
 theorem Session.reach_coherent (app : App Model Msg) (rs : List Request) :

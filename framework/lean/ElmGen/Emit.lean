@@ -47,6 +47,68 @@ def judgmentTrailer (title : String) (js : Array String) : List String :=
   [s!"// ---- elmgen judgment log: {title} (also printed to stderr at generation time) ----"] ++
   (js.toList.zipIdx.map fun (j, i) => s!"// {i + 1}. {j}")
 
+/-- The Swift type of a codec (for `T.fromLean`). -/
+def Codec.swift : Codec → String
+  | .nat => "Int"
+  | .str => "String"
+  | .bool => "Bool"
+  | .list c => s!"[{c.swift}]"
+  | .opt c => s!"Optional<{c.swift}>"
+  | .named n => n
+
+def jsonKey (k : String) : String := "\\\"" ++ k ++ "\\\""
+
+/-- `extension T: LeanCodable` printing and reading the JSON of Lean's derived `ToJson`/`FromJson`. -/
+def printCodec (c : CodecIR) : List String :=
+  match c.body with
+  | .struct fields =>
+    let enc := fields.map fun (k, f, _) => s!"\"{jsonKey k}:\" + {f}.leanJSON()"
+    let dec := fields.map fun (k, f, cd) => s!"let {f} = {cd.swift}.fromLean(j[\"{k}\"])"
+    [s!"extension {c.swiftName}: LeanCodable \{",
+     "    func leanJSON() -> String {",
+     s!"        return \"\{\" + [{", ".intercalate enc}].joined(separator: \",\") + \"}\"",
+     "    }",
+     s!"    static func fromLean(_ j: JSON?) -> {c.swiftName}? \{",
+     "        guard let j, j.isObject else { return nil }"] ++
+    (if fields.isEmpty then [] else
+      [s!"        guard {", ".intercalate dec} else \{ return nil }"]) ++
+    [s!"        return {c.swiftName}({", ".intercalate (fields.map fun (_, f, _) => s!"{f}: {f}")})",
+     "    }", "}"]
+  | .enum cases =>
+    let encCase := fun ((tag, sw, ps) : String × String × List (String × Codec)) =>
+      if ps.isEmpty then s!"        case .{sw}: return \"{jsonKey tag}\""
+      else
+        let binds := ", ".intercalate ((List.range ps.length).map fun i => s!"let a{i}")
+        let fields := ps.zipIdx.map fun ((k, _), i) => s!"\"{jsonKey k}:\" + a{i}.leanJSON()"
+        s!"        case .{sw}({binds}): return \"\{{jsonKey tag}:\{\" + [{", ".intercalate fields}].joined(separator: \",\") + \"}}\""
+    let nullary := cases.filter fun (_, _, ps) => ps.isEmpty
+    let decCase := fun ((tag, sw, ps) : String × String × List (String × Codec)) =>
+      if ps.isEmpty then [s!"        case \"{tag}\": return .{sw}"]
+      else
+        -- Lean's derived decoder needs every key of a constructor payload, an `Option` one included
+        let gets := ps.zipIdx.map fun ((k, cd), i) =>
+          let has := match cd with
+            | .opt _ => s!"v.hasKey(\"{k}\"), "
+            | _ => ""
+          s!"{has}let a{i} = {cd.swift}.fromLean(v[\"{k}\"])"
+        [s!"        case \"{tag}\":",
+         s!"            guard v.isObject, {", ".intercalate gets} else \{ return nil }",
+         s!"            return .{sw}({", ".intercalate ((List.range ps.length).map fun i => s!"a{i}")})"]
+    [s!"extension {c.swiftName}: LeanCodable \{",
+     "    func leanJSON() -> String {",
+     "        switch self {"] ++ cases.map encCase ++
+    ["        }", "    }",
+     s!"    static func fromLean(_ j: JSON?) -> {c.swiftName}? \{",
+     "        guard let j else { return nil }"] ++
+    (if nullary.isEmpty then [] else
+      ["        if case .string(let s) = j {", "            switch s {"] ++
+      nullary.map (fun (tag, sw, _) => s!"            case \"{tag}\": return .{sw}") ++
+      ["            default: return nil", "            }", "        }"]) ++
+    ["        guard let entry = j.onlyEntry else { return nil }"] ++
+    (if cases.any (fun (_, _, ps) => !ps.isEmpty) then ["        let v = entry.value"] else []) ++
+    ["        switch entry.key {"] ++ (cases.flatMap decCase) ++
+    ["        default: return nil", "        }", "    }", "}"]
+
 /-- The whole `Generated.swift`. -/
 def renderGenerated (r : GenResult) : String :=
   let shims := r.shims.toList.map fun sh => (shimText sh).trimAsciiEnd.copy
@@ -54,7 +116,10 @@ def renderGenerated (r : GenResult) : String :=
   let members := (r.members.toList ++ r.defs.toList).map fun d => "\n".intercalate (printDef d)
   let parts :=
     ["\n".intercalate (genHeader r)] ++ shims ++ types ++
-    [s!"enum {r.appName}: ElmApp \{\n" ++ "\n\n".intercalate members ++ "\n}"] ++
+    [s!"enum {r.appName}: {if r.cmd.isSome then "CmdElmApp" else "ElmApp"} \{\n" ++ "\n\n".intercalate members ++ "\n}"] ++
+    (match r.cmd with
+     | some c => c.codecs.toList.map fun cd => "\n".intercalate (printCodec cd)
+     | none => []) ++
     ["\n".intercalate (judgmentTrailer "semantic decisions behind this translation" r.judgments)]
   "\n\n".intercalate parts ++ "\n"
 

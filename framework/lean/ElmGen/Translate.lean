@@ -45,6 +45,34 @@ structure TypeIR where
   equatable : Bool
   body : TypeBody
 
+/-- How one value crosses the JSON boundary between the app and its host (commands out, host answers
+in), in the format of Lean's derived `ToJson` / `FromJson`. -/
+inductive Codec where
+  | nat
+  | str
+  | bool
+  | list (c : Codec)
+  | opt (c : Codec)
+  /-- an app type with its own codec (its Swift name) -/
+  | named (swift : String)
+  deriving Inhabited
+
+inductive CodecBody where
+  /-- fields: (JSON key, Swift field name, codec) -/
+  | struct (fields : List (String × String × Codec))
+  /-- cases: (JSON tag, Swift case name, [(JSON key, codec)] for the payload, in order) -/
+  | enum (cases : List (String × String × List (String × Codec)))
+
+structure CodecIR where
+  swiftName : String
+  body : CodecBody
+
+/-- The extra members and codecs of an app with commands (`CmdApp`). -/
+structure CmdGen where
+  cmdType : String
+  hostType : String
+  codecs : Array CodecIR
+
 structure GenResult where
   appConst : Name
   appName : String
@@ -56,6 +84,8 @@ structure GenResult where
   members : Array DefIR
   shims : Array String
   judgments : Array String
+  /-- present for an app with commands -/
+  cmd : Option CmdGen := none
 
 /-! ## Translation monad -/
 
@@ -187,6 +217,8 @@ def jBoolOps := "Bool not / and / or → ! && || (both operands are already eval
 def jNatCmp := "< ≤ > ≥ on Nat → the Swift comparison on Int"
 def jHtml := "Html constructors → Html<Msg>.ctor(…) of Runtime.swift (labels for button / field / toggle are the Lean binder names)"
 def jRole := "ButtonRole / TextStyle → the Runtime.swift enums of the same name"
+def jCmdApp := "CmdApp → CmdElmApp: `cmds` and `host` become static members; the runtime computes `cmds(msg, model)` from the pre-state, before `update`, exactly as `Session.step` does"
+def jCodec := "Cmd / Host types (and every type they contain) → LeanCodable: the JSON of Lean's derived ToJson / FromJson (structure → object of all fields, Option none → null and a missing Option key → none, constructor with fields → {\"tag\":{fields}}, nullary constructor → \"tag\", Nat → a number whose value is a natural with no fractional digits beyond the exponent)"
 
 /-! ## Types -/
 
@@ -835,12 +867,72 @@ def emitProtocolMember (member : String) (field : Expr) (arity : Nat) (paramTys 
     for x in xs do ps := ps ++ [(← nameOf x, ← swiftType (← inferType x))]
     pure (some { leanName := pseudo, swiftName := member, params := ps, ret := ← swiftType retTy, retHtml, body := ss })
 
+partial def codecOf (t : Expr) (acc : Array Name) : TransM (Codec × Array Name) := do
+  match t.consumeMData with
+  | .const `Nat _ => pure (.nat, acc)
+  | .const `String _ => pure (.str, acc)
+  | .const `Bool _ => pure (.bool, acc)
+  | .app (.const `List _) a => let (c, acc) ← codecOf a acc; pure (.list c, acc)
+  | .app (.const `Option _) a => let (c, acc) ← codecOf a acc; pure (.opt c, acc)
+  | .const n _ =>
+    unless ← inAppNs n do unsupported "type in a command or host answer (not an app type)" t
+    let some (.inductInfo _) := (← getEnv).find? n | unsupported "type in a command or host answer" t
+    pure (.named (← shortName n), if acc.contains n then acc else acc.push n)
+  | _ => unsupported "type in a command or host answer" t
+
+/-- Codecs for `roots` and every app type their fields reach. -/
+partial def codecClosure (roots : Array Name) : TransM (Array CodecIR) := do
+  let mut todo := roots
+  let mut done : Array Name := #[]
+  let mut out : Array CodecIR := #[]
+  while h : 0 < todo.size do
+    let n := todo[0]
+    todo := todo.eraseIdx 0
+    if done.contains n then continue
+    done := done.push n
+    let env ← getEnv
+    let some (.inductInfo ind) := env.find? n | unsupported "non-inductive type" (mkConst n)
+    let mut found : Array Name := #[]
+    if isStructure env n then
+      let ctor ← getConstInfoCtor ind.ctors.head!
+      let fields := getStructureFields env n
+      let tys ← forallTelescope ctor.type fun xs _ => xs.mapM fun x => inferType x
+      let mut fs := []
+      for i in [0:fields.size] do
+        let (c, f') ← codecOf tys[i]! found
+        found := f'
+        fs := fs ++ [(fields[i]!.toString, sanitize fields[i]!, c)]
+      out := out.push { swiftName := ← shortName n, body := .struct fs }
+    else
+      let mut cases := []
+      for c in ind.ctors do
+        let ci ← getConstInfoCtor c
+        let tag := (c.replacePrefix n .anonymous).toString
+        let fieldNames ← forallTelescope ci.type fun xs _ =>
+          (xs.extract ci.numParams xs.size).mapM fun x => do pure ((← x.fvarId!.getDecl).userName.toString, ← inferType x)
+        let mut ps := []
+        for (k, ty) in fieldNames do
+          let (cd, f') ← codecOf ty found
+          found := f'
+          ps := ps ++ [(k, cd)]
+        cases := cases ++ [(tag, sanitize (c.replacePrefix n .anonymous), ps)]
+      out := out.push { swiftName := ← shortName n, body := .enum cases }
+    for f in found do
+      unless done.contains f do todo := todo.push f
+  pure out
+
 /-- Translate everything reachable from the `App Model Msg` constant `appConst`. -/
 def translateApp (appConst : Name) (appName screenName : String) : MetaM GenResult := do
   let ci ← getConstInfoDefn appConst
-  let v := ci.value.consumeMData
+  let v0 := ci.value.consumeMData
+  -- an app with commands is `CmdApp.mk Model Msg Cmd Host (App.mk …) cmds host`
+  let (v, cmdArgs) :=
+    if v0.isAppOfArity `ElmLean.CmdApp.mk 7 then
+      let a := v0.getAppArgs
+      (a[4]!.consumeMData, some (a[2]!, a[3]!, a[5]!, a[6]!))
+    else (v0, none)
   unless v.isAppOfArity `ElmLean.App.mk 5 do
-    throwError "elmgen: {appConst} is not literally an `App.mk` application: {← showExpr v}"
+    throwError "elmgen: {appConst} is not literally an `App.mk` (or `CmdApp.mk`) application: {← showExpr v0}"
   let args := v.getAppArgs
   let modelTy := args[0]!
   let msgTy := args[1]!
@@ -856,13 +948,27 @@ def translateApp (appConst : Name) (appName screenName : String) : MetaM GenResu
     if let some d ← emitProtocolMember "initial" args[2]! 0 #[] modelTy then members := members.push d
     if let some d ← emitProtocolMember "update" args[3]! 2 #[msgTy, modelTy] modelTy then members := members.push d
     if let some d ← emitProtocolMember "view" args[4]! 1 #[modelTy] (mkApp (mkConst `ElmLean.Html) msgTy) then members := members.push d
+    let mut cmd : Option CmdGen := none
+    if let some (cmdTy, hostTy, cmdsF, hostF) := cmdArgs then
+      judge jCmdApp
+      if let some d ← emitProtocolMember "cmds" cmdsF 2 #[msgTy, modelTy] (mkApp (mkConst `List [.zero]) cmdTy) then
+        members := members.push d
+      if let some d ← emitProtocolMember "host" hostF 1 #[hostTy] msgTy then members := members.push d
+      let cmdSwift ← swiftType cmdTy
+      let hostSwift ← swiftType hostTy
+      let roots ← [cmdTy, hostTy].toArray.mapM fun t => do
+        match t.consumeMData with
+        | .const n _ => pure n
+        | _ => unsupported "command or host type (must be an app inductive)" t
+      judge jCodec
+      cmd := some { cmdType := cmdSwift, hostType := hostSwift, codecs := ← codecClosure roots }
     -- make sure the two app types exist even if nothing referenced them
     let _ ← swiftType modelTy
     let _ ← swiftType msgTy
     drain
     let st ← get
     pure { appConst, appName, screenName, types := st.types, defs := st.defs, members,
-           shims := st.shims, judgments := st.judgments }
+           shims := st.shims, judgments := st.judgments, cmd }
   (act.run ctx).run' {}
 
 end ElmGen

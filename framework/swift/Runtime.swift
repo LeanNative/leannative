@@ -150,8 +150,10 @@ indirect enum JSON {
     case bool(Bool)
     case null
 
+    /// The value of `key`, as Lean's `Json.getObjVal?` sees it: keys compare exactly (code point by code
+    /// point, not by Swift's canonical equivalence) and a repeated key keeps its last value.
     subscript(key: String) -> JSON? {
-        if case .object(let kvs) = self { return kvs.first(where: { $0.0 == key })?.1 }
+        if case .object(let kvs) = self { return kvs.last(where: { $0.0.unicodeScalars.elementsEqual(key.unicodeScalars) })?.1 }
         return nil
     }
 }
@@ -419,6 +421,176 @@ func emit(_ line: String) {
 func runElmCli<App: ElmApp>(_ app: App.Type) -> Never {
     let session = Session<App>()
     emit(session.viewReply())
+    while let line = readLine(strippingNewline: true) {
+        emit(session.handle(line))
+    }
+    exit(0)
+}
+
+// MARK: - Apps with commands (mirror of ElmLean.CmdApp and Session.step)
+
+extension JSON {
+    /// Generated codecs ask through these two instead of matching `.object(let kvs)` themselves: binding that
+    /// payload from another file trips a "circular reference" in the Swift 6 type checker (Xcode 27.1).
+    var isObject: Bool {
+        if case .object = self { return true }
+        return false
+    }
+    /// The one key and value of an object with one distinct key (a repeated key keeps its last value, as in
+    /// Lean's parser): how Lean encodes a constructor with fields.
+    var onlyEntry: (key: String, value: JSON)? {
+        guard case .object(let kvs) = self, let last = kvs.last,
+              kvs.allSatisfy({ $0.0.unicodeScalars.elementsEqual(last.0.unicodeScalars) }) else { return nil }
+        return (last.0, last.1)
+    }
+    /// Whether the object has `key` at all (a constructor payload must have every field, `Option` ones included).
+    func hasKey(_ key: String) -> Bool { self[key] != nil }
+}
+
+/// A value that crosses the JSON boundary between an app and its host in the format of Lean's derived
+/// `ToJson` / `FromJson`. elmgen prints the conformance of every command and host-answer type.
+protocol LeanCodable {
+    func leanJSON() -> String
+    /// `nil` input is a missing key (only an `Optional` accepts it, as `none`, like Lean's decoder).
+    static func fromLean(_ j: JSON?) -> Self?
+}
+
+extension JNum {
+    /// Lean's `FromJson Nat`: the parser keeps a number as `mantissa / 10^exponent` and normalises only a
+    /// positive exponent into the mantissa, so a value is a `Nat` iff it has no more fractional digits than
+    /// its exponent (`1e0`, `5`, `-0` yes; `1.0`, `10e-1` no) and is not negative.
+    var leanNatValue: Int? {
+        let zero = UInt8(ascii: "0")
+        if mantissa.allSatisfy({ $0 == zero }) { return exp >= 0 && expHuge <= 0 ? 0 : nil }
+        if negative || expHuge != 0 || exp < 0 { return nil }
+        var lo = 0
+        while lo < mantissa.count, mantissa[lo] == zero { lo += 1 }
+        if (mantissa.count - lo) + exp > 18 { return nil }
+        var v = 0
+        for k in lo..<mantissa.count { v = v * 10 + Int(mantissa[k] - zero) }
+        for _ in 0..<exp { v *= 10 }
+        return v
+    }
+}
+
+extension Int: LeanCodable {
+    func leanJSON() -> String { String(self) }
+    static func fromLean(_ j: JSON?) -> Int? {
+        guard case .number(let n)? = j else { return nil }
+        return n.leanNatValue
+    }
+}
+
+extension String: LeanCodable {
+    func leanJSON() -> String { q(self) }
+    static func fromLean(_ j: JSON?) -> String? {
+        guard case .string(let s)? = j else { return nil }
+        return s
+    }
+}
+
+extension Bool: LeanCodable {
+    func leanJSON() -> String { self ? "true" : "false" }
+    static func fromLean(_ j: JSON?) -> Bool? {
+        guard case .bool(let b)? = j else { return nil }
+        return b
+    }
+}
+
+extension Array: LeanCodable where Element: LeanCodable {
+    func leanJSON() -> String { "[" + map { $0.leanJSON() }.joined(separator: ",") + "]" }
+    static func fromLean(_ j: JSON?) -> [Element]? {
+        guard case .array(let items)? = j else { return nil }
+        var out: [Element] = []
+        for it in items {
+            guard let v = Element.fromLean(it) else { return nil }
+            out.append(v)
+        }
+        return out
+    }
+}
+
+extension Optional: LeanCodable where Wrapped: LeanCodable {
+    func leanJSON() -> String {
+        switch self {
+        case .none: return "null"
+        case .some(let v): return v.leanJSON()
+        }
+    }
+    static func fromLean(_ j: JSON?) -> Wrapped??  {
+        switch j {
+        case .none, .some(.null): return .some(.none)
+        case .some(let v):
+            guard let w = Wrapped.fromLean(v) else { return nil }
+            return .some(.some(w))
+        }
+    }
+}
+
+/// What the generated code of an app with commands fulfils: `cmds` (from the pre-state) and `host`.
+protocol CmdElmApp: ElmApp {
+    associatedtype Cmd: LeanCodable
+    associatedtype Host: LeanCodable
+    static func cmds(_ msg: Msg, _ m: Model) -> [Cmd]
+    static func host(_ h: Host) -> Msg
+}
+
+/// `Session.step` for an app with commands: user events as in `Session`, `{"host":…}` lines with no `seq`
+/// check, and `"cmds"` on every view reply. `{"samples":true}` is answered only by the Lean CLI (the
+/// lockstep driver asks it alone); here it is `bad-json`.
+final class CmdSession<App: CmdElmApp> {
+    let ui = Session<App>()
+
+    func viewReply(_ cs: [App.Cmd]) -> String {
+        "{\"cmds\":[\(cs.map { $0.leanJSON() }.joined(separator: ","))],\"seq\":\(ui.seq),\"view\":\(ui.lastView.wireJSON())}"
+    }
+
+    func apply(_ msg: App.Msg) -> String {
+        let cs = App.cmds(msg, ui.model)          // the pre-state, as in Lean
+        ui.model = App.update(msg, ui.model)
+        ui.lastView = App.view(ui.model)
+        ui.seq += 1
+        return viewReply(cs)
+    }
+
+    func handle(_ line: String) -> String {
+        var r = JSONReader(line)
+        if let j = try? r.parseDocument(), case .object = j {
+            if case .bool(true)? = j["reset"] {
+                ui.model = App.initial
+                ui.lastView = App.view(ui.model)
+                ui.seq += 1
+                return viewReply([])
+            }
+            if case .bool(true)? = j["samples"] { return ui.errorReply("bad-json", detail: "samples: Lean CLI only") }
+            if let hj = j["host"] {
+                guard let h = App.Host.fromLean(hj) else { return ui.errorReply("bad-json", detail: "host: not a host answer") }
+                return apply(App.host(h))
+            }
+        }
+        switch parseLine(line) {
+        case .bad(let why):
+            return ui.errorReply("bad-json", detail: why)
+        case .reset:
+            return viewReply([])   // unreachable: handled above
+        case .request(let req):
+            guard case .small(let s) = req.seq, s == ui.seq else { return ui.errorReply("stale", withView: true) }
+            var ints: [Int] = []
+            for p in req.path {
+                guard case .small(let i) = p else { return ui.errorReply("bad-path") }
+                ints.append(i)
+            }
+            guard let node = ui.lastView.at(ints) else { return ui.errorReply("bad-path") }
+            guard let msg = node.handle(req.event) else { return ui.errorReply("no-handler") }
+            return apply(msg)
+        }
+    }
+}
+
+/// The CLI of an app with commands: initial view with no commands, then one reply per line until EOF.
+func runCmdElmCli<App: CmdElmApp>(_ app: App.Type) -> Never {
+    let session = CmdSession<App>()
+    emit(session.viewReply([]))
     while let line = readLine(strippingNewline: true) {
         emit(session.handle(line))
     }

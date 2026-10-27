@@ -17,6 +17,15 @@ def ButtonRole.str : ButtonRole → String
   | .primary => "primary"
   | .destructive => "destructive"
 
+def InputKind.str : InputKind → String
+  | .plain => "plain"
+  | .secure => "secure"
+  | .multiline => "multiline"
+  | .number => "number"
+  | .decimal => "decimal"
+
+def strs (xs : List String) : Json := Json.arr (xs.map Json.str).toArray
+
 def Wire.toJson : Wire → Json
   | .text s st => Json.mkObj [("t", Json.str "text"), ("s", Json.str s), ("style", Json.str st.str)]
   | .col cs => Json.mkObj [("t", Json.str "col"), ("c", Json.arr (cs.map Wire.toJson).toArray)]
@@ -28,6 +37,39 @@ def Wire.toJson : Wire → Json
   | .toggle l on => Json.mkObj [("t", Json.str "toggle"), ("label", Json.str l), ("on", Json.bool on)]
   | .divider => Json.mkObj [("t", Json.str "divider")]
   | .spacer => Json.mkObj [("t", Json.str "spacer")]
+  | .input k l p v s =>
+    Json.mkObj [("t", Json.str "input"), ("kind", Json.str k.str), ("label", Json.str l), ("placeholder", Json.str p),
+                ("value", Json.str v), ("submits", Json.bool s)]
+  | .list cs => Json.mkObj [("t", Json.str "list"), ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .section h f cs =>
+    Json.mkObj [("t", Json.str "section"), ("header", Json.str h), ("footer", Json.str f), ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .labeled l v => Json.mkObj [("t", Json.str "labeled"), ("label", Json.str l), ("value", Json.str v)]
+  | .screen t b cs r =>
+    Json.mkObj [("t", Json.str "screen"), ("title", Json.str t), ("back", Json.bool b), ("refreshable", Json.bool r),
+                ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .toolbar cs => Json.mkObj [("t", Json.str "toolbar"), ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .tabs ls is sel cs =>
+    Json.mkObj [("t", Json.str "tabs"), ("labels", strs ls), ("icons", strs is), ("selected", Lean.toJson sel),
+                ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .sheet t d cs =>
+    Json.mkObj [("t", Json.str "sheet"), ("title", Json.str t), ("dismissable", Json.bool d), ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .alert t m cs =>
+    Json.mkObj [("t", Json.str "alert"), ("title", Json.str t), ("message", Json.str m), ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .picker l os sel => Json.mkObj [("t", Json.str "picker"), ("label", Json.str l), ("options", strs os), ("selected", Lean.toJson sel)]
+  | .progress l => Json.mkObj [("t", Json.str "progress"), ("label", Json.str l)]
+  | .icon n => Json.mkObj [("t", Json.str "icon"), ("name", Json.str n)]
+  | .qr t => Json.mkObj [("t", Json.str "qr"), ("text", Json.str t)]
+  | .share l t f => Json.mkObj [("t", Json.str "share"), ("label", Json.str l), ("text", Json.str t), ("file", Json.bool f)]
+  | .link l u => Json.mkObj [("t", Json.str "link"), ("label", Json.str l), ("url", Json.str u)]
+  | .page p => Json.mkObj [("t", Json.str "page"), ("path", Json.str p)]
+  | .empty t i m cs =>
+    Json.mkObj [("t", Json.str "empty"), ("title", Json.str t), ("icon", Json.str i), ("message", Json.str m),
+                ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .disclosure t e cs =>
+    Json.mkObj [("t", Json.str "disclosure"), ("title", Json.str t), ("expanded", Json.bool e), ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .stepper l v lo hi d =>
+    Json.mkObj [("t", Json.str "stepper"), ("label", Json.str l), ("value", Lean.toJson v), ("lo", Lean.toJson lo), ("hi", Lean.toJson hi),
+                ("detail", Json.str d)]
 
 instance : ToJson Wire := ⟨Wire.toJson⟩
 
@@ -38,6 +80,8 @@ def Event.fromJson? (j : Json) : Except String Event := do
   | "submit" => pure .submit
   | "input" => return .input (← j.getObjVal? "value" >>= Json.getStr?)
   | "toggle" => return .toggle (← j.getObjVal? "value" >>= Json.getBool?)
+  | "select" => return .select (← j.getObjValAs? Nat "value")
+  | "dismiss" => pure .dismiss
   | other => throw s!"unknown event kind '{other}'"
 
 /-- PROTOCOL.md: `seq` and every path element must be a JSON number whose VALUE is a

@@ -17,8 +17,9 @@ Lean definitions. If both translations agree with each other *and* with the Lean
 long random walk, a bug would have to be present in two unrelated pipelines in the same way.
 
 The two translators share nothing but the Swift side they target: `framework/swift/Runtime.swift`
-(the `Html` mirror, the JSON reader, the `Session` loop) and the one-line `main.swift`
-(`runElmCli(<App>.self)`). The runtime is therefore *not* covered by the cross-check; it is
+(the `Html` mirror, the JSON reader, the `Session` / `CmdSession` loops, the `LeanCodable`
+conformances of `Int`/`String`/`Bool`/`Array`/`Optional`) and the one-line `main.swift`
+(`runElmCli(<App>.self)`, or `runCmdElmCli(<App>.self)` for an app with commands). The runtime is therefore *not* covered by the cross-check; it is
 covered by `framework/scripts/protocol_test.py` and by the lockstep run against the Lean binary.
 
 ## Files
@@ -26,7 +27,7 @@ covered by `framework/scripts/protocol_test.py` and by the lockstep run against 
 | file | role |
 | --- | --- |
 | `ToSwiftLCNF.lean` | the translator, a `lake env lean --run` script (`main (args)`); no lakefile entry, no Lake library |
-| `../scripts/gen_crosscheck.sh` | the driver: generate, build, protocol test, lockstep ×4 |
+| `../scripts/gen_crosscheck.sh` | the driver: generate, pick `main.swift` (`runCmdElmCli` iff the output declares `enum <App>: CmdElmApp`), build, protocol test, lockstep ×4 |
 | `<app>/build/crosscheck/Generated.swift` | output (ignored by git) |
 | `<app>/build/crosscheck/lcnf-cli` | the cross-check CLI, speaking the ndjson protocol of `PROTOCOL.md` |
 
@@ -44,14 +45,62 @@ Steps and gates:
    after the whole translation succeeded)
 2. `swiftc -O` with `framework/swift/Runtime.swift` and a one-line `main.swift`
 3. `protocol_test.py` against the lcnf CLI → `protocol OK`
-4. `lockstep.py <Lean binary> <lcnf CLI> 400 {1,2}` → `lockstep OK`
-5. `lockstep.py <product CLI> <lcnf CLI> 400 {1,2}` → `lockstep OK`
+4. `lockstep.py <Lean binary> <lcnf CLI> $LOCKSTEP_STEPS {1,2}` → `lockstep OK`
+5. `lockstep.py <product CLI> <lcnf CLI> $LOCKSTEP_STEPS {1,2}` → `lockstep OK`
+
+`LOCKSTEP_STEPS` (default 400) is the step count of each lockstep run; `framework/app.mk` passes it
+through (the Send example sets 3000).
 
 Translator flags: `--app <Name>` (default `Todo.app`), `--name <Ident>` (the Swift
-`enum … : ElmApp`), `--out <path>` (required), `--module <Name>` (modules to import at run time,
+`enum … : ElmApp`, or `: CmdElmApp`), `--out <path>` (required), `--module <Name>` (modules to import at run time,
 repeatable; default: the app constant's root module). The script itself only imports
 `ElmLean.Html` and `ElmLean.Program` (framework names); the app comes from the modules imported
 at run time.
+
+## Apps with commands (`CmdApp`)
+
+The app value is searched for `CmdApp.mk toApp cmds host` first (it contains an `App.mk`), else for a
+plain `App.mk`. `toApp` may be the inline `App.mk` record or a named `App` constant; `cmds` must be a
+named constant and is translated like `update` (`static func cmds(_:_:) -> [Cmd]`); `host` is what LCNF
+makes of `host := Msg.host` (a local lambda `fun h => Msg.host h`, translated in place) or a named
+function (called). The enum is `enum <Name>: CmdElmApp`; `cmds` and `host` are reserved member names.
+The names `ElmLean.CmdApp`/`.mk` are compared unchecked, so a pure app's package need not have built
+`ElmLean.Cmd`. A pure app gets no codec prelude, no `cmds`/`host` and `: ElmApp`, so its output is
+unaffected by command support.
+
+**The JSON codec judgment.** `Cmd`, `Host` and every user type reachable from their constructor fields
+(`Nat`, `String`, `Bool`, `List`, `Option` and user inductives only; anything else is rejected) get an
+`extension T: LeanCodable` printed by this translator, transcribed from Lean's deriving handler
+(`Lean.Elab.Deriving.FromToJson`) and `Lean.Json`'s getters, not from the product's output:
+
+* structure → object of all fields, `none` → `null`; decoded with `getObjValAs?` =
+  `fromJson? (getObjValD j k)`: a missing key or a non-object reads as `null`, which only an `Option`
+  accepts (`none`); extra keys are ignored. A `?`-suffixed field (Lean omits it when `none`) and a
+  structure with a parent (Lean flattens it) are rejected.
+* constructor without fields → `"tag"`; decoded from anything whose `getTag?` is the tag (the string,
+  or a one-key object whatever its payload).
+* constructor with named fields → `{"tag":{"field":…}}`; decoded with `parseCtorFields`, i.e.
+  `getObjVal?` for the tag and for every field: a missing key is an error **even for an `Option`
+  field** (unlike a structure). A constructor with an anonymous field (positional JSON) is rejected.
+* `Nat` → Runtime.swift's `Int.fromLean` (a natural within `Int` range).
+* Lean's parser keeps the **last** of repeated keys and compares keys exactly, so the codec shims
+  (`leanObjVal`, `leanObjValD`, `leanTag`, emitted only for command apps) look up the last occurrence
+  with `leanStrEq` and count distinct keys; tags are compared with `leanStrEq`, not Swift `switch`.
+* The instances must be the derived ones: `ToJson T` for every type, `FromJson T` for everything the
+  host answer reaches, each resolved by instance synthesis and checked to have the deriving handler's
+  shape `inst := ToJson.mk T inst.toJson`; a hand-written instance is rejected. A command-only type
+  without `FromJson` gets a decoder that always fails (`LeanCodable` requires one; it is never called).
+
+Checked by hand against the Lean CLI (`send-cli`) beyond what lockstep sends: extra keys, missing
+`Option` keys in structures, `{"low":5}` for a nullary constructor, a non-natural `1.0` and repeated
+keys all give the Lean answer. The product codec (`elmgen`) differs on inputs lockstep never
+produces: repeated keys (observed: it takes the first, and `{"a":…,"a":…}` fails its one-key test) and,
+by its code (Send has no such field), a missing `Option` key inside a constructor payload, which it
+would accept as `none` where Lean rejects it.
+
+Coverage note: `lockstep.py` injects host answers only when CLI A answers `{"samples":true}`, which
+only the Lean CLI does; so step 4 (Lean vs lcnf) exercises host answers and compares `cmds`, while step
+5 (product vs lcnf) compares `cmds` on user events only.
 
 ## What the translation commits to
 
@@ -71,9 +120,13 @@ comment at the end of the generated file; only the judgments the app actually ex
 * **`DecidableEq` on a user type is translated as a function**: the Lean instance (derived or
   hand-written) is itself translated, so exactly Lean's decision procedure runs. No Swift
   `Equatable` is emitted for any user type.
+* `==` on `Option α` (core's derived `BEq (Option α)` over α's `instBEqOfDecidableEq`) → a switch:
+  none/none true, some/some by α's equality, otherwise false (`DecidableEq` on `Option` is still rejected)
 * `match` on `Option` → `switch` with `.none`/`.some(let x)`; `match` on `List` →
   `isEmpty` / `[0]` / `Array(dropFirst())` (the tail is copied)
 * recursive inductive types → `indirect enum`; a recursive structure is rejected
+* `CmdApp` → `enum … : CmdElmApp` (`cmds` from the pre-state, as `Session.step`), and the JSON codec
+  judgment of the section above
 
 Other properties: Lean doc comments are carried over as `///`; generated names are checked for
 collisions with each other, with `Runtime.swift` and with the prelude at translation time
@@ -84,7 +137,7 @@ types are rejected (`Nat.zero`/`Nat.succ` included).
 ## What it rejects (by design)
 
 Everything outside the whitelist in `libTemplate`/`translateConst`: `List.foldl`, `String.toList`,
-`Float`, `Option.decidableEqNone`, equality on `Option`/`List` values, `cases` on `Nat`, dependent
+`Float`, `Option.decidableEqNone`, `DecidableEq` on `Option`/`List` values (`==` on `Option` is accepted, see above), `cases` on `Nat`, dependent
 fields, indexed families, parametric user types, recursive structures, `extern` declarations,
 natural literals ≥ 2^62, … Each rejection names the construct: `ToSwiftLCNF: unsupported <what>`,
 exit code 1, no output file.
@@ -98,7 +151,8 @@ probe definitions and an `#eval`, and run it with `lake env lean <file>` (no `--
 negative corpus and the judges' probe set were run that way; the lowering of `Option`/`List`
 patterns means `optCase`/`recLen`/`pOptMatch`/`pRec` are now accepted (and validated against a
 Lean reference by lockstep), while `foldSum`, `strLen`, `floaty`, `natCase`, `pFoldl`,
-`pNestedView`, equality on `Option`/`List` values and a recursive structure are still rejected loudly.
+`pNestedView`, `DecidableEq` (`=`) on `Option`/`List` values and a recursive structure are still
+rejected loudly (`==` on `Option` is now accepted).
 
 ## Known limitations (deliberate: this is a cross-check, not the product)
 

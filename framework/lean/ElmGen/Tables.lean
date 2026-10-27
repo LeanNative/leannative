@@ -27,7 +27,8 @@ declarations of Runtime.swift and Elements.swift, the SwiftUI/stdlib names they 
 def reservedSwiftNames : List String :=
   [ -- Runtime.swift
     "TextStyle", "ButtonRole", "Html", "Event", "q", "ElmApp", "JNum", "JSON", "JSONReader", "Request",
-    "Parsed", "parseLine", "Session", "emit", "runElmCli",
+    "Parsed", "parseLine", "Session", "emit", "runElmCli", "CmdElmApp", "LeanCodable", "CmdSession",
+    "runCmdElmCli", "CmdHost", "Task",
     -- Elements.swift (the iOS app shell `<Name>GenApp` is derived from the app name: see `claimName`)
     "Store", "ElmText", "RoleButton", "ElmField", "ElmToggle",
     -- (shims are claimed by `requestShim`, so a user definition with a shim's name is caught there)
