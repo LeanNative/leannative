@@ -491,7 +491,8 @@ def renderBefore : List Stmt := [
                 .l "[refresh addTarget:self action:@selector(refresh:) forControlEvents:UIControlEventValueChanged];",
                 .l "_content.scroll.refreshControl = refresh;"]],
         .l "_title = [title copy];",
-        .l "self.title = title;",
+        .l "// the navigation title only: `self.title` would also rename the tab this screen sits in",
+        .l "self.navigationItem.title = title;",
         .blk [("if (list) {", [
               .l "UIStackView *cards = _content.stack.arrangedSubviews.firstObject;",
               b "if (![cards isKindOfClass:UIStackView.class]) {" [
@@ -588,6 +589,8 @@ def renderBefore : List Stmt := [
         .l "NSArray<NSDictionary *> *children = node[@\"c\"];",
         b "for (NSInteger i = 0; i < (NSInteger)self.viewControllers.count; i++) {" [
             .l "UINavigationController *nav = (UINavigationController *)self.viewControllers[i];",
+            .l "// a tab is named by its label, whatever the screen inside it is called",
+            .l "if (i < (NSInteger)labels.count) nav.tabBarItem.title = labels[i];",
             .l "UIViewController *root = nav.viewControllers.firstObject;",
             b "if (i != _selected) {" [
                 .l "if ([root isKindOfClass:ELScreenController.class] || [root isKindOfClass:ELPageController.class])",
@@ -771,7 +774,7 @@ def renderBefore : List Stmt := [
         b "box.update = ^BOOL(ELBox *b, NSDictionary *n) {" [
             .l "sheet.dismissable = [n[@\"dismissable\"] boolValue];",
             .l "sheet.nav.modalInPresentation = !sheet.dismissable;",
-            .l "sheet.page.title = n[@\"title\"];",
+            .l "sheet.page.navigationItem.title = n[@\"title\"];",
             .l "[sheet.page updateNodes:n[@\"c\"] paths:ELChildPaths(b.path, [n[@\"c\"] count])];",
             .l "return YES;"] "};",
         .l "box.attached = ^(ELBox *b) { ELPresent(sheet.nav, b, 20); };",
