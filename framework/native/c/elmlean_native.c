@@ -25,6 +25,11 @@ void lean_initialize_runtime_module(void);
 // dynamic loading), none of which an app uses and none of which is linked; the runtime is enough.
 void lean_initialize(void) { lean_initialize_runtime_module(); }
 
+// The stack of every thread Lean creates (8 MB is a macOS main thread's; Lean's deepest app code, key
+// derivation and JSON, runs in well under that). The runtime exports the setter but no header declares it.
+#define ELMLEAN_THREAD_STACK ((size_t)16 << 20)
+extern void lean_internal_set_thread_stack_size(size_t size);
+
 int elmlean_boot(void) {
     lean_object *res = elm_app_initialize();
     lean_io_mark_end_initialization();
@@ -34,6 +39,10 @@ int elmlean_boot(void) {
         return 1;
     }
     lean_dec_ref(res);
+    // Lean's default thread stack is sized for the compiler (hundreds of MB): on iOS a dozen threads use up
+    // the app's address space and the next one cannot start. Every thread Lean creates from here on, the
+    // task manager's workers and each dedicated task, gets ELMLEAN_THREAD_STACK instead.
+    lean_internal_set_thread_stack_size(ELMLEAN_THREAD_STACK);
     lean_init_task_manager();
     return 0;
 }
