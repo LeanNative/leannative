@@ -17,6 +17,7 @@ inductive Wire where
   | section (header footer : String) (children : List Wire)
   | labeled (label value : String)
   | screen (title : String) (back : Bool) (children : List Wire) (refreshable : Bool := false) (largeTitle : Bool := true)
+      (depth : Nat := 0)
   | toolbar (children : List Wire) (placement : Placement := .trailing)
   | tabs (labels icons : List String) (selected : Nat) (children : List Wire)
   | sheet (title : String) (dismissable : Bool) (children : List Wire) (largeTitle : Bool := false)
@@ -52,7 +53,7 @@ def children : Wire → List Wire
   | .list cs => cs
   | .section _ _ cs => cs
   | .labeled .. => []
-  | .screen _ _ cs _ _ => cs
+  | .screen _ _ cs _ _ _ => cs
   | .toolbar cs _ => cs
   | .tabs _ _ _ cs => cs
   | .sheet _ _ cs _ => cs
@@ -82,8 +83,8 @@ def accepts : Wire → Event → Bool
   | .toggle .., .toggle _ => true
   | .input .., .input _ => true
   | .input _ _ _ _ s, .submit => s
-  | .screen _ b _ _ _, .dismiss => b
-  | .screen _ _ _ r _, .click => r
+  | .screen _ b _ _ _ _, .dismiss => b
+  | .screen _ _ _ r _ _, .click => r
   | .tabs .., .select _ => true
   | .sheet _ d _ _, .dismiss => d
   | .picker .., .select _ => true

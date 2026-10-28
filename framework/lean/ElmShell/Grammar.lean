@@ -151,7 +151,7 @@ def nodes : List NodeKind :=
       .l "[s addArrangedSubview:l];",
       .l "[s addArrangedSubview:v];",
       .l "ELPin(s, box, UIEdgeInsetsZero);"] },
-  { tag := "screen", fields := [str "title", bool "back", bool "refreshable", bool "largeTitle" true, kids],
+  { tag := "screen", fields := [str "title", bool "back", bool "refreshable", bool "largeTitle" true, int "depth", kids],
     render := [
       .l "ELBuildColumn(box);"] },
   { tag := "toolbar", fields := [enum "placement" "Placement" "trailing", kids],

@@ -52,7 +52,7 @@ theorem inputKinds_complete (x : InputKind) : x ∈ allInputKinds := by cases x 
 def samples : List Wire :=
   let k := [Wire.divider]
   [ .text "t" .caption, .col k, .row k, .button "b" .primary false, .field "p" "v" true, .toggle "l" true, .divider,
-    .spacer, .input .secure "l" "p" "v" true, .list k, .section "h" "f" k, .labeled "l" "v", .screen "t" true k true false,
+    .spacer, .input .secure "l" "p" "v" true, .list k, .section "h" "f" k, .labeled "l" "v", .screen "t" true k true false 2,
     .toolbar k .confirm, .tabs ["a"] ["i"] 1 k, .sheet "t" true k true, .alert "t" "m" k, .picker "l" ["o"] 0, .progress "l",
     .icon "n", .qr "q", .share "l" "t" true, .link "l" "u", .page "p", .empty "t" "i" "m" k, .disclosure "t" true k,
     .stepper "l" 1 0 2 "d" ]

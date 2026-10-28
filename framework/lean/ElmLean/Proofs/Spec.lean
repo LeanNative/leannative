@@ -28,7 +28,7 @@ theorem Html.Sat.of_forall {P : Msg → Prop} (hP : ∀ m, P m) : ∀ h : Html M
   | .list cs => .list cs fun c _ => Html.Sat.of_forall hP c
   | .section h f cs => .section h f cs fun c _ => Html.Sat.of_forall hP c
   | .labeled l v => .labeled l v
-  | .screen t b cs r lt => .screen t b cs r lt (fun m _ => hP m) (fun m _ => hP m) fun c _ => Html.Sat.of_forall hP c
+  | .screen t b cs r lt d => .screen t b cs r lt d (fun m _ => hP m) (fun m _ => hP m) fun c _ => Html.Sat.of_forall hP c
   | .toolbar cs p => .toolbar cs p fun c _ => Html.Sat.of_forall hP c
   | .tabs ls is sel f cs => .tabs ls is sel f cs (fun _ => hP _) fun c _ => Html.Sat.of_forall hP c
   | .sheet t d cs lt => .sheet t d cs lt (fun m _ => hP m) fun c _ => Html.Sat.of_forall hP c

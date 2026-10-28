@@ -73,9 +73,9 @@ def Wire.toJson : Wire → Json
   | .section h f cs =>
     Json.mkObj [("t", Json.str "section"), ("header", Json.str h), ("footer", Json.str f), ("c", Json.arr (cs.map Wire.toJson).toArray)]
   | .labeled l v => Json.mkObj [("t", Json.str "labeled"), ("label", Json.str l), ("value", Json.str v)]
-  | .screen t b cs r lt =>
+  | .screen t b cs r lt d =>
     Json.mkObj [("t", Json.str "screen"), ("title", Json.str t), ("back", Json.bool b), ("refreshable", Json.bool r),
-                ("largeTitle", Json.bool lt),
+                ("largeTitle", Json.bool lt), ("depth", Lean.toJson d),
                 ("c", Json.arr (cs.map Wire.toJson).toArray)]
   | .toolbar cs p =>
     Json.mkObj [("t", Json.str "toolbar"), ("placement", Json.str p.str), ("c", Json.arr (cs.map Wire.toJson).toArray)]

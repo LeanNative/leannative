@@ -89,7 +89,7 @@ Native mode (framework/native/README.md) adds these nodes; `elmgen` does not tra
 | list | `{"t":"list","c":[…]}` | yes | — |
 | section | `{"t":"section","header","footer","c":[…]}` | yes | — |
 | labeled | `{"t":"labeled","label","value"}` | — | — |
-| screen | `{"t":"screen","title","back":bool,"refreshable":bool,"largeTitle":bool,"c":[…]}` (`largeTitle`, default true: a large title that collapses as the page scrolls) | yes | `dismiss` iff `back`; `click` iff `refreshable` (pull to refresh) |
+| screen | `{"t":"screen","title","back":bool,"refreshable":bool,"largeTitle":bool,"depth":n,"c":[…]}` (`largeTitle`, default true: a large title that collapses as the page scrolls; `depth`: its place in its navigation stack, 0 the root, at least 1 with `back`: a deeper screen is pushed, a shallower one pops back to it, and the system back button or an edge swipe pops and sends `dismiss`) | yes | `dismiss` iff `back`; `click` iff `refreshable` (pull to refresh) |
 | toolbar | `{"t":"toolbar","placement":"trailing"\|"leading"\|"cancel"\|"confirm"\|"bottom","c":[…]}` (in a screen or a sheet: its buttons in the navigation bar's trailing or leading end, `cancel` leading (a `cancel`-role button there is the system Close button, labelled with its label), `confirm` trailing and prominent, `bottom` the toolbar under the page) | yes | — |
 | tabs | `{"t":"tabs","labels":[…],"icons":[…],"selected":n,"c":[…]}` | yes (the selected tab's content) | `select` |
 | sheet | `{"t":"sheet","title","dismissable":bool,"largeTitle":bool,"c":[…]}` (`largeTitle`, default false) | yes | `dismiss` iff `dismissable` |

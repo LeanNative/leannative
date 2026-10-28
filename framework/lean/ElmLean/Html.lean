@@ -119,9 +119,12 @@ inductive Html (msg : Type) where
   | labeled (label value : String)
   /-- A navigation screen: a title, a back control when `onBack` is some (event `dismiss`), the content, and
   pull-to-refresh when `onRefresh` is some (event `click` on the screen). A `toolbar` among the children goes
-  to the navigation bar. -/
+  to the navigation bar. Native mode: `largeTitle` (a large title that collapses as the page scrolls), and
+  `depth`, the screen's place in its navigation stack (0 the root; a screen with `onBack` is at least 1): a
+  deeper screen than the one shown is pushed, a shallower one pops back to it, and the system back button or
+  an edge swipe pops it and sends `dismiss`. -/
   | screen (title : String) (onBack : Option msg) (children : List (Html msg)) (onRefresh : Option msg := none)
-      (largeTitle : Bool := true)
+      (largeTitle : Bool := true) (depth : Nat := 0)
   /-- Buttons for the navigation bar of the enclosing screen. -/
   | toolbar (children : List (Html msg)) (placement : Placement := .trailing)
   /-- A tab bar: one label and icon per tab, the selected index, and the selected tab's content. -/
@@ -178,7 +181,7 @@ def children : Html msg → List (Html msg)
   | .list cs => cs
   | .section _ _ cs => cs
   | .labeled .. => []
-  | .screen _ _ cs _ _ => cs
+  | .screen _ _ cs _ _ _ => cs
   | .toolbar cs _ => cs
   | .tabs _ _ _ _ cs => cs
   | .sheet _ _ cs _ => cs
@@ -209,8 +212,8 @@ def handle : Html msg → Event → Option msg
   | .toggle _ _ f, .toggle b => some (f b)
   | .input _ _ _ _ f _, .input s => some (f s)
   | .input _ _ _ _ _ s, .submit => s
-  | .screen _ b _ _ _, .dismiss => b
-  | .screen _ _ _ r _, .click => r
+  | .screen _ b _ _ _ _, .dismiss => b
+  | .screen _ _ _ r _ _, .click => r
   | .tabs _ _ _ f _, .select n => some (f n)
   | .sheet _ d _ _, .dismiss => d
   | .picker _ _ _ f, .select n => some (f n)
@@ -258,8 +261,8 @@ inductive Sat (P : msg → Prop) : Html msg → Prop
   | list (cs : List (Html msg)) : (∀ c ∈ cs, Sat P c) → Sat P (.list cs)
   | section (h f : String) (cs : List (Html msg)) : (∀ c ∈ cs, Sat P c) → Sat P (.section h f cs)
   | labeled (l v : String) : Sat P (.labeled l v)
-  | screen (t : String) (b : Option msg) (cs : List (Html msg)) (r : Option msg) (lt : Bool) :
-      (∀ m, b = some m → P m) → (∀ m, r = some m → P m) → (∀ c ∈ cs, Sat P c) → Sat P (.screen t b cs r lt)
+  | screen (t : String) (b : Option msg) (cs : List (Html msg)) (r : Option msg) (lt : Bool) (d : Nat) :
+      (∀ m, b = some m → P m) → (∀ m, r = some m → P m) → (∀ c ∈ cs, Sat P c) → Sat P (.screen t b cs r lt d)
   | toolbar (cs : List (Html msg)) (p : Placement) : (∀ c ∈ cs, Sat P c) → Sat P (.toolbar cs p)
   | tabs (ls is : List String) (sel : Nat) (f : Nat → msg) (cs : List (Html msg)) :
       (∀ n, P (f n)) → (∀ c ∈ cs, Sat P c) → Sat P (.tabs ls is sel f cs)
