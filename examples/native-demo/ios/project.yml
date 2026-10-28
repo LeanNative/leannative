@@ -1,7 +1,8 @@
 # xcodegen project of a native-mode ElmLean app, with no Swift at all. The framework's generic shell
 # (Objective-C printed by `lake exe elmshell` into build/native-shell, and framework/native/c) plus the C
 # that Lean generated for the app (build/lean-c); both made by framework/native/scripts/ios_lean_sources.sh.
-# Linked with Lean's runtime retargeted to iOS (build/lib).
+# Linked with Lean's runtime retargeted to the platform the script was last run for (build/lib): iossim, ios,
+# or maccatalyst (universal arm64 + x86_64; needs LEAN_X86_64_PREFIX, see framework/native/README.md).
 name: NativeDemo
 options:
   bundleIdPrefix: art.fralex
@@ -54,3 +55,9 @@ targets:
         # ad-hoc signed in the simulator: an unsigned app has no Keychain entitlement (errSecMissingEntitlement)
         "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
         "CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]": "NO"
+        # Mac Catalyst (destination "generic/platform=macOS,variant=Mac Catalyst"): the same bundle id as on
+        # iOS (one app, one iCloud container), universal, ad-hoc signed to run locally
+        SUPPORTS_MACCATALYST: YES
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
