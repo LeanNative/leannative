@@ -240,7 +240,7 @@ def nodes : List NodeKind :=
       .l "NSMutableDictionary *decor = [n[@\"decor\"] mutableCopy];",
       .l "if ([decor[@\"symbol\"] length] == 0) decor[@\"symbol\"] = @\"square.and.arrow.up\";",
       .l "BOOL row = [box.mode isEqualToString:@\"cell\"];",
-      .l "UIButtonConfiguration *c = ELButtonStyle(row ? @\"plain\" : @\"secondary\", decor, row ? @\"\" : box.mode);",
+      .l "UIButtonConfiguration *c = ELButtonStyle(@\"plain\", decor, row ? @\"\" : box.mode);",
       .l "if (row) { c.contentInsets = NSDirectionalEdgeInsetsZero; c.imagePadding = 12; }",
       .l "c.title = n[@\"label\"];",
       .l "BOOL file = [n[@\"file\"] boolValue];",
