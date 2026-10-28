@@ -1,19 +1,26 @@
 #!/bin/bash
 # Prepare an ElmLean native app for Xcode: build it with Lake, gather the C that Lean generated for the
 # app and for the ElmLean framework, write the initializer the C shim calls, and retarget Lean's
-# runtime and standard library (macOS arm64 static libraries) to the iOS simulator.
+# runtime and standard library (macOS static libraries) to the platform asked for.
 #
-#   ios_lean_sources.sh <app package dir> <root module> <out dir> [iossim|ios]
+#   ios_lean_sources.sh <app package dir> <root module> <out dir> [iossim|ios|maccatalyst]
+#
+# maccatalyst builds universal libraries (arm64 + x86_64). Lean installs only the host's architecture, so
+# the other slice comes from LEAN_X86_64_PREFIX: Lean's official macOS x86_64 release of the same version,
+# fetched by fetch_lean_x86_64.sh (only its lib/ archives are used; nothing from it runs).
 #
 # Out: <out>/lean-c/*.c (one per Lean module, flattened), <out>/lean-c/elm_app_initialize.c,
 #      <out>/native-shell/{ElmLeanShell.h,*.m} (the shell's Objective-C, printed by `lake exe elmshell`: build
 #      output, never a source),
 #      <out>/lib/{libLean,libStd,libInit,libleanrt,libuv,libgmp}.a
-# The retargeting rewrites each object's LC_BUILD_VERSION (platform 7 = iOS simulator, 2 = iOS); Lean
-# does not support this, and only the simulator has been verified.
+# The retargeting rewrites each object's LC_BUILD_VERSION (platform 7 = iOS simulator, 2 = iOS, 6 = Mac
+# Catalyst; minos 17.0, the deployment target, which clang also writes for -target …-ios17.0-macabi); Lean
+# does not support this. <out>/lib/.platform records the platform the libraries were made for: they are
+# made again when it changes.
 set -euo pipefail
 APP="$(cd "$1" && pwd)"; ROOT="$2"; OUT="$3"; PLATFORM="${4:-iossim}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+case "$PLATFORM" in iossim) plat=7 ;; ios) plat=2 ;; maccatalyst) plat=6 ;; *) echo "platform: iossim, ios or maccatalyst" >&2; exit 2 ;; esac
 FW_LEAN="$(cd "$HERE/../../lean" && pwd)"
 TOOLCHAIN="$(cd "$APP" && elan which lean | xargs dirname | xargs dirname)"
 mkdir -p "$OUT/lean-c" "$OUT/lib" "$OUT/native-shell"
@@ -48,9 +55,26 @@ cat > "$OUT/lean-c/elm_app_initialize.c" <<C
 lean_object *$sym(uint8_t builtin);
 lean_object *elm_app_initialize(void) { return $sym(1); }
 C
-case "$PLATFORM" in iossim) plat=7 ;; ios) plat=2 ;; *) echo "platform: iossim or ios" >&2; exit 2 ;; esac
-for l in lean/libLean.a lean/libStd.a lean/libInit.a lean/libleanrt.a libuv.a libgmp.a; do
+LIBS="lean/libLean.a lean/libStd.a lean/libInit.a lean/libleanrt.a libuv.a libgmp.a"
+if [ "$PLATFORM" = maccatalyst ]; then
+  X86="${LEAN_X86_64_PREFIX:?maccatalyst needs LEAN_X86_64_PREFIX, the macOS x86_64 Lean release (fetch_lean_x86_64.sh DIR)}"
+  # the same Lean as the toolchain: version.h may differ only in the platform it was built for
+  diff <(grep -v LEAN_PLATFORM_TARGET "$TOOLCHAIN/include/lean/version.h") <(grep -v LEAN_PLATFORM_TARGET "$X86/include/lean/version.h") >/dev/null \
+    || { echo "LEAN_X86_64_PREFIX ($X86) is not the toolchain's Lean version ($TOOLCHAIN)" >&2; exit 1; }
+fi
+# libraries made for another platform are made again
+[ "$(cat "$OUT/lib/.platform" 2>/dev/null)" = "$PLATFORM" ] || rm -f "$OUT/lib/"*.a
+for l in $LIBS; do
   out="$OUT/lib/$(basename "$l")"
-  [ "$out" -nt "$TOOLCHAIN/lib/$l" ] || /usr/bin/python3 "$HERE/retarget_ar.py" "$plat" 17.0 "$TOOLCHAIN/lib/$l" "$out" >/dev/null
+  [ "$out" -nt "$TOOLCHAIN/lib/$l" ] && continue
+  if [ "$PLATFORM" = maccatalyst ]; then
+    /usr/bin/python3 "$HERE/retarget_ar.py" "$plat" 17.0 "$TOOLCHAIN/lib/$l" "$out.arm64" >/dev/null
+    /usr/bin/python3 "$HERE/retarget_ar.py" "$plat" 17.0 "$X86/lib/$l" "$out.x86_64" >/dev/null
+    lipo -create "$out.arm64" "$out.x86_64" -output "$out"
+    rm -f "$out.arm64" "$out.x86_64"
+  else
+    /usr/bin/python3 "$HERE/retarget_ar.py" "$plat" 17.0 "$TOOLCHAIN/lib/$l" "$out" >/dev/null
+  fi
 done
+echo "$PLATFORM" > "$OUT/lib/.platform"
 echo "$OUT/lean-c: $(ls "$OUT/lean-c" | wc -l | tr -d ' ') C files; $OUT/native-shell: $(ls "$OUT/native-shell" | wc -l | tr -d ' ') shell files; $OUT/lib: retargeted to $PLATFORM; toolchain $TOOLCHAIN"

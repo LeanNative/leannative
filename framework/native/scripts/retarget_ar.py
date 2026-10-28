@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Copy a macOS arm64 static archive, retargeting every Mach-O member's LC_BUILD_VERSION in place.
+"""Copy a macOS static archive (one architecture, arm64 or x86_64), retargeting every Mach-O member's
+LC_BUILD_VERSION in place: platform 2 = iOS, 7 = iOS Simulator, 6 = Mac Catalyst; minos and sdk both set to
+<minos> (for Catalyst the iOS deployment target, as clang writes for -target <arch>-apple-ios17.0-macabi).
 usage: retarget_ar.py <platform-number> <minos> in.a out.a"""
 import struct, sys
 plat = int(sys.argv[1]); major, minor = (int(x) for x in sys.argv[2].split('.'))
