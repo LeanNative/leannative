@@ -82,9 +82,26 @@ drains. Threads Lean did not create are registered (`lean_initialize_thread`) on
 
 **System events.** The shell reports what happens to the app, not to a control, through
 `elmlean_system`: `{"scene":"active"|"inactive"|"background"}` on every scene-phase change and
-`{"captured":true|false}` when screen recording or mirroring starts or stops. The app's `App.system`
-turns each into a host message (or ignores it); Winnow stops networking in the background and hides
-recovery words while the screen is captured.
+`{"captured":true|false}` when screen recording or mirroring starts or stops,
+`{"bgtask":{"id":…,"kind":"refresh"|"processing"}}` when iOS launches one of the app's background tasks
+and `{"bgtaskExpired":{"id":…,"kind":…}}` when it expires one. The app's `App.system` turns each into a
+host message (or ignores it); Winnow stops networking in the background and hides recovery words while
+the screen is captured.
+
+**Background tasks.** iOS takes launch handlers only before the app finishes launching, so the shell
+registers one for every identifier in the app's Info.plist `BGTaskSchedulerPermittedIdentifiers`, first
+thing in `didFinishLaunching` (refresh tasks also need `UIBackgroundModes` `fetch`, processing tasks
+`processing`). The app asks for a run with `bgtask.schedule`
+(`{"id":…,"kind":"refresh"|"processing","after":s,"requiresNetwork":bool,"requiresPower":bool}`, all but
+`id` optional; it replaces that identifier's earlier request; iOS decides when, and whether, it runs).
+When the task launches the app hears `{"bgtask":…}`, does its work, and answers
+`bgtask.complete {"id":…,"success":bool}`. On expiration it hears `{"bgtaskExpired":…}` and should stop
+and complete; a task still pending one second later is completed by the shell with `success: false`
+(a later `bgtask.complete` answers `{"ok":false,"error":"notPending"}`). `bgtask.refreshStatus` answers
+`{"status":"available"|"denied"|"restricted"}` (Background App Refresh). A system event that arrives
+before the store has started (a task launched early) starts it. iOS never launches tasks in the
+simulator by itself; in Xcode's debugger
+`e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"…"]` does.
 
 ## Capabilities (`lean/ElmShell/Capabilities.lean`)
 
@@ -101,7 +118,8 @@ URLSession: ephemeral, same-host redirects only, never https→http — Lean's r
 is sent to the proxy unresolved, there is no fallback to a direct connection, request and resource time
 out after 90 s and 180 s, and a host that is not a string or a port outside 1…65535 answers
 `{"error":"bad-proxy"}`),
-`open` (a URL outside the app), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
+`open` (a URL outside the app), `bgtask.schedule/complete/refreshStatus` (background tasks, above),
+and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
 `ble.connect` (a peripheral the system already holds connected, else the first a scan finds; answers its
 characteristics), `ble.subscribe` (notifications on; iOS pairs here, so it may wait on the user),
 `ble.write` (hex, with or without response), `ble.read` (the next notified value, in arrival order per

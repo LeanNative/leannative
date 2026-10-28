@@ -9,7 +9,8 @@ int elmlean_boot(void);
 char *elmlean_start(void);
 /// One user event: {"seq":n,"path":[…],"event":{…}}.
 char *elmlean_event(const char *json);
-/// A system event from the shell ({"scene":…} or {"captured":…}), as the app's `system` maps it.
+/// A system event from the shell ({"scene":…}, {"captured":…}, {"bgtask":…} or {"bgtaskExpired":…}), as the
+/// app's `system` maps it.
 char *elmlean_system(const char *json);
 /// Apply every queued host answer; the current view.
 char *elmlean_drain(void);

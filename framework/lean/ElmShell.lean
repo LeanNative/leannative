@@ -5,5 +5,6 @@ import ElmShell.App
 import ElmShell.Store
 import ElmShell.Node
 import ElmShell.Render
+import ElmShell.BackgroundTasks
 import ElmShell.Capabilities
 import ElmShell.Check

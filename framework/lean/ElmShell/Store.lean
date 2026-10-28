@@ -11,7 +11,8 @@ def storeBody : List Stmt := [
     .l "// Every call into Lean happens on the main thread except `elmlean_wait`, which blocks a background thread",
     .l "// until Lean has something queued; the main thread then drains it.",
     b "@implementation ELStore {" [
-        .l "ELCapabilities *_capabilities;"],
+        .l "ELCapabilities *_capabilities;",
+        .l "BOOL _started, _booted;"],
     .blank,
     b "+ (instancetype)shared {" [
         .l "static ELStore *store;",
@@ -26,9 +27,12 @@ def storeBody : List Stmt := [
         .l "return self;"],
     .blank,
     b "- (void)start {" [
+        .l "if (_started) return;",
+        .l "_started = YES;",
         b "if (elmlean_boot() != 0) {" [
             .l "_failure = @\"The app failed to start.\";",
             .l "return;"],
+        .l "_booted = YES;",
         .l "[self apply:[self take:elmlean_start()]];",
         b "NSThread *thread = [[NSThread alloc] initWithBlock:^{" [
             b "while (YES) {" [
@@ -45,8 +49,11 @@ def storeBody : List Stmt := [
     b "- (void)drain {" [
         .l "[self apply:[self take:elmlean_drain()]];"],
     .blank,
-    .l "/// A system event (scene phase, screen capture) for the app's `system` mapping.",
+    .l "/// A system event (scene phase, screen capture, background task) for the app's `system` mapping. One",
+    .l "/// that comes before `start` (a background task launched early) starts the app first.",
     b "- (void)system:(NSDictionary *)event {" [
+        .l "[self start];",
+        .l "if (!_booted) return;",
         .l "NSString *line = [self line:event];",
         .l "if (!line) return;",
         .l "[self apply:[self take:elmlean_system(line.UTF8String)]];"],

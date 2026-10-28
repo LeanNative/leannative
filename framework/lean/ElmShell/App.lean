@@ -19,6 +19,8 @@ def appFile : List Stmt := [
     .l "@implementation ELAppDelegate",
     .blank,
     b "- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)options {" [
+        .l "// before launch ends, as iOS requires: the handlers of the app's background tasks",
+        .l "[ELBackgroundTasks.shared registerLaunch];",
         .l "// a scene saved by an earlier build of the app (a SwiftUI shell) comes back with that build's delegate",
         .l "// (SwiftUI.AppSceneDelegate, which the system still provides) and would stay an empty window: it gets",
         .l "// the shell's delegate instead",

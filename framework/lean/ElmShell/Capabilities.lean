@@ -1,4 +1,5 @@
 import ElmShell.ObjC
+import ElmShell.BackgroundTasks
 
 /-! # ElmShell.Capabilities: `ELCapabilities.m`
 
@@ -164,7 +165,20 @@ def capabilities : List Capability :=
     body := [.l "[[ELBluetooth shared] read:args answer:answer];"] },
   { name := "ble.close", args := "`id`",
     result := "`{\"ok\":true}` disconnects; requests waiting on the peripheral fail with `disconnected`",
-    body := [.l "[[ELBluetooth shared] close:args answer:answer];"] } ]
+    body := [.l "[[ELBluetooth shared] close:args answer:answer];"] },
+  { name := "bgtask.schedule", args := "`id`, `kind`? (`refresh` or `processing`; `refresh`), `after`? (s from now), `requiresNetwork`?, `requiresPower`? (processing only)",
+    result := "`{\"ok\":true}` or `{\"ok\":false,\"error\",\"detail\",\"code\"?}` (`unavailable`, `tooManyPending`, `notPermitted`, `immediateRunIneligible`, `badArgs`, `unknown`); replaces any request of that `id`, which must be in Info.plist's `BGTaskSchedulerPermittedIdentifiers`. iOS decides when, and whether, it runs",
+    body := [.l "[ELBackgroundTasks.shared schedule:args answer:answer];"] },
+  { name := "bgtask.complete", args := "`id`, `success`",
+    result := "`{\"ok\":true}`, or `{\"ok\":false,\"error\":\"notPending\"}` when no task of that `id` is running (never launched, completed, or completed by the shell a second after it expired)",
+    body := [.l "[ELBackgroundTasks.shared complete:args answer:answer];"] },
+  { name := "bgtask.refreshStatus", args := "—",
+    result := "`{\"status\":…}`: `available`, `denied` (Background App Refresh off for the app) or `restricted`",
+    body := [
+      b "switch (UIApplication.sharedApplication.backgroundRefreshStatus) {" [
+          .l "case UIBackgroundRefreshStatusAvailable: answer(@{@\"status\": @\"available\"}); break;",
+          .l "case UIBackgroundRefreshStatusDenied: answer(@{@\"status\": @\"denied\"}); break;",
+          .l "default: answer(@{@\"status\": @\"restricted\"}); break;"]] } ]
 
 
 def unknownCapability : List Stmt := [
@@ -184,6 +198,7 @@ def capsBefore : List Stmt := [
     .pp "#import <CoreBluetooth/CoreBluetooth.h>",
     .pp "#import <Network/Network.h>",
     .pp "#import <Network/NSURLSession+Network.h>",
+    .pp "#import <BackgroundTasks/BackgroundTasks.h>",
     .blank,
     .l "/// The ephemeral URLSessions of `http.get`: no cookies, no cache, redirects only within the same host and",
     .l "/// never from https down to http. One shared session without a proxy, and one per SOCKS5 proxy (`host:port`),",
@@ -589,7 +604,7 @@ def bluetoothClass : List Stmt := [
 def capsImports : Nat := (capsBefore.findIdx? fun | .l _ | .blk .. => true | _ => false).getD 0
 
 def capsFile : List Stmt :=
-  capsBefore.take capsImports ++ argHelpers ++ bluetoothClass ++ [.blank] ++ capsBefore.drop capsImports ++
+  capsBefore.take capsImports ++ argHelpers ++ bluetoothClass ++ [.blank] ++ backgroundTasksClass ++ [.blank] ++ capsBefore.drop capsImports ++
   [ b "- (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(NSDictionary *))answer {"
       [ ifChain "" (capabilities.map (fun c => (s!"[name isEqualToString:{lit c.name}]", c.body)) ++ [("", unknownCapability)]) ] ] ++
   [
