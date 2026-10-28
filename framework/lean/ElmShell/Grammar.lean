@@ -148,6 +148,8 @@ def nodes : List NodeKind :=
       .l "ELDecorate(v, n[@\"decor\"]);",
       .l "[l setContentCompressionResistancePriority:UILayoutPriorityDefaultHigh + 1 forAxis:UILayoutConstraintAxisHorizontal];",
       .l "[l setContentHuggingPriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisHorizontal];",
+      .l "NSString *symbol = n[@\"decor\"][@\"symbol\"];",
+      .l "if (symbol.length > 0) [s addArrangedSubview:ELSymbol(symbol, @{}, UIFontTextStyleBody)];",
       .l "[s addArrangedSubview:l];",
       .l "[s addArrangedSubview:v];",
       .l "ELPin(s, box, UIEdgeInsetsZero);"] },
@@ -212,7 +214,7 @@ def nodes : List NodeKind :=
     render := [
       .l "UIImageView *v = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:n[@\"name\"]]];",
       .l "v.preferredSymbolConfiguration = [UIImageSymbolConfiguration configurationWithTextStyle:UIFontTextStyleBody];",
-      .l "v.tintColor = UIColor.labelColor;",
+      .l "v.tintColor = ELToneColor(n[@\"decor\"][@\"tone\"]) ?: UIColor.labelColor;",
       .l "v.contentMode = UIViewContentModeCenter;",
       .l "ELPinLeading(v, box);"] },
   { tag := "qr", fields := [str "text"],
