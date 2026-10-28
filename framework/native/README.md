@@ -102,9 +102,10 @@ When the task launches the app hears `{"bgtask":…}`, does its work, and answer
 and complete; a task still pending one second later is completed by the shell with `success: false`
 (a later `bgtask.complete` answers `{"ok":false,"error":"notPending"}`). `bgtask.refreshStatus` answers
 `{"status":"available"|"denied"|"restricted"}` (Background App Refresh). A system event that arrives
-before the store has started (a task launched early) starts it. iOS never launches tasks in the
-simulator by itself; in Xcode's debugger
-`e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"…"]` does.
+before the store has started (a task launched early) starts it. The simulator refuses every request
+(`bgtask.schedule` answers `unavailable`), so launches and expirations can only be exercised on a device,
+where Xcode's debugger launches a scheduled task with
+`e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"…"]`.
 
 ## Capabilities (`lean/ElmShell/Capabilities.lean`)
 
