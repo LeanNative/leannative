@@ -151,16 +151,16 @@ def nodes : List NodeKind :=
       .l "[s addArrangedSubview:l];",
       .l "[s addArrangedSubview:v];",
       .l "ELPin(s, box, UIEdgeInsetsZero);"] },
-  { tag := "screen", fields := [str "title", bool "back", bool "refreshable", kids],
+  { tag := "screen", fields := [str "title", bool "back", bool "refreshable", bool "largeTitle" true, kids],
     render := [
       .l "ELBuildColumn(box);"] },
-  { tag := "toolbar", fields := [kids],
+  { tag := "toolbar", fields := [enum "placement" "Placement" "trailing", kids],
     render := [
       .l "ELBuildRow(box, 0);"] },
   { tag := "tabs", fields := [strs "labels", strs "icons", int "selected", kids],
     render := [
       .l "ELBuildColumn(box);"] },
-  { tag := "sheet", fields := [str "title", bool "dismissable", kids], overlay := true,
+  { tag := "sheet", fields := [str "title", bool "dismissable", bool "largeTitle", kids], overlay := true,
     render := [
       .l "ELBuildSheet(box);"] },
   { tag := "alert", fields := [str "title", str "message", kids], overlay := true,
@@ -348,6 +348,7 @@ def unknownArm : List Stmt := [
 
 def allStyles : List TextStyle :=
   [.title, .body, .caption, .largeTitle, .title3, .headline, .subheadline, .callout, .footnote, .caption2]
+def allPlacements : List Placement := [.trailing, .leading, .cancel, .confirm, .bottom]
 def allTones : List Tone := [.standard, .secondary, .tint, .positive, .negative, .warning]
 def allRoles : List ButtonRole := [.plain, .primary, .destructive, .secondary, .cancel]
 def allInputKinds : List InputKind := [.plain, .secure, .multiline, .number, .decimal]
@@ -355,7 +356,7 @@ def allInputKinds : List InputKind := [.plain, .secure, .multiline, .number, .de
 /-- (name, values) of each string enum a node field takes. -/
 def stringEnums : List (String × List String) :=
   [ ("Role", allRoles.map (·.str)), ("Style", allStyles.map (·.str)), ("InputKind", allInputKinds.map (·.str)),
-    ("Tone", allTones.map (·.str)) ]
+    ("Tone", allTones.map (·.str)), ("Placement", allPlacements.map (·.str)) ]
 
 /-! The events (PROTOCOL.md, "Client → CLI"): name, and the Objective-C parameter and its JSON value if the
 event carries a `value`. -/

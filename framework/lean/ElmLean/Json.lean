@@ -27,6 +27,13 @@ def Tone.str : Tone → String
   | .negative => "negative"
   | .warning => "warning"
 
+def Placement.str : Placement → String
+  | .trailing => "trailing"
+  | .leading => "leading"
+  | .cancel => "cancel"
+  | .confirm => "confirm"
+  | .bottom => "bottom"
+
 /-- Every field, always (the shell decodes an absent one as its default). -/
 def Decor.toJson (d : Decor) : Json :=
   Json.mkObj [("tone", Json.str d.tone.str), ("mono", Json.bool d.mono), ("badge", Json.bool d.badge),
@@ -66,15 +73,18 @@ def Wire.toJson : Wire → Json
   | .section h f cs =>
     Json.mkObj [("t", Json.str "section"), ("header", Json.str h), ("footer", Json.str f), ("c", Json.arr (cs.map Wire.toJson).toArray)]
   | .labeled l v => Json.mkObj [("t", Json.str "labeled"), ("label", Json.str l), ("value", Json.str v)]
-  | .screen t b cs r =>
+  | .screen t b cs r lt =>
     Json.mkObj [("t", Json.str "screen"), ("title", Json.str t), ("back", Json.bool b), ("refreshable", Json.bool r),
+                ("largeTitle", Json.bool lt),
                 ("c", Json.arr (cs.map Wire.toJson).toArray)]
-  | .toolbar cs => Json.mkObj [("t", Json.str "toolbar"), ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .toolbar cs p =>
+    Json.mkObj [("t", Json.str "toolbar"), ("placement", Json.str p.str), ("c", Json.arr (cs.map Wire.toJson).toArray)]
   | .tabs ls is sel cs =>
     Json.mkObj [("t", Json.str "tabs"), ("labels", strs ls), ("icons", strs is), ("selected", Lean.toJson sel),
                 ("c", Json.arr (cs.map Wire.toJson).toArray)]
-  | .sheet t d cs =>
-    Json.mkObj [("t", Json.str "sheet"), ("title", Json.str t), ("dismissable", Json.bool d), ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .sheet t d cs lt =>
+    Json.mkObj [("t", Json.str "sheet"), ("title", Json.str t), ("dismissable", Json.bool d), ("largeTitle", Json.bool lt),
+                ("c", Json.arr (cs.map Wire.toJson).toArray)]
   | .alert t m cs =>
     Json.mkObj [("t", Json.str "alert"), ("title", Json.str t), ("message", Json.str m), ("c", Json.arr (cs.map Wire.toJson).toArray)]
   | .picker l os sel => Json.mkObj [("t", Json.str "picker"), ("label", Json.str l), ("options", strs os), ("selected", Lean.toJson sel)]

@@ -16,10 +16,10 @@ def Html.toWire {msg : Type} : Html msg → Wire
   | .list cs => .list (cs.map toWire)
   | .section h f cs => .section h f (cs.map toWire)
   | .labeled l v => .labeled l v
-  | .screen t b cs r => .screen t b.isSome (cs.map toWire) r.isSome
-  | .toolbar cs => .toolbar (cs.map toWire)
+  | .screen t b cs r lt => .screen t b.isSome (cs.map toWire) r.isSome lt
+  | .toolbar cs p => .toolbar (cs.map toWire) p
   | .tabs ls is sel _ cs => .tabs ls is sel (cs.map toWire)
-  | .sheet t d cs => .sheet t d.isSome (cs.map toWire)
+  | .sheet t d cs lt => .sheet t d.isSome (cs.map toWire) lt
   | .alert t m cs => .alert t m (cs.map toWire)
   | .picker l os sel _ => .picker l os sel
   | .progress l => .progress l

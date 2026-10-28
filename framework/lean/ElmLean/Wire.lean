@@ -16,10 +16,10 @@ inductive Wire where
   | list (children : List Wire)
   | section (header footer : String) (children : List Wire)
   | labeled (label value : String)
-  | screen (title : String) (back : Bool) (children : List Wire) (refreshable : Bool := false)
-  | toolbar (children : List Wire)
+  | screen (title : String) (back : Bool) (children : List Wire) (refreshable : Bool := false) (largeTitle : Bool := true)
+  | toolbar (children : List Wire) (placement : Placement := .trailing)
   | tabs (labels icons : List String) (selected : Nat) (children : List Wire)
-  | sheet (title : String) (dismissable : Bool) (children : List Wire)
+  | sheet (title : String) (dismissable : Bool) (children : List Wire) (largeTitle : Bool := false)
   | alert (title message : String) (children : List Wire)
   | picker (label : String) (options : List String) (selected : Nat)
   | progress (label : String)
@@ -52,10 +52,10 @@ def children : Wire → List Wire
   | .list cs => cs
   | .section _ _ cs => cs
   | .labeled .. => []
-  | .screen _ _ cs _ => cs
-  | .toolbar cs => cs
+  | .screen _ _ cs _ _ => cs
+  | .toolbar cs _ => cs
   | .tabs _ _ _ cs => cs
-  | .sheet _ _ cs => cs
+  | .sheet _ _ cs _ => cs
   | .alert _ _ cs => cs
   | .picker .. => []
   | .progress .. => []
@@ -82,10 +82,10 @@ def accepts : Wire → Event → Bool
   | .toggle .., .toggle _ => true
   | .input .., .input _ => true
   | .input _ _ _ _ s, .submit => s
-  | .screen _ b _ _, .dismiss => b
-  | .screen _ _ _ r, .click => r
+  | .screen _ b _ _ _, .dismiss => b
+  | .screen _ _ _ r _, .click => r
   | .tabs .., .select _ => true
-  | .sheet _ d _, .dismiss => d
+  | .sheet _ d _ _, .dismiss => d
   | .picker .., .select _ => true
   | .disclosure .., .toggle _ => true
   | .stepper .., .select _ => true

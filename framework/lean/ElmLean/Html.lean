@@ -35,6 +35,17 @@ inductive Tone where
   | warning
   deriving Repr, DecidableEq, Inhabited
 
+/-- Where a `toolbar`'s buttons go (native mode): the navigation bar's `trailing` or `leading` end, `cancel`
+(leading; a `cancel`-role button there is the system Close button), `confirm` (trailing, prominent), or the
+`bottom` toolbar. -/
+inductive Placement where
+  | trailing
+  | leading
+  | cancel
+  | confirm
+  | bottom
+  deriving Repr, DecidableEq, Inhabited
+
 /-- How a node looks beyond its kind (native mode, `Html.decorated`). Every default changes nothing, so a
 shell that does not know a field shows the node as before. -/
 structure Decor where
@@ -110,12 +121,13 @@ inductive Html (msg : Type) where
   pull-to-refresh when `onRefresh` is some (event `click` on the screen). A `toolbar` among the children goes
   to the navigation bar. -/
   | screen (title : String) (onBack : Option msg) (children : List (Html msg)) (onRefresh : Option msg := none)
+      (largeTitle : Bool := true)
   /-- Buttons for the navigation bar of the enclosing screen. -/
-  | toolbar (children : List (Html msg))
+  | toolbar (children : List (Html msg)) (placement : Placement := .trailing)
   /-- A tab bar: one label and icon per tab, the selected index, and the selected tab's content. -/
   | tabs (labels icons : List String) (selected : Nat) (onSelect : Nat → msg) (children : List (Html msg))
   /-- A sheet presented over the screen; `onDismiss = none` cannot be swiped away. -/
-  | sheet (title : String) (onDismiss : Option msg) (children : List (Html msg))
+  | sheet (title : String) (onDismiss : Option msg) (children : List (Html msg)) (largeTitle : Bool := false)
   /-- An alert; its children are its buttons. -/
   | alert (title message : String) (children : List (Html msg))
   /-- A choice among labelled options (event `select i`). -/
@@ -166,10 +178,10 @@ def children : Html msg → List (Html msg)
   | .list cs => cs
   | .section _ _ cs => cs
   | .labeled .. => []
-  | .screen _ _ cs _ => cs
-  | .toolbar cs => cs
+  | .screen _ _ cs _ _ => cs
+  | .toolbar cs _ => cs
   | .tabs _ _ _ _ cs => cs
-  | .sheet _ _ cs => cs
+  | .sheet _ _ cs _ => cs
   | .alert _ _ cs => cs
   | .picker .. => []
   | .progress .. => []
@@ -197,10 +209,10 @@ def handle : Html msg → Event → Option msg
   | .toggle _ _ f, .toggle b => some (f b)
   | .input _ _ _ _ f _, .input s => some (f s)
   | .input _ _ _ _ _ s, .submit => s
-  | .screen _ b _ _, .dismiss => b
-  | .screen _ _ _ r, .click => r
+  | .screen _ b _ _ _, .dismiss => b
+  | .screen _ _ _ r _, .click => r
   | .tabs _ _ _ f _, .select n => some (f n)
-  | .sheet _ d _, .dismiss => d
+  | .sheet _ d _ _, .dismiss => d
   | .picker _ _ _ f, .select n => some (f n)
   | .disclosure _ _ f _, .toggle b => some (f b)
   | .stepper _ _ _ _ f _, .select n => some (f n)
@@ -246,13 +258,13 @@ inductive Sat (P : msg → Prop) : Html msg → Prop
   | list (cs : List (Html msg)) : (∀ c ∈ cs, Sat P c) → Sat P (.list cs)
   | section (h f : String) (cs : List (Html msg)) : (∀ c ∈ cs, Sat P c) → Sat P (.section h f cs)
   | labeled (l v : String) : Sat P (.labeled l v)
-  | screen (t : String) (b : Option msg) (cs : List (Html msg)) (r : Option msg) :
-      (∀ m, b = some m → P m) → (∀ m, r = some m → P m) → (∀ c ∈ cs, Sat P c) → Sat P (.screen t b cs r)
-  | toolbar (cs : List (Html msg)) : (∀ c ∈ cs, Sat P c) → Sat P (.toolbar cs)
+  | screen (t : String) (b : Option msg) (cs : List (Html msg)) (r : Option msg) (lt : Bool) :
+      (∀ m, b = some m → P m) → (∀ m, r = some m → P m) → (∀ c ∈ cs, Sat P c) → Sat P (.screen t b cs r lt)
+  | toolbar (cs : List (Html msg)) (p : Placement) : (∀ c ∈ cs, Sat P c) → Sat P (.toolbar cs p)
   | tabs (ls is : List String) (sel : Nat) (f : Nat → msg) (cs : List (Html msg)) :
       (∀ n, P (f n)) → (∀ c ∈ cs, Sat P c) → Sat P (.tabs ls is sel f cs)
-  | sheet (t : String) (d : Option msg) (cs : List (Html msg)) :
-      (∀ m, d = some m → P m) → (∀ c ∈ cs, Sat P c) → Sat P (.sheet t d cs)
+  | sheet (t : String) (d : Option msg) (cs : List (Html msg)) (lt : Bool) :
+      (∀ m, d = some m → P m) → (∀ c ∈ cs, Sat P c) → Sat P (.sheet t d cs lt)
   | alert (t m : String) (cs : List (Html msg)) : (∀ c ∈ cs, Sat P c) → Sat P (.alert t m cs)
   | picker (l : String) (os : List String) (sel : Nat) (f : Nat → msg) :
       (∀ n, P (f n)) → Sat P (.picker l os sel f)
