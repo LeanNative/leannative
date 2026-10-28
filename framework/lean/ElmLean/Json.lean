@@ -34,6 +34,10 @@ def Placement.str : Placement → String
   | .confirm => "confirm"
   | .bottom => "bottom"
 
+def AlertStyle.str : AlertStyle → String
+  | .alert => "alert"
+  | .actionSheet => "actionSheet"
+
 /-- Every field, always (the shell decodes an absent one as its default). -/
 def Decor.toJson (d : Decor) : Json :=
   Json.mkObj [("tone", Json.str d.tone.str), ("mono", Json.bool d.mono), ("badge", Json.bool d.badge),
@@ -85,8 +89,9 @@ def Wire.toJson : Wire → Json
   | .sheet t d cs lt =>
     Json.mkObj [("t", Json.str "sheet"), ("title", Json.str t), ("dismissable", Json.bool d), ("largeTitle", Json.bool lt),
                 ("c", Json.arr (cs.map Wire.toJson).toArray)]
-  | .alert t m cs =>
-    Json.mkObj [("t", Json.str "alert"), ("title", Json.str t), ("message", Json.str m), ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .alert t m cs st =>
+    Json.mkObj [("t", Json.str "alert"), ("title", Json.str t), ("message", Json.str m), ("style", Json.str st.str),
+                ("c", Json.arr (cs.map Wire.toJson).toArray)]
   | .picker l os sel => Json.mkObj [("t", Json.str "picker"), ("label", Json.str l), ("options", strs os), ("selected", Lean.toJson sel)]
   | .progress l => Json.mkObj [("t", Json.str "progress"), ("label", Json.str l)]
   | .icon n => Json.mkObj [("t", Json.str "icon"), ("name", Json.str n)]

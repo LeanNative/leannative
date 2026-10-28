@@ -93,7 +93,7 @@ Native mode (framework/native/README.md) adds these nodes; `elmgen` does not tra
 | toolbar | `{"t":"toolbar","placement":"trailing"\|"leading"\|"cancel"\|"confirm"\|"bottom","c":[…]}` (in a screen or a sheet: its buttons in the navigation bar's trailing or leading end, `cancel` leading (a `cancel`-role button there is the system Close button, labelled with its label), `confirm` trailing and prominent, `bottom` the toolbar under the page) | yes | — |
 | tabs | `{"t":"tabs","labels":[…],"icons":[…],"selected":n,"c":[…]}` | yes (the selected tab's content) | `select` |
 | sheet | `{"t":"sheet","title","dismissable":bool,"largeTitle":bool,"c":[…]}` (`largeTitle`, default false) | yes | `dismiss` iff `dismissable` |
-| alert | `{"t":"alert","title","message","c":[buttons]}` | yes | — |
+| alert | `{"t":"alert","title","message","style":"alert"\|"actionSheet","c":[buttons]}` (a `cancel`-role button is the Cancel action, a `primary` one the preferred action; `actionSheet` is a confirmation dialog anchored to the control last used) | yes | — |
 | picker | `{"t":"picker","label","options":[…],"selected":n}` | — | `select` |
 | progress | `{"t":"progress","label"}` | — | — |
 | icon | `{"t":"icon","name"}` (an SF Symbols name) | — | — |

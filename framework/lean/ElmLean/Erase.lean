@@ -20,7 +20,7 @@ def Html.toWire {msg : Type} : Html msg → Wire
   | .toolbar cs p => .toolbar (cs.map toWire) p
   | .tabs ls is sel _ cs => .tabs ls is sel (cs.map toWire)
   | .sheet t d cs lt => .sheet t d.isSome (cs.map toWire) lt
-  | .alert t m cs => .alert t m (cs.map toWire)
+  | .alert t m cs st => .alert t m (cs.map toWire) st
   | .picker l os sel _ => .picker l os sel
   | .progress l => .progress l
   | .icon n => .icon n

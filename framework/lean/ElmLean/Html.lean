@@ -46,6 +46,13 @@ inductive Placement where
   | bottom
   deriving Repr, DecidableEq, Inhabited
 
+/-- How an `alert` is presented (native mode): a centred alert, or an action sheet (a confirmation dialog,
+anchored to the control that asked). -/
+inductive AlertStyle where
+  | alert
+  | actionSheet
+  deriving Repr, DecidableEq, Inhabited
+
 /-- How a node looks beyond its kind (native mode, `Html.decorated`). Every default changes nothing, so a
 shell that does not know a field shows the node as before. -/
 structure Decor where
@@ -131,8 +138,9 @@ inductive Html (msg : Type) where
   | tabs (labels icons : List String) (selected : Nat) (onSelect : Nat → msg) (children : List (Html msg))
   /-- A sheet presented over the screen; `onDismiss = none` cannot be swiped away. -/
   | sheet (title : String) (onDismiss : Option msg) (children : List (Html msg)) (largeTitle : Bool := false)
-  /-- An alert; its children are its buttons. -/
-  | alert (title message : String) (children : List (Html msg))
+  /-- An alert; its children are its buttons (a `cancel`-role one is its Cancel, a `primary` one its preferred
+  action). -/
+  | alert (title message : String) (children : List (Html msg)) (style : AlertStyle := .alert)
   /-- A choice among labelled options (event `select i`). -/
   | picker (label : String) (options : List String) (selected : Nat) (onSelect : Nat → msg)
   /-- A spinner with a caption. -/
@@ -185,7 +193,7 @@ def children : Html msg → List (Html msg)
   | .toolbar cs _ => cs
   | .tabs _ _ _ _ cs => cs
   | .sheet _ _ cs _ => cs
-  | .alert _ _ cs => cs
+  | .alert _ _ cs _ => cs
   | .picker .. => []
   | .progress .. => []
   | .icon .. => []
@@ -268,7 +276,7 @@ inductive Sat (P : msg → Prop) : Html msg → Prop
       (∀ n, P (f n)) → (∀ c ∈ cs, Sat P c) → Sat P (.tabs ls is sel f cs)
   | sheet (t : String) (d : Option msg) (cs : List (Html msg)) (lt : Bool) :
       (∀ m, d = some m → P m) → (∀ c ∈ cs, Sat P c) → Sat P (.sheet t d cs lt)
-  | alert (t m : String) (cs : List (Html msg)) : (∀ c ∈ cs, Sat P c) → Sat P (.alert t m cs)
+  | alert (t m : String) (cs : List (Html msg)) (st : AlertStyle) : (∀ c ∈ cs, Sat P c) → Sat P (.alert t m cs st)
   | picker (l : String) (os : List String) (sel : Nat) (f : Nat → msg) :
       (∀ n, P (f n)) → Sat P (.picker l os sel f)
   | progress (l : String) : Sat P (.progress l)

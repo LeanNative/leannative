@@ -46,6 +46,7 @@ theorem styles_complete (x : TextStyle) : x ∈ allStyles := by cases x <;> simp
 theorem roles_complete (x : ButtonRole) : x ∈ allRoles := by cases x <;> simp [allRoles]
 theorem tones_complete (x : Tone) : x ∈ allTones := by cases x <;> simp [allTones]
 theorem placements_complete (x : Placement) : x ∈ allPlacements := by cases x <;> simp [allPlacements]
+theorem alertStyles_complete (x : AlertStyle) : x ∈ allAlertStyles := by cases x <;> simp [allAlertStyles]
 theorem inputKinds_complete (x : InputKind) : x ∈ allInputKinds := by cases x <;> simp [allInputKinds]
 
 /-- One node of every kind, with a child wherever it can have one. -/
@@ -53,7 +54,7 @@ def samples : List Wire :=
   let k := [Wire.divider]
   [ .text "t" .caption, .col k, .row k, .button "b" .primary false, .field "p" "v" true, .toggle "l" true, .divider,
     .spacer, .input .secure "l" "p" "v" true, .list k, .section "h" "f" k, .labeled "l" "v", .screen "t" true k true false 2,
-    .toolbar k .confirm, .tabs ["a"] ["i"] 1 k, .sheet "t" true k true, .alert "t" "m" k, .picker "l" ["o"] 0, .progress "l",
+    .toolbar k .confirm, .tabs ["a"] ["i"] 1 k, .sheet "t" true k true, .alert "t" "m" k .actionSheet, .picker "l" ["o"] 0, .progress "l",
     .icon "n", .qr "q", .share "l" "t" true, .link "l" "u", .page "p", .empty "t" "i" "m" k, .disclosure "t" true k,
     .stepper "l" 1 0 2 "d" ]
 

@@ -21,7 +21,7 @@ inductive Wire where
   | toolbar (children : List Wire) (placement : Placement := .trailing)
   | tabs (labels icons : List String) (selected : Nat) (children : List Wire)
   | sheet (title : String) (dismissable : Bool) (children : List Wire) (largeTitle : Bool := false)
-  | alert (title message : String) (children : List Wire)
+  | alert (title message : String) (children : List Wire) (style : AlertStyle := .alert)
   | picker (label : String) (options : List String) (selected : Nat)
   | progress (label : String)
   | icon (name : String)
@@ -57,7 +57,7 @@ def children : Wire → List Wire
   | .toolbar cs _ => cs
   | .tabs _ _ _ cs => cs
   | .sheet _ _ cs _ => cs
-  | .alert _ _ cs => cs
+  | .alert _ _ cs _ => cs
   | .picker .. => []
   | .progress .. => []
   | .icon .. => []
