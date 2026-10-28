@@ -66,10 +66,63 @@ for the background-task, CloudKit, iCloud Keychain and SOCKS capabilities and lo
 system events; `examples/native-demo/socks_probe.py` is the SOCKS5 proxy its HTTP probe expects at
 127.0.0.1:1080 (it logs whether the hostname arrived unresolved, ATYP 3).
 
-**Retargeting.** Lean ships its runtime and standard library as macOS arm64 static libraries. The
-script copies them and rewrites each object's `LC_BUILD_VERSION` (platform 7 = iOS Simulator,
-2 = iOS) — `scripts/retarget_ar.py`. Lean does not support this. Verified on the iOS Simulator
-(GMP big numbers, tasks, libuv TCP, capabilities); a device build links but has not been run.
+**Retargeting.** Lean ships its runtime and standard library as macOS static libraries for the host's
+architecture (arm64 here). `ios_lean_sources.sh <app> <root> <out> iossim|ios|maccatalyst` copies them and
+rewrites each object's `LC_BUILD_VERSION` (platform 7 = iOS Simulator, 2 = iOS, 6 = Mac Catalyst; minos
+17.0, the deployment target) — `scripts/retarget_ar.py`. Lean does not support this. `<out>/lib/.platform`
+records the platform the libraries were made for, and a run for another platform makes them again, so one
+`build/` serves every platform in turn. Verified on the iOS Simulator (GMP big numbers, tasks, libuv TCP,
+capabilities) and under Mac Catalyst on both architectures; a device build links but has not been run.
+
+**Mac Catalyst** (`maccatalyst`) builds a universal app, arm64 + x86_64. The x86_64 half of each library
+comes from Lean's official macOS x86_64 release of the same version, which only its `lib/` archives are
+taken from (nothing from it runs):
+
+```
+framework/native/scripts/fetch_lean_x86_64.sh ~/lean-x86_64        # downloads lean-4.35.0-darwin.tar.zst,
+export LEAN_X86_64_PREFIX=~/lean-x86_64/lean-4.35.0-darwin          # checks its SHA-256, keeps lib/ + include/
+framework/native/scripts/ios_lean_sources.sh <app> <Root> <app>/ios/build maccatalyst
+```
+
+(v4.35.0: `https://github.com/leanprover/lean4/releases/download/v4.35.0/lean-4.35.0-darwin.tar.zst`,
+SHA-256 `0b43be5c7ecfb36016566a41005ab62bdb04743e6bfd5837e45f796ef4750b4e`, GitHub's published digest; a
+new toolchain needs its checksum added to the script.) The script refuses a prefix whose `version.h`
+differs from the toolchain's in anything but the platform, retargets both architectures to platform 6 and
+`lipo`s them, so `-lLean … -lgmp` and `LIBRARY_SEARCH_PATHS` stay as they are. The app's project.yml adds
+
+```yaml
+SUPPORTS_MACCATALYST: YES
+DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO   # the iOS bundle id (one app, one iCloud container)
+SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+"CODE_SIGN_IDENTITY[sdk=macosx*]": "-"             # ad-hoc, to run locally; a team identity to ship
+```
+
+and builds with `-destination 'generic/platform=macOS,variant=Mac Catalyst'` (both architectures; the app
+is at `…/Debug-maccatalyst/<App>.app`, its executable under `Contents/MacOS`). The generated C and the shim
+have no architecture assumptions. Under Catalyst the window is resizable down to 390×640 points
+(`sizeRestrictions`), and the privacy cover goes up only in the background: a Mac window is inactive
+whenever another app is in front, and the Mac takes no app-switcher snapshots.
+
+| capability | Mac Catalyst (native-demo, ad-hoc signed, arm64 and x86_64 under Rosetta) |
+|---|---|
+| `auth` | LocalAuthentication is available (Touch ID or the login password); not exercised headless |
+| `keychain.*` | Catalyst uses the data-protection keychain: an ad-hoc build has no keychain access group, so writes answer `status: -34018` (errSecMissingEntitlement) and reads `null`; a build signed with a team identity has one |
+| `clipboard.*`, `paths`, `documents`, `exclude-from-backup`, `open`, `build` | available (UIKit's pasteboard is the Mac's) |
+| `http.get` | available, SOCKS included (the SOCKS probe answers 200 with ATYP 3) |
+| `ble.*` | CoreBluetooth is available; the app declares `NSBluetoothAlwaysUsageDescription` as on iOS |
+| `bgtask.*` | handlers register, but the Mac runs no background tasks: `bgtask.schedule` answers `unavailable` (the system's `notPermitted`, renamed), `refreshStatus` answers what UIKit says (`available`) |
+| `cloudkit.*` | available with the entitlement; the check reads it from the code signature (a Mac executable has no `__TEXT,__entitlements`), on both slices of a universal binary; ad-hoc builds cannot carry iCloud entitlements, so they answer `missingEntitlement` |
+| view nodes | UIKit as on iPad: `share` presents as a popover from its button; `tabs` are UIKit's tab bar controller, which Catalyst may show in the window's toolbar |
+
+**Headless runs.** A Debug build of any native app draws its window into the PNG named by
+`ELMLEAN_SNAPSHOT` (launch environment) half a second after each render, for runs that cannot capture the
+screen; native-demo with `NATIVEDEMO_SELFTEST=1` runs the TCP echo and every probe at launch and prints
+each answer to stdout:
+
+```
+open -n --arch x86_64 --env NATIVEDEMO_SELFTEST=1 --env ELMLEAN_SNAPSHOT=/tmp/demo.png \
+  --stdout /tmp/demo.out ios/build/dd-catalyst/Build/Products/Debug-maccatalyst/NativeDemo.app
+```
 
 **`lean_initialize`.** Modules that import anything under `Lean` (ElmLean's JSON uses
 `Lean.Data.Json`) call `lean_initialize()` first. The toolchain's version starts the whole
