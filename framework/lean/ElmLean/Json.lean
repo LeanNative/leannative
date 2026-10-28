@@ -36,6 +36,8 @@ def ButtonRole.str : ButtonRole → String
   | .plain => "plain"
   | .primary => "primary"
   | .destructive => "destructive"
+  | .secondary => "secondary"
+  | .cancel => "cancel"
 
 def InputKind.str : InputKind → String
   | .plain => "plain"

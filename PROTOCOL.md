@@ -75,7 +75,7 @@ Error precedence: `bad-json` > `stale` > `bad-path` > `no-handler`.
 | text | `{"t":"text","s":"…","style":"title"\|"body"\|"caption"}` (native mode adds `"largeTitle"`, `"title3"`, `"headline"`, `"subheadline"`, `"callout"`, `"footnote"`, `"caption2"`) |
 | column | `{"t":"col","c":[…]}` |
 | row | `{"t":"row","c":[…]}` |
-| button | `{"t":"button","label":"…","role":"plain"\|"primary"\|"destructive","enabled":true\|false}` |
+| button | `{"t":"button","label":"…","role":"plain"\|"primary"\|"destructive","enabled":true\|false}` (native mode adds the roles `"secondary"` and `"cancel"`) |
 | field | `{"t":"field","placeholder":"…","value":"…","submits":true\|false}` |
 | toggle | `{"t":"toggle","label":"…","on":true\|false}` |
 | divider | `{"t":"divider"}` |

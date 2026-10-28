@@ -77,7 +77,7 @@ def nodes : List NodeKind :=
   { tag := "button", fields := [str "label", enum "role" "Role" "plain", bool "enabled" true],
     render := [
       .l "if ([box.mode isEqualToString:@\"cell\"]) ELPin(ELRowButton(n, path), box, UIEdgeInsetsZero);",
-      .l "else ELPinLeading(ELButton(n, path), box);"] },
+      .l "else ELPinLeading(ELButton(n, path, box.mode), box);"] },
   { tag := "field", fields := [str "placeholder", str "value", bool "submits"],
     render := [
       .l "ELBuildInput(box, @\"plain\", @\"\", n[@\"placeholder\"], n[@\"value\"], [n[@\"submits\"] boolValue]);",
@@ -230,11 +230,13 @@ def nodes : List NodeKind :=
             .l "ELPin(ELLabel(n[@\"text\"], @\"body\"), box, UIEdgeInsetsZero);"])] "}"] },
   { tag := "share", fields := [str "label", str "text", bool "file"],
     render := [
-      .l "UIButtonConfiguration *c = UIButtonConfiguration.plainButtonConfiguration;",
+      .l "// a share button looks like the app's other buttons where it is, with the system's share symbol",
+      .l "NSMutableDictionary *decor = [n[@\"decor\"] mutableCopy];",
+      .l "if ([decor[@\"symbol\"] length] == 0) decor[@\"symbol\"] = @\"square.and.arrow.up\";",
+      .l "BOOL row = [box.mode isEqualToString:@\"cell\"];",
+      .l "UIButtonConfiguration *c = ELButtonStyle(row ? @\"plain\" : @\"secondary\", decor, row ? @\"\" : box.mode);",
+      .l "if (row) { c.contentInsets = NSDirectionalEdgeInsetsZero; c.imagePadding = 12; }",
       .l "c.title = n[@\"label\"];",
-      .l "c.image = [UIImage systemImageNamed:@\"square.and.arrow.up\"];",
-      .l "c.imagePadding = 6;",
-      .l "c.contentInsets = NSDirectionalEdgeInsetsZero;",
       .l "BOOL file = [n[@\"file\"] boolValue];",
       .l "NSString *text = n[@\"text\"];",
       .l "__block UIButton *b = nil;",
@@ -243,7 +245,8 @@ def nodes : List NodeKind :=
           .l "UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:@[item] applicationActivities:nil];",
           .l "share.popoverPresentationController.sourceView = b;",
           .l "[ELTop(ELController(b)) presentViewController:share animated:YES completion:nil];"] "}]];",
-      .l "ELPinLeading(b, box);"] },
+      .l "if (row) { b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading; ELPin(b, box, UIEdgeInsetsZero); }",
+      .l "else ELPinLeading(b, box);"] },
   { tag := "link", fields := [str "label", str "url"],
     render := [
       .l "NSURL *url = [NSURL URLWithString:n[@\"url\"]];",
@@ -346,7 +349,7 @@ def unknownArm : List Stmt := [
 def allStyles : List TextStyle :=
   [.title, .body, .caption, .largeTitle, .title3, .headline, .subheadline, .callout, .footnote, .caption2]
 def allTones : List Tone := [.standard, .secondary, .tint, .positive, .negative, .warning]
-def allRoles : List ButtonRole := [.plain, .primary, .destructive]
+def allRoles : List ButtonRole := [.plain, .primary, .destructive, .secondary, .cancel]
 def allInputKinds : List InputKind := [.plain, .secure, .multiline, .number, .decimal]
 
 /-- (name, values) of each string enum a node field takes. -/

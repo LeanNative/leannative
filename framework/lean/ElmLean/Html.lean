@@ -65,6 +65,11 @@ inductive ButtonRole where
   | plain
   | primary
   | destructive
+  -- native mode
+  /-- a side action beside a primary one (tinted; Liquid Glass on iOS 26) -/
+  | secondary
+  /-- dismisses without doing anything: an alert's Cancel, a sheet's close control in its toolbar -/
+  | cancel
   deriving Repr, DecidableEq, Inhabited
 
 /-- What a text input is for (native mode): the renderer picks the control and keyboard. -/
