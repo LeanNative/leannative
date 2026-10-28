@@ -31,7 +31,7 @@ theorem Html.Sat.of_forall {P : Msg → Prop} (hP : ∀ m, P m) : ∀ h : Html M
   | .screen t b cs r lt d => .screen t b cs r lt d (fun m _ => hP m) (fun m _ => hP m) fun c _ => Html.Sat.of_forall hP c
   | .toolbar cs p => .toolbar cs p fun c _ => Html.Sat.of_forall hP c
   | .tabs ls is sel f cs => .tabs ls is sel f cs (fun _ => hP _) fun c _ => Html.Sat.of_forall hP c
-  | .sheet t d cs lt => .sheet t d cs lt (fun m _ => hP m) fun c _ => Html.Sat.of_forall hP c
+  | .sheet t d cs lt sz => .sheet t d cs lt sz (fun m _ => hP m) fun c _ => Html.Sat.of_forall hP c
   | .alert t m cs st => .alert t m cs st fun c _ => Html.Sat.of_forall hP c
   | .picker l os sel f => .picker l os sel f fun _ => hP _
   | .progress l => .progress l

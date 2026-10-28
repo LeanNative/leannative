@@ -34,6 +34,10 @@ def Placement.str : Placement → String
   | .confirm => "confirm"
   | .bottom => "bottom"
 
+def SheetSize.str : SheetSize → String
+  | .large => "large"
+  | .medium => "medium"
+
 def AlertStyle.str : AlertStyle → String
   | .alert => "alert"
   | .actionSheet => "actionSheet"
@@ -86,8 +90,9 @@ def Wire.toJson : Wire → Json
   | .tabs ls is sel cs =>
     Json.mkObj [("t", Json.str "tabs"), ("labels", strs ls), ("icons", strs is), ("selected", Lean.toJson sel),
                 ("c", Json.arr (cs.map Wire.toJson).toArray)]
-  | .sheet t d cs lt =>
+  | .sheet t d cs lt sz =>
     Json.mkObj [("t", Json.str "sheet"), ("title", Json.str t), ("dismissable", Json.bool d), ("largeTitle", Json.bool lt),
+                ("size", Json.str sz.str),
                 ("c", Json.arr (cs.map Wire.toJson).toArray)]
   | .alert t m cs st =>
     Json.mkObj [("t", Json.str "alert"), ("title", Json.str t), ("message", Json.str m), ("style", Json.str st.str),

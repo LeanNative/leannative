@@ -162,7 +162,7 @@ def nodes : List NodeKind :=
   { tag := "tabs", fields := [strs "labels", strs "icons", int "selected", kids],
     render := [
       .l "ELBuildColumn(box);"] },
-  { tag := "sheet", fields := [str "title", bool "dismissable", bool "largeTitle", kids], overlay := true,
+  { tag := "sheet", fields := [str "title", bool "dismissable", bool "largeTitle", enum "size" "SheetSize" "large", kids], overlay := true,
     render := [
       .l "ELBuildSheet(box);"] },
   { tag := "alert", fields := [str "title", str "message", enum "style" "AlertStyle" "alert", kids], overlay := true,
@@ -228,7 +228,11 @@ def nodes : List NodeKind :=
             .l "v.accessibilityLabel = @\"QR code\";",
             .l "[NSLayoutConstraint activateConstraints:@[",
             .l "    [v.widthAnchor constraintEqualToConstant:240], [v.heightAnchor constraintEqualToAnchor:v.widthAnchor]]];",
-            .l "ELPinLeading(v, box);"]), ("} else {", [
+            .l "// centred in its row, as a QR code is shown to be scanned",
+            .l "v.translatesAutoresizingMaskIntoConstraints = NO;",
+            .l "[box addSubview:v];",
+            .l "[NSLayoutConstraint activateConstraints:@[[v.centerXAnchor constraintEqualToAnchor:box.centerXAnchor],",
+            .l "    [v.topAnchor constraintEqualToAnchor:box.topAnchor constant:8], [v.bottomAnchor constraintEqualToAnchor:box.bottomAnchor constant:-8]]];"]), ("} else {", [
             .l "ELPin(ELLabel(n[@\"text\"], @\"body\"), box, UIEdgeInsetsZero);"])] "}"] },
   { tag := "share", fields := [str "label", str "text", bool "file"],
     render := [
@@ -270,25 +274,20 @@ def nodes : List NodeKind :=
       .l "fill.active = YES;"] },
   { tag := "empty", fields := [str "title", str "icon", str "message", kids],
     render := [
-      .l "UIStackView *s = ELStack(UILayoutConstraintAxisVertical, 8);",
-      .l "s.alignment = UIStackViewAlignmentCenter;",
-      .l "UIImageView *image = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:n[@\"icon\"]]];",
-      .l "image.preferredSymbolConfiguration = [UIImageSymbolConfiguration configurationWithPointSize:44];",
-      .l "image.tintColor = UIColor.secondaryLabelColor;",
-      .l "UILabel *title = ELLabel(n[@\"title\"], @\"title\");",
-      .l "title.textAlignment = NSTextAlignmentCenter;",
-      .l "UILabel *message = ELLabel(n[@\"message\"], @\"body\");",
-      .l "message.textColor = UIColor.secondaryLabelColor;",
-      .l "message.textAlignment = NSTextAlignmentCenter;",
+      .l "// the system's empty state (symbol, title, message), the actions under it",
+      .l "UIStackView *s = ELStack(UILayoutConstraintAxisVertical, 0);",
+      .l "UIContentUnavailableView *empty = [[UIContentUnavailableView alloc] initWithConfiguration:UIContentUnavailableConfiguration.emptyConfiguration];",
       .l "UIStackView *actions = ELStack(UILayoutConstraintAxisVertical, 12);",
       .l "actions.alignment = UIStackViewAlignmentCenter;",
-      .l "for (UIView *v in @[image, title, message, actions]) [s addArrangedSubview:v];",
-      .l "[s setCustomSpacing:16 afterView:message];",
-      .l "ELPin(s, box, UIEdgeInsetsMake(24, 0, 24, 0));",
+      .l "[s addArrangedSubview:empty];",
+      .l "[s addArrangedSubview:actions];",
+      .l "ELPin(s, box, UIEdgeInsetsMake(0, 0, 24, 0));",
       b "box.update = ^BOOL(ELBox *b, NSDictionary *m) {" [
-          .l "image.image = [UIImage systemImageNamed:m[@\"icon\"]];",
-          .l "title.text = m[@\"title\"];",
-          .l "message.text = m[@\"message\"];",
+          .l "UIContentUnavailableConfiguration *c = UIContentUnavailableConfiguration.emptyConfiguration;",
+          .l "c.image = [UIImage systemImageNamed:m[@\"icon\"]];",
+          .l "c.text = m[@\"title\"];",
+          .l "c.secondaryText = m[@\"message\"];",
+          .l "empty.configuration = c;",
           .l "ELReconcile(actions, m[@\"c\"], ELChildPaths(b.path, [m[@\"c\"] count]), ELInner(b));",
           .l "return YES;"] "};"] },
   { tag := "disclosure", fields := [str "title", bool "expanded", kids],
@@ -352,6 +351,7 @@ def allStyles : List TextStyle :=
   [.title, .body, .caption, .largeTitle, .title3, .headline, .subheadline, .callout, .footnote, .caption2]
 def allPlacements : List Placement := [.trailing, .leading, .cancel, .confirm, .bottom]
 def allAlertStyles : List AlertStyle := [.alert, .actionSheet]
+def allSheetSizes : List SheetSize := [.large, .medium]
 def allTones : List Tone := [.standard, .secondary, .tint, .positive, .negative, .warning]
 def allRoles : List ButtonRole := [.plain, .primary, .destructive, .secondary, .cancel]
 def allInputKinds : List InputKind := [.plain, .secure, .multiline, .number, .decimal]
@@ -360,7 +360,7 @@ def allInputKinds : List InputKind := [.plain, .secure, .multiline, .number, .de
 def stringEnums : List (String × List String) :=
   [ ("Role", allRoles.map (·.str)), ("Style", allStyles.map (·.str)), ("InputKind", allInputKinds.map (·.str)),
     ("Tone", allTones.map (·.str)), ("Placement", allPlacements.map (·.str)),
-    ("AlertStyle", allAlertStyles.map (·.str)) ]
+    ("AlertStyle", allAlertStyles.map (·.str)), ("SheetSize", allSheetSizes.map (·.str)) ]
 
 /-! The events (PROTOCOL.md, "Client → CLI"): name, and the Objective-C parameter and its JSON value if the
 event carries a `value`. -/
