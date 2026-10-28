@@ -56,6 +56,8 @@ inductive Cmd where
   | auth
   | echo (text : String)
   | probe (label name : String) (args : Json)
+  /-- at launch: with `NATIVEDEMO_SELFTEST` set, the TCP echo and every probe, answers printed -/
+  | selftest
   deriving ToJson
 
 /-- The Probes tab: a label, a capability and its arguments. The background task identifiers are the
@@ -183,9 +185,24 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
       let r ← try echoOnce 48334 text catch e => pure s!"failed: {e}"
       fx.post (.echoed r)
   | .probe l n a => fx.cap n a (.probed l)
+  | .selftest => do
+      -- a headless check for runs nobody clicks through (`NATIVEDEMO_SELFTEST=1` in the launch
+      -- environment): the TCP echo and every probe in order, each answer printed to stdout and logged
+      let some _ ← IO.getEnv "NATIVEDEMO_SELFTEST" | pure ()
+      discard <| IO.asTask do
+        let out ← IO.getStdout
+        let say (s : String) : IO Unit := do out.putStrLn s!"selftest: {s}"; out.flush
+        let r ← try echoOnce 48335 "selftest" catch e => pure s!"failed: {e}"
+        say s!"TCP echo: {r}"
+        fx.post (.echoed r)
+        for (l, n, a) in probes do
+          let j ← IO.wait (← fx.ask n a)
+          say s!"{l}: {j.compress}"
+          fx.post (.probed l j)
+        say "done"
 
 def app : Native.App Model Msg Cmd Host :=
-  { init := { count := 0, ticks := 0, ticking := false, log := [] }, update, view, cmds, host := Msg.host, perform,
+  { init := { count := 0, ticks := 0, ticking := false, log := [] }, update, view, cmds, host := Msg.host, perform, boot := [.selftest],
     -- every system event but the scene phase is logged (the Probes tab shows bgtask launches and expirations)
     system := fun j => if (j.getObjVal? "scene").isOk then none else some (.system j) }
 
