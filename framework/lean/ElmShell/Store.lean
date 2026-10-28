@@ -8,6 +8,27 @@ set_option maxRecDepth 8000 in
 def storeBody : List Stmt := [
     .pp "#import \"ElmLeanShell.h\"",
     .blank,
+    .l "/// `Wire.accepts` at a path of the last view (ElmLean/Wire.lean): whether the node there takes the event.",
+    .l "/// The shell sends nothing else, so a tap on something without an action (a list row that only shows",
+    .l "/// text, a disabled button, a screen without pull to refresh) is no event at all, never a `no-handler`.",
+    b "static BOOL ELAccepts(NSDictionary *view, ELPath *path, NSDictionary *event) {" [
+        .l "NSDictionary *n = view;",
+        b "for (NSNumber *i in path) {" [
+            .l "NSArray *c = [n[@\"c\"] isKindOfClass:NSArray.class] ? n[@\"c\"] : @[];",
+            .l "if (![i isKindOfClass:NSNumber.class] || i.integerValue < 0 || (NSUInteger)i.integerValue >= c.count) return NO;",
+            .l "n = c[(NSUInteger)i.integerValue];",
+            .l "if (![n isKindOfClass:NSDictionary.class]) return NO;"],
+        .l "NSString *t = n[@\"t\"], *k = event[@\"k\"];",
+        .l "if ([k isEqualToString:@\"click\"]) return ([t isEqualToString:@\"button\"] && [n[@\"enabled\"] boolValue])",
+        .l "    || ([t isEqualToString:@\"screen\"] && [n[@\"refreshable\"] boolValue]);",
+        .l "if ([k isEqualToString:@\"input\"]) return [t isEqualToString:@\"field\"] || [t isEqualToString:@\"input\"];",
+        .l "if ([k isEqualToString:@\"submit\"]) return ([t isEqualToString:@\"field\"] || [t isEqualToString:@\"input\"]) && [n[@\"submits\"] boolValue];",
+        .l "if ([k isEqualToString:@\"toggle\"]) return [t isEqualToString:@\"toggle\"] || [t isEqualToString:@\"disclosure\"];",
+        .l "if ([k isEqualToString:@\"select\"]) return [@[@\"tabs\", @\"picker\", @\"stepper\"] containsObject:t];",
+        .l "if ([k isEqualToString:@\"dismiss\"]) return ([t isEqualToString:@\"screen\"] && [n[@\"back\"] boolValue])",
+        .l "    || ([t isEqualToString:@\"sheet\"] && [n[@\"dismissable\"] boolValue]);",
+        .l "return NO;"],
+    .blank,
     .l "// Every call into Lean happens on the main thread except `elmlean_wait`, which blocks a background thread",
     .l "// until Lean has something queued; the main thread then drains it.",
     b "@implementation ELStore {" [
@@ -42,6 +63,7 @@ def storeBody : List Stmt := [
         .l "[thread start];"],
     .blank,
     b "- (void)send:(ELPath *)path event:(NSDictionary *)event {" [
+        .l "if (!ELAccepts(_view, path, event)) return;",
         .l "NSString *line = [self line:@{@\"seq\": @(_seq), @\"path\": path, @\"event\": event}];",
         .l "if (!line) return;",
         .l "[self apply:[self take:elmlean_event(line.UTF8String)]];"],
