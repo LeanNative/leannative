@@ -114,17 +114,21 @@ def capabilities : List Capability :=
       .l "if (ok && [ELArgNumber(args, @\"complete\") boolValue])",
       .l "    ok = [NSFileManager.defaultManager setAttributes:@{NSFileProtectionKey: NSFileProtectionComplete} ofItemAtPath:url.path error:nil];",
       .l "answer(@{@\"ok\": @(ok)});"] },
-  { name := "http.get", args := "`url`, `maxBytes`, `timeout` (s), `accept`?", result := "`{\"status\":…,\"body\":hex}` or `{\"error\":…}`; ephemeral session, no cookies or cache, redirects only within the same host and never from https to http",
+  { name := "http.get", args := "`url`, `maxBytes`, `timeout` (s), `accept`?, `socks`? (`{\"host\",\"port\"}`)",
+    result := "`{\"status\":…,\"body\":hex}` or `{\"error\":…}` (`bad-url`, `bad-proxy`, `tooLarge`, `response`, or the system's description); ephemeral session, no cookies or cache, redirects only within the same host and never from https to http; with `socks`, through that SOCKS5 proxy only (names resolved by the proxy, no direct fallback)",
     body := [
       .l "NSURL *url = [NSURL URLWithString:ELArgString(args, @\"url\") ?: @\"\"];",
       .l "NSString *scheme = url.scheme.lowercaseString ?: @\"\";",
       .l "if (!url || !([scheme isEqualToString:@\"http\"] || [scheme isEqualToString:@\"https\"])) { answer(@{@\"error\": @\"bad-url\"}); return; }",
+      .l "NSURLSession *session = [ELHTTPFetch session:args[@\"socks\"]];",
+      .l "if (!session) { answer(@{@\"error\": @\"bad-proxy\"}); return; }",
       .l "NSInteger maxBytes = ELArgNumber(args, @\"maxBytes\") ? [ELArgNumber(args, @\"maxBytes\") integerValue] : 1000000;",
       .l "NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];",
-      .l "request.timeoutInterval = ELArgNumber(args, @\"timeout\") ? [ELArgNumber(args, @\"timeout\") doubleValue] : 30;",
+      .l "BOOL proxied = args[@\"socks\"] && args[@\"socks\"] != NSNull.null;",
+      .l "request.timeoutInterval = ELArgNumber(args, @\"timeout\") ? [ELArgNumber(args, @\"timeout\") doubleValue] : (proxied ? 90 : 30);",
       .l "NSString *accept = ELArgString(args, @\"accept\");",
       .l "if (accept) [request setValue:accept forHTTPHeaderField:@\"Accept\"];",
-      b "[[ELHTTPFetch.session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {" [
+      b "[[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {" [
           .l "NSDictionary *result;",
           .blk [("if (error) {", [
                 .l "result = @{@\"error\": error.localizedDescription};"]), ("} else if ([response isKindOfClass:NSHTTPURLResponse.class] && data) {", [
@@ -178,27 +182,57 @@ def capsBefore : List Stmt := [
     .pp "#import <LocalAuthentication/LocalAuthentication.h>",
     .pp "#import <Security/Security.h>",
     .pp "#import <CoreBluetooth/CoreBluetooth.h>",
+    .pp "#import <Network/Network.h>",
+    .pp "#import <Network/NSURLSession+Network.h>",
     .blank,
-    .l "/// One ephemeral URLSession for `http.get`: no cookies, no cache, redirects only within the same host and",
-    .l "/// never from https down to http.",
+    .l "/// The ephemeral URLSessions of `http.get`: no cookies, no cache, redirects only within the same host and",
+    .l "/// never from https down to http. One shared session without a proxy, and one per SOCKS5 proxy (`host:port`),",
+    .l "/// kept for the life of the app (a session is never invalidated while a request might still use it).",
     .l "@interface ELHTTPFetch : NSObject <NSURLSessionTaskDelegate>",
-    .l "+ (NSURLSession *)session;",
+    .l "+ (nullable NSURLSession *)session:(nullable id)socks;",
     .l "@end",
     .blank,
     .l "@implementation ELHTTPFetch",
     .blank,
-    b "+ (NSURLSession *)session {" [
-        .l "static NSURLSession *session;",
+    b "+ (NSURLSessionConfiguration *)configuration {" [
+        .l "NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];",
+        .l "config.HTTPShouldSetCookies = NO;",
+        .l "config.HTTPCookieStorage = nil;",
+        .l "config.URLCache = nil;",
+        .l "config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;",
+        .l "config.timeoutIntervalForResource = 120;",
+        .l "return config;"],
+    .blank,
+    .l "/// The session for a request: the shared one when `socks` is absent, else the one for that proxy",
+    .l "/// (`{\"host\":…,\"port\":…}`); nil when `socks` is not a host and a port in 1…65535.",
+    b "+ (nullable NSURLSession *)session:(nullable id)socks {" [
+        .l "static NSURLSession *direct;",
+        .l "static NSMutableDictionary<NSString *, NSURLSession *> *proxied;",
         .l "static dispatch_once_t once;",
         b "dispatch_once(&once, ^{" [
-            .l "NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];",
-            .l "config.HTTPShouldSetCookies = NO;",
-            .l "config.HTTPCookieStorage = nil;",
-            .l "config.URLCache = nil;",
-            .l "config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;",
-            .l "config.timeoutIntervalForResource = 120;",
-            .l "session = [NSURLSession sessionWithConfiguration:config delegate:[ELHTTPFetch new] delegateQueue:nil];"] "});",
-        .l "return session;"],
+            .l "direct = [NSURLSession sessionWithConfiguration:[self configuration] delegate:[ELHTTPFetch new] delegateQueue:nil];",
+            .l "proxied = [NSMutableDictionary dictionary];"] "});",
+        .l "if (!socks || socks == NSNull.null) return direct;",
+        .l "if (![socks isKindOfClass:NSDictionary.class]) return nil;",
+        .l "NSString *host = ELArgString(socks, @\"host\");",
+        .l "NSNumber *port = ELArgNumber(socks, @\"port\");",
+        .l "if (host.length == 0 || !port || port.doubleValue != (double)port.integerValue || port.integerValue < 1 || port.integerValue > 65535) return nil;",
+        .l "NSString *key = [NSString stringWithFormat:@\"%@:%ld\", host, (long)port.integerValue];",
+        b "@synchronized (proxied) {" [
+            .l "NSURLSession *session = proxied[key];",
+            .l "if (session) return session;",
+            .l "NSURLSessionConfiguration *config = [self configuration];",
+            .l "// a SOCKS5 proxy with the hostname sent to it (the proxy resolves it), and no direct fallback",
+            .l "nw_endpoint_t endpoint = nw_endpoint_create_host(host.UTF8String, [NSString stringWithFormat:@\"%ld\", (long)port.integerValue].UTF8String);",
+            .l "nw_proxy_config_t proxy = nw_proxy_config_create_socksv5(endpoint);",
+            .l "nw_proxy_config_set_failover_allowed(proxy, false);",
+            .l "config.proxyConfigurations = @[proxy];",
+            .l "// a proxy (Tor, say) is slower than a direct connection",
+            .l "config.timeoutIntervalForRequest = 90;",
+            .l "config.timeoutIntervalForResource = 180;",
+            .l "session = [NSURLSession sessionWithConfiguration:config delegate:[ELHTTPFetch new] delegateQueue:nil];",
+            .l "proxied[key] = session;",
+            .l "return session;"]],
     .blank,
     .l "- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task willPerformHTTPRedirection:(NSHTTPURLResponse *)response",
     b "        newRequest:(NSURLRequest *)request completionHandler:(void (^)(NSURLRequest *))completionHandler {" [
@@ -208,12 +242,6 @@ def capsBefore : List Stmt := [
         .l "completionHandler(sameHost && !downgrade ? request : nil);"],
     .blank,
     .l "@end",
-    .blank,
-    b "static NSString *ELArgString(NSDictionary *args, NSString *k) {" [
-        .l "return [args[k] isKindOfClass:NSString.class] ? args[k] : nil;"],
-    .blank,
-    b "static NSNumber *ELArgNumber(NSDictionary *args, NSString *k) {" [
-        .l "return [args[k] isKindOfClass:NSNumber.class] ? args[k] : nil;"],
     .blank,
     .l "@implementation ELCapabilities",
     .blank,
@@ -231,6 +259,16 @@ def capsBefore : List Stmt := [
         .l "if ([self synchronizable:args]) query[(__bridge id)kSecAttrSynchronizable] = @YES;",
         .l "return query;"],
     .blank]
+
+/-- The arguments of a request, by kind (nil when absent or of another JSON kind). -/
+def argHelpers : List Stmt := [
+    b "static NSString *ELArgString(NSDictionary *args, NSString *k) {" [
+        .l "return [args[k] isKindOfClass:NSString.class] ? args[k] : nil;"],
+    .blank,
+    b "static NSNumber *ELArgNumber(NSDictionary *args, NSString *k) {" [
+        .l "return [args[k] isKindOfClass:NSNumber.class] ? args[k] : nil;"],
+    .blank,
+    ]
 
 set_option maxRecDepth 8000 in
 def bluetoothClass : List Stmt := [
@@ -551,7 +589,7 @@ def bluetoothClass : List Stmt := [
 def capsImports : Nat := (capsBefore.findIdx? fun | .l _ | .blk .. => true | _ => false).getD 0
 
 def capsFile : List Stmt :=
-  capsBefore.take capsImports ++ bluetoothClass ++ [.blank] ++ capsBefore.drop capsImports ++
+  capsBefore.take capsImports ++ argHelpers ++ bluetoothClass ++ [.blank] ++ capsBefore.drop capsImports ++
   [ b "- (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(NSDictionary *))answer {"
       [ ifChain "" (capabilities.map (fun c => (s!"[name isEqualToString:{lit c.name}]", c.body)) ++ [("", unknownCapability)]) ] ] ++
   [

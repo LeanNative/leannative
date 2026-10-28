@@ -96,7 +96,11 @@ matches only those; `set` takes raw bytes as `hex` in place of a UTF-8 `value`, 
 answers `{"hex":…|null}`, for keys that are not text),
 `clipboard.get/set` (`set` takes `localOnly` and `expiresIn` seconds: kept off Universal Clipboard and
 cleared after that time), `paths`, `exclude-from-backup` (with `complete`: also `FileProtectionType.complete`), `documents` (the Documents path, for Lean's file I/O), `http.get` (HTTPS through
-URLSession: ephemeral, same-host redirects only, never https→http — Lean's runtime has no TLS),
+URLSession: ephemeral, same-host redirects only, never https→http — Lean's runtime has no TLS; with
+`"socks":{"host":…,"port":…}` the request goes through that SOCKS5 proxy, a Tor daemon say: the hostname
+is sent to the proxy unresolved, there is no fallback to a direct connection, request and resource time
+out after 90 s and 180 s, and a host that is not a string or a port outside 1…65535 answers
+`{"error":"bad-proxy"}`),
 `open` (a URL outside the app), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
 `ble.connect` (a peripheral the system already holds connected, else the first a scan finds; answers its
 characteristics), `ble.subscribe` (notifications on; iOS pairs here, so it may wait on the user),
