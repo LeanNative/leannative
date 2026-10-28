@@ -112,7 +112,7 @@ whenever another app is in front, and the Mac takes no app-switcher snapshots.
 | `ble.*` | CoreBluetooth is available; the app declares `NSBluetoothAlwaysUsageDescription` as on iOS |
 | `bgtask.*` | handlers register, but the Mac runs no background tasks: `bgtask.schedule` answers `unavailable` (the system's `notPermitted`, renamed), `refreshStatus` answers what UIKit says (`available`) |
 | `cloudkit.*` | available with the entitlement; the check reads it from the code signature (a Mac executable has no `__TEXT,__entitlements`), on both slices of a universal binary; ad-hoc builds cannot carry iCloud entitlements, so they answer `missingEntitlement` |
-| view nodes | UIKit as on iPad: `share` presents as a popover from its button; `tabs` are UIKit's tab bar controller, which Catalyst may show in the window's toolbar |
+| view nodes | UIKit as on iPad: `share` and action-sheet `alert`s present as popovers from their control; `tabs` are UITabs in the sidebar-adaptable mode, a sidebar in the window; lists keep to a 720 pt column and other content to the readable width |
 
 **Headless runs.** A Debug build of any native app draws its window into the PNG named by
 `ELMLEAN_SNAPSHOT` (launch environment) half a second after each render, for runs that cannot capture the
