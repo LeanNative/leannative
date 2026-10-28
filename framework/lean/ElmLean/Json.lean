@@ -11,6 +11,26 @@ def TextStyle.str : TextStyle → String
   | .title => "title"
   | .body => "body"
   | .caption => "caption"
+  | .largeTitle => "largeTitle"
+  | .title3 => "title3"
+  | .headline => "headline"
+  | .subheadline => "subheadline"
+  | .callout => "callout"
+  | .footnote => "footnote"
+  | .caption2 => "caption2"
+
+def Tone.str : Tone → String
+  | .standard => "standard"
+  | .secondary => "secondary"
+  | .tint => "tint"
+  | .positive => "positive"
+  | .negative => "negative"
+  | .warning => "warning"
+
+/-- Every field, always (the shell decodes an absent one as its default). -/
+def Decor.toJson (d : Decor) : Json :=
+  Json.mkObj [("tone", Json.str d.tone.str), ("mono", Json.bool d.mono), ("badge", Json.bool d.badge),
+              ("centered", Json.bool d.centered)]
 
 def ButtonRole.str : ButtonRole → String
   | .plain => "plain"
@@ -71,6 +91,7 @@ def Wire.toJson : Wire → Json
     Json.mkObj [("t", Json.str "stepper"), ("label", Json.str l), ("value", Lean.toJson v), ("lo", Lean.toJson lo), ("hi", Lean.toJson hi),
                 ("detail", Json.str d)]
   | .identified i w => (Wire.toJson w).setObjVal! "id" (Json.str i)
+  | .decorated d w => (Wire.toJson w).setObjVal! "decor" d.toJson
 
 instance : ToJson Wire := ⟨Wire.toJson⟩
 

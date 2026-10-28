@@ -13,6 +13,7 @@ theorem Sat.children (hs : Sat P h) : ∀ c ∈ h.children, Sat P c := by
 theorem Sat.handle (hs : Sat P h) (e : Event) (m : msg) (hd : h.handle e = some m) : P m := by
   induction hs with
   | identified i h _ ih => exact ih (by simpa [Html.handle] using hd)
+  | decorated d h _ ih => exact ih (by simpa [Html.handle] using hd)
   | _ => cases e <;> simp [Html.handle] at hd <;> (try subst hd) <;>
     first | (apply_assumption <;> first | rfl | assumption) | solve_by_elim
 

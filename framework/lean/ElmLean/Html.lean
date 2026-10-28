@@ -3,10 +3,56 @@ import ElmLean.Event
 namespace ElmLean
 
 inductive TextStyle where
+  /-- a heading (Title 2, bold) -/
   | title
   | body
+  /-- small secondary text (Caption 1) -/
   | caption
+  -- native mode: the rest of the system's text styles
+  /-- the largest (Large Title, bold): a headline number -/
+  | largeTitle
+  | title3
+  | headline
+  | subheadline
+  | callout
+  /-- explanations under a control or in a section footer -/
+  | footnote
+  /-- the smallest secondary text (Caption 2) -/
+  | caption2
   deriving Repr, DecidableEq, Inhabited
+
+/-- A colour by meaning (native mode, `Decor.tone`); `standard` keeps the node's own. -/
+inductive Tone where
+  | standard
+  | secondary
+  /-- the app's tint -/
+  | tint
+  /-- green: money in, success -/
+  | positive
+  /-- red: money out, failure -/
+  | negative
+  /-- orange: a caution -/
+  | warning
+  deriving Repr, DecidableEq, Inhabited
+
+/-- How a node looks beyond its kind (native mode, `Html.decorated`). Every default changes nothing, so a
+shell that does not know a field shows the node as before. -/
+structure Decor where
+  tone : Tone := .standard
+  /-- monospaced text, wrapped at any character (addresses, txids, descriptors) -/
+  mono : Bool := false
+  /-- a text as a small capsule badge, in its tone -/
+  badge : Bool := false
+  /-- centred text (under a QR code, say) -/
+  centered : Bool := false
+  deriving Repr, DecidableEq, Inhabited
+
+/-- `outer`'s fields where they are set, else `inner`'s. -/
+def Decor.merge (inner outer : Decor) : Decor :=
+  { tone := if outer.tone == .standard then inner.tone else outer.tone
+    mono := inner.mono || outer.mono
+    badge := inner.badge || outer.badge
+    centered := inner.centered || outer.centered }
 
 inductive ButtonRole where
   | plain
@@ -85,6 +131,9 @@ inductive Html (msg : Type) where
   its own: it has `child`'s children and handlers, so paths and events pass through it, and on the wire it
   is `child`'s object with an `"id"` key. -/
   | identified (id : String) (child : Html msg)
+  /-- `child` drawn with `d` (native mode): like `identified` not a node of its own, so paths and events pass
+  through it; on the wire it is `child`'s object with a `"decor"` object. -/
+  | decorated (d : Decor) (child : Html msg)
 
 namespace Html
 
@@ -121,6 +170,7 @@ def children : Html msg → List (Html msg)
   | .disclosure _ _ _ cs => cs
   | .stepper .. => []
   | .identified _ h => h.children
+  | .decorated _ h => h.children
 
 /-- The node at a path of child indices. -/
 def at? : Html msg → List Nat → Option (Html msg)
@@ -143,6 +193,7 @@ def handle : Html msg → Event → Option msg
   | .disclosure _ _ f _, .toggle b => some (f b)
   | .stepper _ _ _ _ f _, .select n => some (f n)
   | .identified _ h, e => h.handle e
+  | .decorated _ h, e => h.handle e
   | _, _ => none
 
 /-- Dispatch an event addressed by path. -/
@@ -154,6 +205,7 @@ def countToggles : Html msg → Nat
   | .row cs => (cs.map countToggles).sum
   | .toggle .. => 1
   | .identified _ h => countToggles h
+  | .decorated _ h => countToggles h
   | _ => 0
 
 def toggleLabels : Html msg → List String
@@ -161,6 +213,7 @@ def toggleLabels : Html msg → List String
   | .row cs => (cs.map toggleLabels).flatten
   | .toggle l _ _ => [l]
   | .identified _ h => toggleLabels h
+  | .decorated _ h => toggleLabels h
   | _ => []
 
 /-- Every handler anywhere in the tree produces a message satisfying `P`. -/
@@ -202,6 +255,19 @@ inductive Sat (P : msg → Prop) : Html msg → Prop
       (∀ b, P (f b)) → (∀ c ∈ cs, Sat P c) → Sat P (.disclosure t e f cs)
   | stepper (l : String) (v lo hi : Nat) (f : Nat → msg) (d : String) : (∀ n, P (f n)) → Sat P (.stepper l v lo hi f d)
   | identified (i : String) (h : Html msg) : Sat P h → Sat P (.identified i h)
+  | decorated (d : Decor) (h : Html msg) : Sat P h → Sat P (.decorated d h)
+
+/-- `h` drawn with `d` as well: merged into a decoration `h` already has (through an identifier), so
+decorations compose (`(body s).tone .positive |>.mono`). -/
+def decor (d : Decor) : Html msg → Html msg
+  | .decorated d' h => .decorated (d'.merge d) h
+  | .identified i h => .identified i (decor d h)
+  | h => .decorated d h
+
+def tone (t : Tone) (h : Html msg) : Html msg := decor { tone := t } h
+def mono (h : Html msg) : Html msg := decor { mono := true } h
+def badge (h : Html msg) : Html msg := decor { badge := true } h
+def centered (h : Html msg) : Html msg := decor { centered := true } h
 
 end Html
 end ElmLean

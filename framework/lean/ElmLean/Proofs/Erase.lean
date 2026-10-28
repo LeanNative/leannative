@@ -10,6 +10,7 @@ variable {msg : Type}
 theorem children_toWire (h : Html msg) : (toWire h).children = h.children.map toWire := by
   cases h with
   | identified i h => simpa [toWire, children, Wire.children] using children_toWire h
+  | decorated d h => simpa [toWire, children, Wire.children] using children_toWire h
   | _ => simp [toWire, children, Wire.children]
 
 theorem at?_toWire (p : List Nat) :
@@ -25,6 +26,7 @@ theorem accepts_handle (n : Html msg) (e : Event) :
     (toWire n).accepts e = true ↔ (n.handle e).isSome := by
   cases n with
   | identified i n => simpa [toWire, Wire.accepts, handle] using accepts_handle n e
+  | decorated d n => simpa [toWire, Wire.accepts, handle] using accepts_handle n e
   | _ => cases e <;> simp [toWire, Wire.accepts, handle]
 
 /-- END-TO-END: the wire advertises `(p, e)` iff dispatching it yields a message. -/

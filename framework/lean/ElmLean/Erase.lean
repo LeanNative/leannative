@@ -32,5 +32,6 @@ def Html.toWire {msg : Type} : Html msg → Wire
   | .disclosure t e _ cs => .disclosure t e (cs.map toWire)
   | .stepper l v lo hi _ d => .stepper l v lo hi d
   | .identified i h => .identified i (toWire h)
+  | .decorated d h => .decorated d (toWire h)
 
 end ElmLean

@@ -72,7 +72,7 @@ Error precedence: `bad-json` > `stale` > `bad-path` > `no-handler`.
 
 | node | JSON |
 |---|---|
-| text | `{"t":"text","s":"…","style":"title"\|"body"\|"caption"}` |
+| text | `{"t":"text","s":"…","style":"title"\|"body"\|"caption"}` (native mode adds `"largeTitle"`, `"title3"`, `"headline"`, `"subheadline"`, `"callout"`, `"footnote"`, `"caption2"`) |
 | column | `{"t":"col","c":[…]}` |
 | row | `{"t":"row","c":[…]}` |
 | button | `{"t":"button","label":"…","role":"plain"\|"primary"\|"destructive","enabled":true\|false}` |
@@ -109,6 +109,14 @@ Any node may also carry `"id":"…"` (`Html.identified id child`, native mode): 
 which the shell sets as the node's `accessibilityIdentifier` (on its control, else its label, else its
 image). It is not a node of its own: the object is `child`'s, with `child`'s children and events, so
 paths and events pass through it.
+
+Any node may also carry `"decor":{"tone","mono","badge","centered"}` (`Html.decorated d child`, native mode):
+how it is drawn beyond its kind. `tone` is `"standard"` (the node's own colour), `"secondary"`, `"tint"`,
+`"positive"` (green), `"negative"` (red) or `"warning"` (orange); `mono` is monospaced text wrapped at any
+character; `badge` draws a text as a capsule in its tone; `centered` centres a text. Every field's default
+(`"standard"`, `false`) changes nothing, and a shell decodes an absent `decor` or field as its default, so
+old and new trees and shells read each other. Like `id` it is not a node: the object, children and events
+are `child`'s. `Html.decor` merges decorations, so `(body s).tone .positive |>.mono` is one `decor`.
 
 Events added with them: `{"k":"select","value":n}` (a tab, a picker option, a stepper value) and
 `{"k":"dismiss"}` (back from a screen, a sheet swiped away).

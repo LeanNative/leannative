@@ -7,7 +7,9 @@ import ElmShell.Grammar
   exactly the row's keys, each of the JSON kind the row decodes, and the row's tag;
 * `identified` is no row: every sample, identified, prints as itself plus a string `id` (which the shell
   decodes on any node, `idKey`);
-* the three string enums list every constructor (`*_complete`), so their Swift raw values are the
+* `decorated` is no row either: every sample, decorated, prints as itself plus a `decor` object with the
+  shell's decor fields (`decoratedProblems`), and no row has a field named `id` or `decor`;
+* the string enums list every constructor (`*_complete`), so their Swift raw values are the
   Lean printer's strings;
 * every `Event` constructor has a row (`eventName_mem`), and the JSON the shell sends for each row is
   parsed back by `Event.fromJson?` into that event.
@@ -32,14 +34,17 @@ def kindTag : Wire → String
   | .progress .. => "progress" | .icon .. => "icon" | .qr .. => "qr" | .share .. => "share" | .link .. => "link"
   | .page .. => "page" | .empty .. => "empty" | .disclosure .. => "disclosure" | .stepper .. => "stepper"
   | .identified _ w => kindTag w
+  | .decorated _ w => kindTag w
 
 theorem kindTag_mem (w : Wire) : kindTag w ∈ tableTags := by
   cases w with
   | identified _ w => simpa [kindTag] using kindTag_mem w
+  | decorated _ w => simpa [kindTag] using kindTag_mem w
   | _ => simp [kindTag, tableTags]
 
 theorem styles_complete (x : TextStyle) : x ∈ allStyles := by cases x <;> simp [allStyles]
 theorem roles_complete (x : ButtonRole) : x ∈ allRoles := by cases x <;> simp [allRoles]
+theorem tones_complete (x : Tone) : x ∈ allTones := by cases x <;> simp [allTones]
 theorem inputKinds_complete (x : InputKind) : x ∈ allInputKinds := by cases x <;> simp [allInputKinds]
 
 /-- One node of every kind, with a child wherever it can have one. -/
@@ -103,11 +108,39 @@ def identifiedProblems (w : Wire) : List String :=
      else [s!"identified `{tag}`: not the node's own object plus `{idKey}`"])
   | _, _ => [s!"identified `{tag}`: not an object"]
 
+/-- `decorated`: the node's own object plus `"decor"`, an object with exactly `decorFields`' keys, each of
+the kind the shell decodes. -/
+def decoratedProblems (w : Wire) : List String :=
+  let tag := kindTag w
+  let d : Decor := { tone := .positive, mono := true, badge := true, centered := true }
+  match w.toJson, (Wire.decorated d w).toJson with
+  | .obj plain, j@(.obj kvs) =>
+    (if kvs.toList.map (·.1) == ((plain.insert decorKey .null).toList.map (·.1))
+        && plain.toList.all (fun (k, v) => (j.getObjVal? k).toOption == some v) then []
+     else [s!"decorated `{tag}`: not the node's own object plus `{decorKey}`"]) ++
+    (match j.getObjVal? decorKey with
+     | .ok dj =>
+       let keys := objKeys dj
+       let want := decorFields.map (·.key)
+       (if keys.all want.contains && want.all keys.contains && keys.length == want.length then []
+        else [s!"decorated `{tag}`: the decor keys are {keys}, the shell has {want}"]) ++
+       decorFields.filterMap fun f => match dj.getObjVal? f.key with
+         | .ok v => if jsonKindOk f.ty v then none else some s!"decor.{f.key}: {v.compress} is not what the shell decodes"
+         | .error _ => some s!"decor.{f.key}: absent from Decor.toJson"
+     | .error _ => [s!"decorated `{tag}`: no `{decorKey}`"])
+  | _, _ => [s!"decorated `{tag}`: not an object"]
+
+/-- No row uses the keys any node may carry. -/
+def reservedProblems : List String :=
+  nodes.filterMap fun k =>
+    if k.fields.any (fun f => f.key == idKey || f.key == decorKey) then some s!"`{k.tag}` has a field `{idKey}` or `{decorKey}`" else none
+
 def problems : List String :=
   (if nodes.map (·.tag) == tableTags then [] else ["the grammar table's tags are not `tableTags`"]) ++
   (if samples.map kindTag == tableTags then [] else ["`samples` does not have one node per row, in order"]) ++
   samples.flatMap nodeProblems ++
   samples.flatMap identifiedProblems ++
+  samples.flatMap decoratedProblems ++ reservedProblems ++
   (if events.map (·.1) == eventNames then [] else ["the event table's names are not `eventNames`"]) ++
   eventSamples.filterMap fun (e, v) =>
     let name := eventName e

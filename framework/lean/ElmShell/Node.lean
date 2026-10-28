@@ -4,6 +4,19 @@ import ElmShell.Grammar
 
 namespace ElmShell
 
+/-- The decoding of one field from the JSON object `o`. -/
+def Field.decode (f : Field) : String :=
+  let v := match f.ty with
+    | .str => s!"ELS(o, {lit f.key})"
+    | .bool d => s!"ELB(o, {lit f.key}, {if d then "YES" else "NO"})"
+    | .int => s!"ELN(o, {lit f.key})"
+    | .strs => s!"ELSS(o, {lit f.key})"
+    | .enum name d =>
+      let vs := (stringEnums.lookup name).getD []
+      s!"ELE(o, {lit f.key}, @[{", ".intercalate (vs.map lit)}], {lit d})"
+    | .kids => "ELK(o)"
+  s!", {lit f.key}: {v}"
+
 set_option maxRecDepth 8000 in
 def nodeHelpers : List Stmt := [
     .pp "#import \"ElmLeanShell.h\"",
@@ -27,12 +40,18 @@ def nodeHelpers : List Stmt := [
         .l "NSString *s = ELS(o, k);",
         .l "return [values containsObject:s] ? s : dflt;"],
     .blank,
-    .l "/// `Html.identified`: the identifier any node may carry, kept when it is a non-empty string.",
+    .l "/// `Html.decorated`: a node's decoration, every field present (absent ones their defaults).",
+    b "static NSDictionary *ELDecor(id json) {" [
+        .l "NSDictionary *o = [json isKindOfClass:NSDictionary.class] ? json : @{};",
+        .l s!"return @\{{", ".intercalate (decorFields.map fun f => ((f.decode).drop 2).toString)}};"],
+    .blank,
+    .l "/// What any node may carry besides its row's fields: `Html.identified`'s identifier, kept when it is a",
+    .l "/// non-empty string, and `Html.decorated`'s decoration, always.",
     b "static NSDictionary *ELWithId(NSDictionary *o, NSDictionary *n) {" [
-        .l s!"NSString *ident = ELS(o, {lit idKey});",
-        .l "if (ident.length == 0) return n;",
         .l "NSMutableDictionary *m = [n mutableCopy];",
-        .l s!"m[{lit idKey}] = ident;",
+        .l s!"NSString *ident = ELS(o, {lit idKey});",
+        .l s!"if (ident.length > 0) m[{lit idKey}] = ident;",
+        .l s!"m[{lit decorKey}] = ELDecor(o[{lit decorKey}]);",
         .l "return m;"],
     .blank,
     b "static NSArray *ELK(NSDictionary *o) {" [
@@ -41,19 +60,6 @@ def nodeHelpers : List Stmt := [
         .l "    for (id x in o[@\"c\"]) [out addObject:ELDecode(x)];",
         .l "return out;"],
     .blank]
-
-/-- The decoding of one field from the JSON object `o`. -/
-def Field.decode (f : Field) : String :=
-  let v := match f.ty with
-    | .str => s!"ELS(o, {lit f.key})"
-    | .bool d => s!"ELB(o, {lit f.key}, {if d then "YES" else "NO"})"
-    | .int => s!"ELN(o, {lit f.key})"
-    | .strs => s!"ELSS(o, {lit f.key})"
-    | .enum name d =>
-      let vs := (stringEnums.lookup name).getD []
-      s!"ELE(o, {lit f.key}, @[{", ".intercalate (vs.map lit)}], {lit d})"
-    | .kids => "ELK(o)"
-  s!", {lit f.key}: {v}"
 
 def decodeLine (k : NodeKind) : Stmt :=
   .l s!"if ([t isEqualToString:{lit k.tag}]) return ELWithId(o, @\{@\"t\": t{String.join (k.fields.map (·.decode))}});"

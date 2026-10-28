@@ -53,12 +53,21 @@ def kids : Field := { key := "c", ty := .kids }
 sets as the node's `accessibilityIdentifier` (`ELIdentify`). -/
 def idKey : String := "id"
 
+/-- The other key any node may carry: `Html.decorated`'s `Decor`, an object with these fields (`ElmShell.Check`
+holds them to `Decor.toJson`). The shell decodes it on every node, absent fields as their defaults, so a
+renderer reads `n[@"decor"][@"tone"]` whatever the node. -/
+def decorKey : String := "decor"
+
+def decorFields : List Field :=
+  [{ key := "tone", ty := .enum "Tone" "standard" }, { key := "mono", ty := .bool }, { key := "badge", ty := .bool },
+   { key := "centered", ty := .bool }]
+
 set_option maxRecDepth 8000 in
 def nodes : List NodeKind :=
 [
   { tag := "text", fields := [str "s", enum "style" "Style" "body"],
     render := [
-      .l "ELPin(ELLabel(n[@\"s\"], n[@\"style\"]), box, UIEdgeInsetsZero);"] },
+      .l "ELBuildText(box, n);"] },
   { tag := "col", fields := [kids],
     render := [
       .l "ELBuildColumn(box);"] },
@@ -85,7 +94,7 @@ def nodes : List NodeKind :=
       .l "[s addArrangedSubview:sw];",
       .l "ELPin(s, box, UIEdgeInsetsZero);",
       b "box.update = ^BOOL(ELBox *b, NSDictionary *m) {" [
-          .l "l.text = ELBreakable(m[@\"label\"]);",
+          .l "ELSetText(l, m[@\"label\"]);",
           .l "if (sw.on != [m[@\"on\"] boolValue]) [sw setOn:[m[@\"on\"] boolValue] animated:YES];",
           .l "return YES;"] "};"] },
   { tag := "divider", fields := [],
@@ -123,7 +132,7 @@ def nodes : List NodeKind :=
       b "box.update = ^BOOL(ELBox *b, NSDictionary *m) {" [
           .l "header.text = m[@\"header\"];",
           .l "header.hidden = [m[@\"header\"] length] == 0;",
-          .l "footer.text = ELBreakable(m[@\"footer\"]);",
+          .l "ELSetText(footer, m[@\"footer\"]);",
           .l "footer.hidden = [m[@\"footer\"] length] == 0;",
           .l "ELReconcile(kids, m[@\"c\"], ELChildPaths(b.path, [m[@\"c\"] count]), @\"\");",
           .l "return YES;"] "};"] },
@@ -135,6 +144,7 @@ def nodes : List NodeKind :=
       .l "UILabel *v = ELLabel(n[@\"value\"], @\"body\");",
       .l "v.textColor = UIColor.secondaryLabelColor;",
       .l "v.textAlignment = NSTextAlignmentRight;",
+      .l "ELDecorate(v, n[@\"decor\"]);",
       .l "[l setContentCompressionResistancePriority:UILayoutPriorityDefaultHigh + 1 forAxis:UILayoutConstraintAxisHorizontal];",
       .l "[l setContentHuggingPriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisHorizontal];",
       .l "[s addArrangedSubview:l];",
@@ -332,13 +342,16 @@ def unknownArm : List Stmt := [
 
 /-! The string enums, from the Lean types (`ElmShell.Check` proves the lists complete). -/
 
-def allStyles : List TextStyle := [.title, .body, .caption]
+def allStyles : List TextStyle :=
+  [.title, .body, .caption, .largeTitle, .title3, .headline, .subheadline, .callout, .footnote, .caption2]
+def allTones : List Tone := [.standard, .secondary, .tint, .positive, .negative, .warning]
 def allRoles : List ButtonRole := [.plain, .primary, .destructive]
 def allInputKinds : List InputKind := [.plain, .secure, .multiline, .number, .decimal]
 
 /-- (name, values) of each string enum a node field takes. -/
 def stringEnums : List (String × List String) :=
-  [ ("Role", allRoles.map (·.str)), ("Style", allStyles.map (·.str)), ("InputKind", allInputKinds.map (·.str)) ]
+  [ ("Role", allRoles.map (·.str)), ("Style", allStyles.map (·.str)), ("InputKind", allInputKinds.map (·.str)),
+    ("Tone", allTones.map (·.str)) ]
 
 /-! The events (PROTOCOL.md, "Client → CLI"): name, and the Objective-C parameter and its JSON value if the
 event carries a `value`. -/
