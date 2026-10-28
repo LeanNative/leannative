@@ -15,9 +15,15 @@ save ends; and back from `cloudkit.load`.
 Errors answer `{"error":name,"code":n,"detail":…}` with `retryAfter` (s) when CloudKit gives one; the name
 is the `CKErrorCode` case (`notAuthenticated`, `networkUnavailable`, `networkFailure`, `quotaExceeded`,
 `serverRecordChanged`, …, with `unknownItem` as `notFound`), and a partial failure answers its record's
-own error. Without the iCloud entitlement CloudKit raises an Objective-C exception (a Swift app traps on
-it) when the container is made; here the exception is caught, every request answers `missingEntitlement`,
-and the failure is remembered so that it is raised once. -/
+own error.
+
+Without the iCloud entitlement CloudKit kills the app (a trap, not an exception) when the container is
+made, so the shell reads the app's own entitlements first, from its signature (iOS has no public API for
+them): the simulator keeps them in the executable's `__TEXT,__entitlements` section, a device in the
+entitlements blob of the code signature. Without `com.apple.developer.icloud-services` holding `CloudKit`,
+or with the container (`iCloud.<bundle id>` for the default) missing from
+`com.apple.developer.icloud-container-identifiers`, every request answers `missingEntitlement` and
+CloudKit is never touched. An exception CloudKit raises is still caught, as `missingEntitlement` too. -/
 
 namespace ElmShell
 
@@ -31,6 +37,60 @@ def cloudKitClass : List Stmt := [
     .l "- (void)load:(NSDictionary *)args answer:(ELAnswer)answer;",
     .l "- (void)remove:(NSDictionary *)args answer:(ELAnswer)answer;",
     .l "@end",
+    .blank,
+    b "static uint32_t ELBig32(const uint8_t *p) {" [
+        .l "return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];"],
+    .blank,
+    .l "/// The app's own entitlements (empty when it has none or they cannot be read): the simulator's",
+    .l "/// `__TEXT,__entitlements` section of the executable, else the entitlements blob of its code signature",
+    .l "/// (a SuperBlob in `__LINKEDIT`, which dyld maps; big-endian).",
+    b "static NSDictionary *ELEntitlements(void) {" [
+        .l "static NSDictionary *entitlements;",
+        .l "static dispatch_once_t once;",
+        b "dispatch_once(&once, ^{" [
+            .l "const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(0);",
+            .l "NSData *xml = nil;",
+            .l "unsigned long size = 0;",
+            .l "uint8_t *section = header ? getsectiondata(header, \"__TEXT\", \"__entitlements\", &size) : NULL;",
+            .l "if (section && size > 0) xml = [NSData dataWithBytes:section length:size];",
+            b "if (!xml && header && header->magic == MH_MAGIC_64) {" [
+                .l "const struct segment_command_64 *linkedit = NULL;",
+                .l "const struct linkedit_data_command *signature = NULL;",
+                .l "const uint8_t *cursor = (const uint8_t *)(header + 1);",
+                b "for (uint32_t i = 0; i < header->ncmds; i++) {" [
+                    .l "const struct load_command *lc = (const struct load_command *)cursor;",
+                    .l "if (lc->cmd == LC_SEGMENT_64 && strncmp(((const struct segment_command_64 *)lc)->segname, SEG_LINKEDIT, 16) == 0)",
+                    .l "    linkedit = (const struct segment_command_64 *)lc;",
+                    .l "if (lc->cmd == LC_CODE_SIGNATURE) signature = (const struct linkedit_data_command *)lc;",
+                    .l "cursor += lc->cmdsize;"],
+                b "if (linkedit && signature && signature->dataoff >= linkedit->fileoff && (uint64_t)signature->dataoff + signature->datasize <= linkedit->fileoff + linkedit->filesize) {" [
+                    .l "const uint8_t *blob = (const uint8_t *)(_dyld_get_image_vmaddr_slide(0) + linkedit->vmaddr + (signature->dataoff - linkedit->fileoff));",
+                    .l "uint32_t length = signature->datasize;",
+                    .l "// a SuperBlob (0xfade0cc0): magic, length, count, then a (type, offset) per blob",
+                    b "if (length >= 12 && ELBig32(blob) == 0xfade0cc0) {" [
+                        .l "uint32_t count = ELBig32(blob + 8);",
+                        b "for (uint32_t i = 0; i < count && 12 + 8 * (uint64_t)(i + 1) <= length; i++) {" [
+                            .l "uint32_t type = ELBig32(blob + 12 + 8 * i), offset = ELBig32(blob + 16 + 8 * i);",
+                            .l "// slot 5: the entitlements, an XML plist after an 8-byte blob header (0xfade7171)",
+                            .l "if (type != 5 || (uint64_t)offset + 8 > length) continue;",
+                            .l "uint32_t blobLength = ELBig32(blob + offset + 4);",
+                            .l "if (ELBig32(blob + offset) == 0xfade7171 && blobLength >= 8 && (uint64_t)offset + blobLength <= length)",
+                            .l "    xml = [NSData dataWithBytes:blob + offset + 8 length:blobLength - 8];"]]]],
+            .l "id plist = xml ? [NSPropertyListSerialization propertyListWithData:xml options:0 format:NULL error:nil] : nil;",
+            .l "entitlements = [plist isKindOfClass:NSDictionary.class] ? plist : @{};"] "});",
+        .l "return entitlements;"],
+    .blank,
+    .l "/// Why CloudKit would kill the app for this container (nil when the entitlements allow it).",
+    b "static NSString *ELCloudKitMissing(NSString *identifier) {" [
+        .l "NSDictionary *entitlements = ELEntitlements();",
+        .l "NSArray *services = entitlements[@\"com.apple.developer.icloud-services\"];",
+        .l "NSArray *containers = entitlements[@\"com.apple.developer.icloud-container-identifiers\"];",
+        .l "if (![services isKindOfClass:NSArray.class] || !([services containsObject:@\"CloudKit\"] || [services containsObject:@\"CloudKit-Anonymous\"]))",
+        .l "    return @\"no CloudKit in the com.apple.developer.icloud-services entitlement\";",
+        .l "NSString *wanted = identifier.length ? identifier : [@\"iCloud.\" stringByAppendingString:NSBundle.mainBundle.bundleIdentifier ?: @\"\"];",
+        .l "if (![containers isKindOfClass:NSArray.class] || ![containers containsObject:wanted])",
+        .l "    return [NSString stringWithFormat:@\"%@ is not in the com.apple.developer.icloud-container-identifiers entitlement\", wanted];",
+        .l "return nil;"],
     .blank,
     b "static NSString *ELCloudErrorName(NSInteger code) {" [
         b "switch (code) {" [
@@ -145,8 +205,11 @@ def cloudKitClass : List Stmt := [
         .l "CKContainer *container = _containers[identifier];",
         .l "if (container) return container;",
         b "if (!_failed[identifier]) {" [
+            .l "// CloudKit traps on a missing entitlement: it is never asked then",
+            .l "NSString *missing = ELCloudKitMissing(identifier);",
+            .l "if (missing) _failed[identifier] = missing;",
             .blk [("@try {", [
-                  .l "container = identifier.length ? [CKContainer containerWithIdentifier:identifier] : [CKContainer defaultContainer];"]),
+                  .l "if (!missing) container = identifier.length ? [CKContainer containerWithIdentifier:identifier] : [CKContainer defaultContainer];"]),
                  ("} @catch (NSException *e) {", [
                   .l "_failed[identifier] = e.reason ?: e.name;"])] "}",
             .l "if (container) _containers[identifier] = container;",

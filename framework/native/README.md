@@ -150,10 +150,14 @@ lower camel case (`notAuthenticated`, `networkUnavailable`, `networkFailure`, `s
 failure answers its record's own error; `badArgs` is a malformed request. An asset goes up from a
 temporary file written with complete file protection and removed when the save ends. The app needs the
 iCloud entitlement with CloudKit (`com.apple.developer.icloud-services` `[CloudKit]` and the container in
-`com.apple.developer.icloud-container-identifiers`). Without it CloudKit raises an Objective-C exception
-when the container is made (a Swift app traps on it); the shell catches it, and every `cloudkit.*` request
-answers `{"error":"missingEntitlement","detail":…}`. iOS has no public API for an app to read its own
-entitlements, so the exception is the check; it is raised once per container and remembered.
+`com.apple.developer.icloud-container-identifiers`; `iCloud.<bundle id>` for the default container).
+Without it CloudKit kills the app when the container is made (a trap, not a catchable exception), so the
+shell first reads the app's own entitlements from its signature — iOS has no public API for them: the
+simulator build carries them in the executable's `__TEXT,__entitlements` section, a device build in the
+entitlements blob of the code signature — and when they lack CloudKit or the container, every
+`cloudkit.*` request answers `{"error":"missingEntitlement","detail":…}` without touching CloudKit. (In the
+simulator, native-demo answers `missingEntitlement`; built with the entitlement it answers
+`{"status":"noAccount","user":null}` and a query `notAuthenticated`.)
 
 ## View nodes
 
