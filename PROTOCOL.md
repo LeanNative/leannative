@@ -110,10 +110,12 @@ which the shell sets as the node's `accessibilityIdentifier` (on its control, el
 image). It is not a node of its own: the object is `child`'s, with `child`'s children and events, so
 paths and events pass through it.
 
-Any node may also carry `"decor":{"tone","mono","badge","centered"}` (`Html.decorated d child`, native mode):
+Any node may also carry `"decor":{"tone","mono","badge","centered","symbol","chevron"}` (`Html.decorated d child`, native mode):
 how it is drawn beyond its kind. `tone` is `"standard"` (the node's own colour), `"secondary"`, `"tint"`,
 `"positive"` (green), `"negative"` (red) or `"warning"` (orange); `mono` is monospaced text wrapped at any
-character; `badge` draws a text as a capsule in its tone; `centered` centres a text. Every field's default
+character; `badge` draws a text as a capsule in its tone; `centered` centres a text; `symbol` is an SF Symbols name drawn before a button's, a labeled row's or a text's
+label; `chevron` marks a button that opens something (a link: in a list its whole row is the button, with a
+disclosure chevron). Every field's default
 (`"standard"`, `false`) changes nothing, and a shell decodes an absent `decor` or field as its default, so
 old and new trees and shells read each other. Like `id` it is not a node: the object, children and events
 are `child`'s. `Html.decor` merges decorations, so `(body s).tone .positive |>.mono` is one `decor`.

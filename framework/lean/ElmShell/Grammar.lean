@@ -60,7 +60,7 @@ def decorKey : String := "decor"
 
 def decorFields : List Field :=
   [{ key := "tone", ty := .enum "Tone" "standard" }, { key := "mono", ty := .bool }, { key := "badge", ty := .bool },
-   { key := "centered", ty := .bool }]
+   { key := "centered", ty := .bool }, { key := "symbol", ty := .str }, { key := "chevron", ty := .bool }]
 
 set_option maxRecDepth 8000 in
 def nodes : List NodeKind :=
@@ -76,7 +76,8 @@ def nodes : List NodeKind :=
       .l "ELBuildRow(box, 44);"] },
   { tag := "button", fields := [str "label", enum "role" "Role" "plain", bool "enabled" true],
     render := [
-      .l "ELPinLeading(ELButton(n, path), box);"] },
+      .l "if ([box.mode isEqualToString:@\"cell\"]) ELPin(ELRowButton(n, path), box, UIEdgeInsetsZero);",
+      .l "else ELPinLeading(ELButton(n, path), box);"] },
   { tag := "field", fields := [str "placeholder", str "value", bool "submits"],
     render := [
       .l "ELBuildInput(box, @\"plain\", @\"\", n[@\"placeholder\"], n[@\"value\"], [n[@\"submits\"] boolValue]);",
@@ -116,7 +117,7 @@ def nodes : List NodeKind :=
           .l "return ELUpdateInput(b, m[@\"kind\"], b.node[@\"kind\"], m[@\"label\"], m[@\"placeholder\"], m[@\"value\"], [m[@\"submits\"] boolValue]);"] "};"] },
   { tag := "list", fields := [kids],
     render := [
-      .l "ELBuildColumn(box);"] },
+      .l "ELBuildList(box);"] },
   { tag := "section", fields := [str "header", str "footer", kids],
     render := [
       .l "UIStackView *s = ELStack(UILayoutConstraintAxisVertical, 12);",
@@ -134,7 +135,7 @@ def nodes : List NodeKind :=
           .l "header.hidden = [m[@\"header\"] length] == 0;",
           .l "ELSetText(footer, m[@\"footer\"]);",
           .l "footer.hidden = [m[@\"footer\"] length] == 0;",
-          .l "ELReconcile(kids, m[@\"c\"], ELChildPaths(b.path, [m[@\"c\"] count]), @\"\");",
+          .l "ELReconcile(kids, m[@\"c\"], ELChildPaths(b.path, [m[@\"c\"] count]), ELInner(b));",
           .l "return YES;"] "};"] },
   { tag := "labeled", fields := [str "label", str "value"],
     render := [
@@ -283,7 +284,7 @@ def nodes : List NodeKind :=
           .l "image.image = [UIImage systemImageNamed:m[@\"icon\"]];",
           .l "title.text = m[@\"title\"];",
           .l "message.text = m[@\"message\"];",
-          .l "ELReconcile(actions, m[@\"c\"], ELChildPaths(b.path, [m[@\"c\"] count]), @\"\");",
+          .l "ELReconcile(actions, m[@\"c\"], ELChildPaths(b.path, [m[@\"c\"] count]), ELInner(b));",
           .l "return YES;"] "};"] },
   { tag := "disclosure", fields := [str "title", bool "expanded", kids],
     render := [
@@ -307,7 +308,7 @@ def nodes : List NodeKind :=
           .l "hc.image = [UIImage systemImageNamed:[m[@\"expanded\"] boolValue] ? @\"chevron.down\" : @\"chevron.forward\"];",
           .l "header.configuration = hc;",
           .l "kids.hidden = ![m[@\"expanded\"] boolValue];",
-          .l "ELReconcile(kids, m[@\"c\"], ELChildPaths(b.path, [m[@\"c\"] count]), @\"\");",
+          .l "ELReconcile(kids, m[@\"c\"], ELChildPaths(b.path, [m[@\"c\"] count]), ELInner(b));",
           .l "return YES;"] "};"] },
   { tag := "stepper", fields := [str "label", int "value", int "lo", int "hi", str "detail"],
     render := [

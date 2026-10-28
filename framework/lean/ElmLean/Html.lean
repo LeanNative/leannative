@@ -45,6 +45,11 @@ structure Decor where
   badge : Bool := false
   /-- centred text (under a QR code, say) -/
   centered : Bool := false
+  /-- an SF Symbols name drawn before a button's or a labeled row's label, or a text -/
+  symbol : String := ""
+  /-- the button opens something (a screen, a sheet): drawn as a link, and in a list its whole row is the
+  button, with a disclosure chevron -/
+  chevron : Bool := false
   deriving Repr, DecidableEq, Inhabited
 
 /-- `outer`'s fields where they are set, else `inner`'s. -/
@@ -52,7 +57,9 @@ def Decor.merge (inner outer : Decor) : Decor :=
   { tone := if outer.tone == .standard then inner.tone else outer.tone
     mono := inner.mono || outer.mono
     badge := inner.badge || outer.badge
-    centered := inner.centered || outer.centered }
+    centered := inner.centered || outer.centered
+    symbol := if outer.symbol.isEmpty then inner.symbol else outer.symbol
+    chevron := inner.chevron || outer.chevron }
 
 inductive ButtonRole where
   | plain
@@ -268,6 +275,8 @@ def tone (t : Tone) (h : Html msg) : Html msg := decor { tone := t } h
 def mono (h : Html msg) : Html msg := decor { mono := true } h
 def badge (h : Html msg) : Html msg := decor { badge := true } h
 def centered (h : Html msg) : Html msg := decor { centered := true } h
+def symbol (name : String) (h : Html msg) : Html msg := decor { symbol := name } h
+def navigates (h : Html msg) : Html msg := decor { chevron := true } h
 
 end Html
 end ElmLean
