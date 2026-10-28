@@ -1,4 +1,4 @@
-# The ElmLean framework's own checks. Apps have theirs (framework/app.mk); the root Makefile runs all.
+# The ElmLean framework's own checks; the root Makefile runs them.
 #   make check         build · axiom gate · protocol harness against the fake CLI
 PY   := /opt/homebrew/bin/python3
 FAKE := $(PY) scripts/fake_cli.py
@@ -15,4 +15,4 @@ axioms:
 protocol-fake:
 	$(PY) -I scripts/protocol_test.py --shape list "$(FAKE)"
 
-check: axioms protocol-fake
+check: build axioms protocol-fake

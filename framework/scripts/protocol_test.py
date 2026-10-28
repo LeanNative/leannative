@@ -2,7 +2,7 @@
 """Drive an ElmLean app's CLI over stdin/stdout and check it against PROTOCOL.md.
 
     protocol_test.py [--shape list] "<cli command>"
-        e.g.  protocol_test.py --shape list examples/todo/.lake/build/bin/todo-cli
+        e.g.  protocol_test.py --shape list path/to/app/.lake/build/bin/app-cli
               protocol_test.py --shape list "/opt/homebrew/bin/python3 framework/scripts/fake_cli.py"
               protocol_test.py path/to/any-app-cli
 

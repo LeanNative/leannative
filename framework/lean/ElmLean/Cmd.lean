@@ -5,7 +5,7 @@ import ElmLean.Program
 Elm's `update : Msg → Model → (Model, Cmd Msg)` returns the commands with the new model. ElmLean
 keeps `update : Msg → Model → Model` and adds a second function, `cmds : Msg → Model → List Cmd`,
 the commands that the same message asks for in the same pre-state. The two are computed from the
-same arguments, so nothing is lost, and both stay inside the subset `elmgen` translates (no pairs).
+same arguments, so nothing is lost.
 
 `Cmd` is an ordinary app type: data the host interprets (the Send example's host calls WalletCore).
 The host answers with values of a second app type, `Host`, and an answer can reach `update` only as

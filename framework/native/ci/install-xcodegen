@@ -1,0 +1,26 @@
+#!/bin/bash
+# The exact XcodeGen binary audited for CI, downloaded once and checked against its SHA-256; prints its path.
+# Do not replace this with a floating Homebrew install: project generation is part of the release build.
+#
+#   XCODEGEN="$(framework/native/ci/install-xcodegen)"
+set -euo pipefail
+
+VERSION="2.46.0"
+ARCHIVE_SHA256="4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
+ROOT="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/elmlean-xcodegen-$VERSION"
+ARCHIVE="$ROOT/xcodegen.zip"
+BIN="$ROOT/xcodegen/bin/xcodegen"
+
+verified() { [ -f "$ARCHIVE" ] && [ "$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')" = "$ARCHIVE_SHA256" ]; }
+
+if ! verified; then
+  install -d -m 700 "$ROOT"
+  curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+    "https://github.com/yonaskolb/XcodeGen/releases/download/$VERSION/xcodegen.zip" \
+    --output "$ARCHIVE"
+  verified || { echo "XcodeGen archive checksum mismatch: expected $ARCHIVE_SHA256" >&2; rm -f "$ARCHIVE"; exit 1; }
+  rm -rf "$ROOT/xcodegen"
+fi
+[ -x "$BIN" ] || unzip -q -o "$ARCHIVE" -d "$ROOT"
+test -x "$BIN"
+printf '%s\n' "$BIN"

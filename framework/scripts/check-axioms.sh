@@ -3,7 +3,7 @@
 #
 #   framework/scripts/check-axioms.sh <package dir> <gate file, relative to the package>
 #   e.g.  framework/scripts/check-axioms.sh framework/lean ElmLean/Proofs.lean
-#         ../../framework/scripts/check-axioms.sh . Todo/Gate.lean        (from examples/todo)
+#         ../../framework/scripts/check-axioms.sh . MyApp/Gate.lean       (from an app's directory)
 #
 #   * the build log carries no "declaration uses `sorry`" warning (quote-agnostic pattern: Lean 4.35
 #     prints backticks, older versions printed ASCII quotes);

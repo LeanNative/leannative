@@ -1,12 +1,10 @@
 # ElmLean wire protocol (v1)
 
-The backend is an app's CLI (for the Todo example `examples/todo/.lake/build/bin/todo-cli`), a
-Lean 4 program built on `ElmLean.Cli.main` that owns the Elm architecture (`Model`, `Msg`,
-`update`, `view`). It speaks **newline-delimited JSON** over stdin/stdout. It is the reference
-the generated code is tested against, not a runtime: an app's generated `update`/`view`,
-compiled as a macOS CLI over `framework/swift/Runtime.swift`, speaks the same protocol, and
-`framework/scripts/lockstep.py` requires both CLIs to give the same replies to the same lines.
-The generated iOS app itself calls `update` directly and never speaks this protocol.
+The backend is an app's CLI, a Lean 4 program built on `ElmLean.Cli.main` (or `ElmLean.CmdCli.main`)
+that owns the Elm architecture (`Model`, `Msg`, `update`, `view`). It speaks **newline-delimited
+JSON** over stdin/stdout, for the app's self-test and `framework/scripts/protocol_test.py`. The native
+shell on iOS speaks the same JSON through the C entry points of `ElmLean/Native.lean` (one event or
+answer per call), and its replies are the same: a view at `seq + 1`, or an error.
 
 ## Transport rules
 
@@ -81,7 +79,7 @@ Error precedence: `bad-json` > `stale` > `bad-path` > `no-handler`.
 | divider | `{"t":"divider"}` |
 | spacer | `{"t":"spacer"}` |
 
-Native mode (framework/native/README.md) adds these nodes; `elmgen` does not translate them:
+The native shell (framework/native/README.md) also renders these nodes:
 
 | node | JSON | children (`c`) | accepted events |
 |---|---|---|---|
@@ -157,8 +155,8 @@ things. Its CLI (`ElmLean.CmdCli.main`) speaks everything above, plus:
   decides what an answer means in the current model. The reply is a view at `seq + 1` with that step's
   `cmds`; an answer that does not decode is `bad-json` and changes nothing.
 * **Shell-only test command** `{"samples":true}`: the Lean CLI replies `{"seq":n,"samples":[…]}`, plausible
-  host answers in the current model, from the app's `CmdCli.Options.samples`. The lockstep driver asks
-  the Lean CLI alone and sends one answer to both CLIs; the generated Swift CLI answers `bad-json`.
+  host answers in the current model, from the app's `CmdCli.Options.samples`, for test drivers that
+  need plausible answers to send.
 
 Line precedence: `reset`, then `samples`, then `host` (when the key is present), then a user event.
 

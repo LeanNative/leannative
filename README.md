@@ -1,105 +1,63 @@
-# ElmLean — Elm-style apps written and proven in Lean 4, running natively on iOS
+# ElmLean — Elm-style apps written and proven in Lean 4, running natively on iOS and Mac
 
 ElmLean is a framework for writing apps in the Elm architecture (`Model`, `Msg`, `update`,
-`view`) in **Lean 4**, proving things about them with Lean's checker, and running them on
-iOS. An app is an ordinary Lean package that depends on the framework. You write the app in a
-small typed UI language, state what it should guarantee, and prove it. The framework then
-generates a native SwiftUI app from the very definitions you proved: no bridge, no server and no
-Lean at runtime.
+`view`) in **Lean 4**, proving things about them with Lean's checker, and running the very same
+definitions on iOS and Mac. An app is an ordinary Lean package that depends on the framework. Lean's
+compiler turns it into C, which is linked into the iOS app with Lean's runtime; a generic shell draws
+the view tree the app returns with UIKit and does what only iOS can do. No Swift is compiled, and none
+is written per app.
 
 ```
-        your app: Model · Msg · update · view : Model → Html Msg · theorems
+        your app: Model · Msg · update · view : Model → Html Msg · cmds · perform · theorems
                                     │
-                     lake exe elmgen  (Lean metaprogram: reads the proven
-                                    │  definitions from the kernel environment)
-                                    ▼
-          generated/Generated.swift + <App>Screen.swift + framework/swift
+                     lake build ──► the app and ElmLean as C (.lake/build/ir)
                                     │
-                                    ▼
-                         a native SwiftUI app on iOS
-
-   tested against:  <app>-cli, the same definitions compiled by Lean, as the reference.
-                    The generated update/view, compiled as a macOS CLI, must give identical
-                    replies step by step (lockstep), and an independent second translator
-                    (LCNF) is locked in step with both.
+     framework/native/scripts/ios_lean_sources.sh: the C of the app's import closure, Lean's runtime
+                                    │  retargeted to iOS, and the shell's Objective-C printed from Lean
+                                    ▼                  (`lake exe elmshell`, checked against the grammar)
+                    Xcode (project.yml): one iOS / Mac Catalyst app, no Swift
 ```
 
-The app's Lean executable is a test oracle, not a runtime: it speaks a small JSON protocol on
-stdin/stdout ([PROTOCOL.md](PROTOCOL.md)) so the generated code can be checked against it.
+Winnow, a Bitcoin wallet, is the app this is built for
+([winnowwallet/winnow-lean](https://github.com/winnowwallet/winnow-lean)); `examples/native-demo` is a
+small complete app that exercises every capability.
 
-Three complete apps live in `examples/`: [Todo](examples/todo/README.md) (the main example, with
-its full theorem table), [Counter](examples/counter/README.md), and [Send](examples/send/README.md),
-Winnow's Send review flow with commands run against Winnow's WalletCore, proven to sign only what
-the user approved on screen and to broadcast only a transaction that matches it.
+## What an app is
 
-## Quick start
+**The UI language.** `Html msg` (`framework/lean/ElmLean/Html.lean`): text, rows and columns, buttons,
+fields and inputs, toggles, lists and sections, screens with toolbars, tabs, sheets, alerts, pickers,
+steppers, QR codes, share sheets, bundled pages and more. Because `view : Model → Html Msg` is typed, a
+view can only emit messages `update` handles: Elm's core guarantee, from the type checker.
 
-```bash
-make new-app NAME=Notes          # scaffold apps/notes from framework/template
-```
+**Commands.** `cmds : Msg → Model → List Cmd` are the commands a message asks for, in the same pre-state
+`update` sees; `host : Host → Msg` is the only way an answer enters the app (`ElmLean/Cmd.lean`). In
+native mode the app runs its own commands: `perform : Cmd → Effects Host → IO Unit`
+(`ElmLean/Native.lean`) may start Lean tasks (TCP over Lean's libuv, files, timers) that answer with
+`post` from any thread, or ask the shell for a capability with `cap`. The app registers itself in its
+root module: `initialize ElmLean.Native.register app`.
 
-```bash
-cd apps/notes && make gen && make check
-```
+**Capabilities.** What only the platform can do, by name, for any app: device authentication, the
+Keychain (device-only and iCloud), clipboard, paths and file protection, HTTPS (with SOCKS5), opening
+URLs, background tasks, CloudKit, and Bluetooth LE ([framework/native/README.md](framework/native/README.md)).
 
-```bash
-make ios                         # from apps/notes: the generated native app in the iPhone simulator
-```
+**The proofs.** A `Spec app` (`ElmLean/Spec.lean`) is three obligations: `init_inv` (your invariant holds
+initially), `update_inv` (every message preserves it) and `view_sat` (every handler in the view of a
+model with the invariant yields a message satisfying your `Target`). `CmdSpec` is the same for an app with
+commands. The framework turns those into guarantees about every session:
 
-The Send example builds its host against a checkout of Winnow (`WINNOW`, default
-`~/src/winnow-claude`), so `make send` and the full root `make check` need one; `make framework todo
-counter template-test` do not.
-
-`make gen` writes the Swift files, `make check` runs every gate of the app (below), and the
-scaffolded app passes them out of the box: `make template-test` at the root proves that on
-each run. Prerequisites on a Mac with Xcode: `elan` (the toolchain `leanprover/lean4:v4.35.0` is
-pinned per package by `lean-toolchain`; no default toolchain needed), Homebrew Python 3, and
-`xcodegen` for the iOS projects.
-
-## Writing an app
-
-**1. The app.** `Html msg` is the UI language (`framework/lean/ElmLean/Html.lean`):
-
-```lean
-inductive Html (msg : Type) where
-  | text   (s : String) (style : TextStyle)                                  -- title | body | caption
-  | col    (children : List (Html msg))
-  | row    (children : List (Html msg))
-  | button (label : String) (role : ButtonRole) (onClick : Option msg)        -- none ⇒ disabled
-  | field  (placeholder value : String) (onInput : String → msg) (onSubmit : Option msg)
-  | toggle (label : String) (on : Bool) (onToggle : Bool → msg)
-  | divider
-  | spacer
-```
-
-Because `view : Model → Html Msg` is typed, a view can only emit messages that `update`
-handles: Elm's core guarantee, from the type checker. The app value is
-`def app : App Model Msg := ⟨Model.init, update, view⟩` in the app's namespace.
-
-To be generated as Swift, the app must stay inside the subset `elmgen` translates: structures,
-inductives with payloads, `List`/`String`/`Nat`/`Bool`/`Option`, `match` and `if` on app types,
-`List.map`/`filter`/`length`/`any`/`++`, string interpolation, `s.trimAscii.copy`, the `Html`
-constructors, and named helpers in the app's namespace. Recursion, `where`, `dite`, patterns
-on `Nat` or nested structures, and equality on types with `String` fields are rejected by design;
-`Nat` subtraction is saturating in Lean and is printed as `max(a - b, 0)`. Anything outside the
-subset stops `elmgen` with the construct named.
-
-**2. The proofs.** A `Spec app` (`framework/lean/ElmLean/Spec.lean`) is three obligations:
-
-| Field | You prove |
+| Theorem (namespace `ElmLean`) | Guarantee, for any app |
 |---|---|
-| `init_inv` | your invariant `Inv` holds for the initial model |
-| `update_inv` | every message preserves `Inv` |
-| `view_sat` | in every model with `Inv`, every handler in the view yields a message satisfying `Target m` (what a sensible message is in model `m`; `fun _ _ => True` plus `Html.Sat.of_forall` when there is nothing to say) |
+| `Html.advertises_iff` | A `(path, event)` pair is advertised by the wire tree **iff** dispatching it on the real view yields a message. Nothing un-advertised can trigger anything. |
+| `Html.Sat.dispatch`, `Html.Sat.of_forall` | If every handler satisfies a predicate, so does every dispatched message. |
+| `Session.handle_advertised`, `Session.handle_dispatch` | An in-sync advertised request is answered with a new view at `seq + 1`, by running `update` on the dispatched message. |
+| `Session.start_coherent`, `Session.handle_coherent`, `Session.run_coherent`, `Session.reach_coherent` | The session always shows the view of its current model. |
+| `Session.handle_inv`, `Session.run_inv`, `Spec.reachable_inv`, `Spec.reachable_sound` | Any invariant preserved by `update` holds after any trace, and dispatch is well targeted. |
+| `Session.step_origin`, `CmdSpec.reachable_inv`, `CmdSpec.trace_origin` | Apps with commands: every step runs `update` on at most one message and asks for exactly `cmds` of it, and that message is an in-sync dispatch from the view shown or a host answer through `app.host`. |
 
-The framework turns those into guarantees about every session of the app's protocol state
-machine (`Session.handle`, the step the CLI runs and the generated code is tested against):
-`spec.reachable_inv rs` (the invariant holds after any request trace `rs`) and
-`spec.reachable_sound` (an in-sync request for any advertised control dispatches to a message
-satisfying `Target`, and the CLI answers it by running `update` on exactly that message). Add
-any app-specific theorems next to them.
+The shell answers user events exactly as `Session.step` does, so these theorems are about the code that
+runs on the phone, not about a translation of it.
 
-**3. The gate.** A gate file lists the theorems you advertise and scans the rest:
+**The gate.** A gate file lists the theorems an app advertises and scans the rest:
 
 ```lean
 import ElmLean.Gate
@@ -108,119 +66,106 @@ import Notes.Proofs
 #assert_all_axioms ElmLean Notes
 ```
 
-`#assert_axioms` fails the build if a theorem depends on anything beyond `propext`,
-`Quot.sound` and `Classical.choice`, so a `sorry` cannot hide. `#assert_all_axioms` applies the
-same check to every theorem under the given namespaces, framework theorems included.
-`framework/scripts/check-axioms.sh` also greps the build log for `sorry` warnings in
-definitions. `framework/lean/ElmLean/Gate.lean` spells out what each layer covers.
+`#assert_axioms` fails the build if a theorem depends on anything beyond `propext`, `Quot.sound` and
+`Classical.choice`, so a `sorry` cannot hide; `framework/scripts/check-axioms.sh` also greps the build log
+for `sorry` warnings in definitions.
 
-**Commands.** An app that needs its host to do things (call a wallet, authenticate, broadcast) is a
-`CmdApp Model Msg Cmd Host` (`framework/lean/ElmLean/Cmd.lean`): an `App` plus
-`cmds : Msg → Model → List Cmd`, the commands a message asks for in the same pre-state `update` sees,
-and `host : Host → Msg`, the only way a host answer enters the app. This departs from Elm's
-`update : Msg → Model → (Model, Cmd Msg)` on purpose: two functions of the same arguments stay
-inside the subset `elmgen` translates. `Cmd` and `Host` are ordinary app types (derive
-`Lean.ToJson`/`Lean.FromJson`); `elmgen` prints their JSON codecs, and the generated app runs each
-command on a hand-written `CmdHost` (`Store.attach`). `CmdSpec` is the `Spec` of such an app, and
-`CmdSpec.trace_origin` says where every message of every run comes from: an in-sync control of the
-view the client was shown, or `app.host h`. The host is trusted; what the app does with its
-answers is proven (see the Send example).
+**The CLI.** `ElmLean.Cli.main app` / `ElmLean.CmdCli.main app` make an app a command-line program that
+speaks the wire protocol ([PROTOCOL.md](PROTOCOL.md)) on stdin/stdout: `selftest` explores the app from its
+initial model and re-checks at run time what the theorems state, and `framework/scripts/protocol_test.py`
+drives it. It is the same `update`/`view`, run without the phone.
 
-**4. The executable.** One line in `Main.lean`:
+## Building an app for iOS
 
-```lean
-def main (args : List String) : IO UInt32 := ElmLean.Cli.main Notes.app args
+```bash
+cd my-app && lake build
+.lake/packages/elmlean/framework/native/scripts/ios_lean_sources.sh . MyApp ios/build iossim
+cd ios && xcodegen generate && xcodebuild -scheme MyApp -destination 'generic/platform=iOS Simulator' build
 ```
 
-(`ElmLean.CmdCli.main` for an app with commands; set `CLI_RUNNER := runCmdElmCli` in its Makefile.)
+`ios_lean_sources.sh` takes `iossim`, `ios` or `maccatalyst`. The app's `ios/project.yml` compiles
+`build/native-shell`, `framework/native/c` and `build/lean-c`, and links Lean's libraries from
+`build/lib` (see `examples/native-demo/ios/project.yml`). `framework/native/ci/build-ios` does all of the
+above for one configuration and platform.
 
-`<app>-cli serve` (the default) speaks the protocol on stdin/stdout; the lockstep and harness
-tests drive it. `<app>-cli selftest`
-explores the app breadth-first from its initial model. It fires every advertised control
-(2000 steps by default) and re-checks at runtime what the theorems state: replies at `seq + 1`,
-coherence, "advertised iff dispatchable", stale rejection, and JSON round trips. A fourth
-argument `{ check := …, script := … }` adds your invariant's runtime mirror and a scripted run
-(see `examples/todo/Todo/Selftest.lean`).
+Prerequisites on a Mac with Xcode: `elan` (the toolchain is pinned per package by `lean-toolchain`) and
+XcodeGen (`framework/native/ci/install-xcodegen` installs the audited release).
 
-**5. The Makefile.** An app's Makefile sets a few variables and includes `framework/app.mk`:
+## Continuous integration for an app
 
-| Target | What it runs |
+`.github/workflows/ios-app.yml` is a reusable workflow that builds and tests an ElmLean app on GitHub
+Actions. It builds every Lean target once, in one job, and keeps the build in the Actions cache; the test
+jobs restore it read-only and run in parallel:
+
+| Job | Runs |
 |---|---|
-| `make build` | `lake build`: the app, its proofs, its gate, its CLI |
-| `make axioms` | the gate with its log checks |
-| `make selftest` | the CLI's exploration and the app's script |
-| `make protocol` | `framework/scripts/protocol_test.py` against the CLI: converse cases, number spellings, a 300-step random walk, an exhaustive replay |
-| `make gen` | regenerate `generated/` with `elmgen` |
-| `make golden` | the checked-in generated files are byte-identical to a fresh `elmgen` run |
-| `make gen-test` | the generated Swift compiled as a macOS CLI: the protocol harness, then `lockstep.py` against the Lean CLI (identical replies on 800 steps) |
-| `make crosscheck` | the independent LCNF translation, locked in step with both |
-| `make check` | all of the above |
-| `make ios` | xcodegen, build, install and launch the generated app in the simulator |
+| `build` | elan and the toolchain, `lake build` of the app's packages and test executables, the app's `prepare` command; the only job that saves the cache |
+| `tests` | each line of `tests`: a Lean test executable or any command, streamed |
+| `extra` | the app's own command (Winnow: its tests against a regtest Bitcoin node) |
+| `app` | the iOS app: Debug and Release for the simulator, Release for devices (unsigned), each checked for Swift (`check-no-swift`); the app's `release-check`; the UI tests on a throwaway simulator with a screen recording (`ui-tests`) |
 
-## What the framework proves, and what it trusts
+Every long step prints its output as it comes, and a line at least every 30 seconds while a step is
+quiet (`framework/native/ci/progress`). An app calls it with its own paths and hooks:
 
-The framework's gate (`framework/lean/ElmLean/Proofs.lean`) holds the theorems every app relies on:
+```yaml
+jobs:
+  app:
+    uses: posix4e/elmlean/.github/workflows/ios-app.yml@<commit>
+    with:
+      elmlean: <commit>            # the same commit; checked against the app's lake-manifest.json
+      lean-packages: Lean LeanApp
+      app-dir: LeanApp
+      app-root: MyApp
+      scheme: MyApp
+      tests: |
+        Lean .lake/build/bin/my-test
+```
 
-| Theorem (namespace `ElmLean`) | Guarantee, for any app |
-|---|---|
-| `Html.advertises_iff` | A `(path, event)` pair is advertised by the wire tree **iff** dispatching it on the real view yields a message. Nothing un-advertised can trigger anything. |
-| `Html.Sat.dispatch`, `Html.Sat.of_forall` | If every handler satisfies a predicate, so does every dispatched message; a predicate true of all messages holds of every tree. |
-| `Session.handle_advertised`, `Session.handle_dispatch` | An in-sync advertised request is answered with a new view at `seq + 1`, by running `update` on the dispatched message. |
-| `Session.start_coherent`, `Session.handle_coherent`, `Session.run_coherent`, `Session.reach_coherent` | The protocol state machine always shows the view of its current model. |
-| `Session.handle_inv`, `Session.run_inv` | Any invariant preserved by `update` holds after any request trace. |
-| `Spec.reachable_inv`, `Spec.reachable_sound` | What a `Spec` buys: the invariant and well-targeted dispatch in every reachable session. |
-| `Session.step_origin`, `CmdSpec.reachable_inv`, `CmdSpec.trace_origin` | Apps with commands: every step runs `update` on at most one message and asks for exactly `cmds` of it, and that message is an in-sync dispatch from the view shown or a host answer through `app.host`, along any interleaving of events and answers. |
+The inputs are documented at the top of the workflow.
+
+## What is trusted
 
 | Layer | Status | How it is checked |
 |---|---|---|
-| `Html`, `Wire`, `toWire`, `dispatch`, `Session.handle`, `Spec`, each app's `update`/`view` | **Proven** | each package's gate |
-| JSON codecs, the stdin/stdout loop (`framework/lean/ElmLean/{Json,Cli}.lean`) | Trusted, tested | `selftest`; `protocol_test.py` on every app, validated itself against `framework/scripts/fake_cli.py`, an independent stdlib implementation of the protocol |
-| `elmgen` and `framework/swift` | Trusted, tested | loud rejection outside the subset (the corpus in `examples/todo/ElmGenTests`), golden files, lockstep against the Lean CLI, the LCNF cross-check |
-| SwiftUI binding of the generated screen (`framework/swift/Elements.swift`) | Trusted, driven in the simulator | `make ios` |
-| An app's command host (the Send example's WalletCore host) | Trusted, tested | that app's own tests (`make host-test` in examples/send) |
-| Lean compiler and runtime, Python, Swift, SwiftUI | Trusted | — |
-
-Out of scope on purpose: Elm `Sub` (subscriptions; a host may instead send answers at any time),
-running Lean on the device, persistence.
+| `Html`, `Wire`, `toWire`, `dispatch`, `Session`, `Spec`, `CmdSpec`, each app's `update`/`view`/`cmds` | **Proven** | each package's gate |
+| JSON codecs, the CLI loop, `ElmLean.Native` (the C entry points) | Trusted, tested | `selftest`; `protocol_test.py`, itself validated against `framework/scripts/fake_cli.py`, an independent implementation of the protocol |
+| The shell's agreement with the grammar (node decoding, dispatch, enums, events, capabilities) | Checked as it builds | `ElmShell/Check.lean`: the kernel and the build evaluate every row against `Wire.toJson` and `Event.fromJson?` |
+| The shell itself (renderer, store, capabilities, C shim) and the retargeted libraries | Trusted, driven in the simulator | the apps' UI tests |
+| An app's `perform` | the app's | that app's own tests |
+| Lean's compiler and runtime, UIKit and iOS | Trusted | — |
 
 ## Repository layout
 
 ```
-README.md, PROTOCOL.md      this file; the oracle protocol (nodes, events, seq, errors)
-Makefile                    check = framework + examples + template-test; new-app
+README.md, PROTOCOL.md      this file; the wire protocol (nodes, events, seq, errors)
+Makefile                    check: the framework's checks
+.github/workflows/
+  ios-app.yml               the reusable CI workflow for an app
 framework/
   lean/                     Lake package `elmlean`
-    ElmLean/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest
-                            (trusted shell); Gate (the gate commands); Proofs/ and Proofs.lean (the framework's gate)
-    ElmGen/                 the Lean → Swift generator (`lake exe elmgen`)
-    ElmShell/               native mode's shell as Lean data; `lake exe elmshell <dir>` prints its Objective-C
-  swift/                    Runtime.swift (Html mirror, JSON, Session loop), Elements.swift (SwiftUI kit, Store)
-  crosscheck/               the independent LCNF translator
-  scripts/                  check-axioms.sh, protocol_test.py, lockstep.py, fake_cli.py,
-                            gen_golden_test.sh, gen_crosscheck.sh, app_sim.sh, new_app.sh, template_test.sh
-  template/                 what `make new-app` copies
-  app.mk, Makefile          the per-app rules; the framework's own checks
+    ElmLean/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,
+                            Native (trusted shell); Gate; Proofs/ and Proofs.lean (the framework's gate)
+    ElmShell/               the native shell as Lean data; `lake exe elmshell <dir>` prints its Objective-C
+  native/                   README (the shell, capabilities, Mac Catalyst), c/ (the C shim), scripts/
+                            (ios_lean_sources.sh, retarget_ar.py, …), ci/ (the workflow's scripts)
+  scripts/                  check-axioms.sh, protocol_test.py, fake_cli.py
+  Makefile                  the framework's own checks
 examples/
-  todo/                     the main example (README with its theorem table)
-  counter/                  a second, smaller example
-  send/                     Winnow's Send review flow: an app with commands and a WalletCore host
+  native-demo/              every capability in one app, no Swift
 ```
 
-## Notes and known limitations
+Until 2026-10-28 ElmLean also had a generated mode: `elmgen` printed a SwiftUI app from the proven
+definitions, held to the Lean CLI by lockstep tests and an independent LCNF translator, with the Todo,
+Counter and Send examples. Native mode runs the proven definitions themselves, so that machinery was
+removed; the tag `generated-mode` is its last commit.
 
-* In the generated app a control hands its message straight to `update` (`Store.send` in
-  `framework/swift/Elements.swift`), as in Elm. Paths and `seq` exist only in the protocol the
-  CLI and the tests speak, where they make each step a pure function the theorems cover.
-* A toggle event's `value` is authoritative: the app sets a flag, it does not flip one, so a
-  retried toggle is harmless.
-* `seq` and path elements are checked by value: `1.0` and `1e0` are accepted by the CLI,
-  `1.5` is `bad-json`. Literals with huge exponents or millions of digits are a known limit
-  of Lean's JSON parser (`PROTOCOL.md`, "Shell limits").
+## Notes
 
-## Troubleshooting
-
+* A toggle event's `value` is authoritative: the app sets a flag, it does not flip one, so a retried
+  toggle is harmless.
+* `seq` and path elements are checked by value: `1.0` and `1e0` are accepted, `1.5` is `bad-json`.
+  Literals with huge exponents or millions of digits are a known limit of Lean's JSON parser
+  (PROTOCOL.md, "Shell limits").
 * `lake` says "no default toolchain": run it inside a package (the toolchain is pinned there).
-* `elmgen` says "unsupported …": the named construct is outside the generated subset; rewrite
-  it with the constructs listed above.
-* A CLI appears to hang under the harness: it must print nothing but protocol lines on stdout;
-  use `IO.eprintln` for diagnostics.
+* A CLI appears to hang under the harness: it must print nothing but protocol lines on stdout; use
+  `IO.eprintln` for diagnostics.

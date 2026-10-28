@@ -1,0 +1,54 @@
+#!/bin/bash
+# An ElmLean app for iOS, one configuration and platform:
+#
+#   APP_DIR=<app package> APP_ROOT=<root module> SCHEME=<scheme> \
+#     framework/native/ci/build-ios Debug|Release iossim|ios|maccatalyst [xcodebuild arguments]
+#
+# `lake build <APP_ROOT>`, then ios_lean_sources.sh (the C, the retargeted libraries, the printed shell) into
+# $OUT, then XcodeGen on $IOS_DIR/project.yml, then xcodebuild. A device build without xcodebuild
+# arguments is unsigned (CODE_SIGNING_ALLOWED=NO); pass signing settings to sign it.
+#
+#   APP_DIR        the app's Lake package (required)
+#   APP_ROOT       the root module that registers the app (required)
+#   SCHEME         the Xcode scheme (required)
+#   IOS_DIR        the directory of project.yml (default $APP_DIR/ios)
+#   PROJECT        the generated project (default $IOS_DIR/$SCHEME.xcodeproj)
+#   OUT            the build directory (default $IOS_DIR/build)
+#   DERIVED_DATA   xcodebuild's derived data (default $OUT/DerivedData)
+#   BUILD_LOG      xcodebuild's whole output (default $OUT/xcodebuild-<config>-<platform>.log)
+#   PREPARE_ONLY=1 stop before xcodebuild (the project and its sources are ready for an archive)
+#
+# xcodebuild's output goes to BUILD_LOG; the CI log gets its result, its errors and a line every 30 s.
+set -euo pipefail
+CONFIG="${1:?Debug or Release}"; PLATFORM="${2:-iossim}"; shift $(( $# < 2 ? $# : 2 ))
+CI="$(cd "$(dirname "$0")" && pwd)"
+NATIVE="$(cd "$CI/.." && pwd)"
+APP_DIR="$(cd "${APP_DIR:?set APP_DIR to the app Lake package}" && pwd)"
+APP_ROOT="${APP_ROOT:?set APP_ROOT to the app root module}"
+SCHEME="${SCHEME:?set SCHEME to the Xcode scheme}"
+IOS_DIR="${IOS_DIR:-$APP_DIR/ios}"
+PROJECT="${PROJECT:-$IOS_DIR/$SCHEME.xcodeproj}"
+OUT="${OUT:-$IOS_DIR/build}"
+case "$PLATFORM" in
+  iossim) DEST="generic/platform=iOS Simulator" ;;
+  ios) DEST="generic/platform=iOS" ;;
+  maccatalyst) DEST="generic/platform=macOS,variant=Mac Catalyst" ;;
+  *) echo "platform: iossim, ios or maccatalyst" >&2; exit 2 ;;
+esac
+
+mkdir -p "$OUT"
+(cd "$APP_DIR" && lake build "$APP_ROOT") 2>&1 | "$CI/progress" "$OUT/lake-build-$APP_ROOT.log" 'Built |error|✖|Build completed'
+"$NATIVE/scripts/ios_lean_sources.sh" "$APP_DIR" "$APP_ROOT" "$OUT" "$PLATFORM"
+# always the audited XcodeGen, never whichever one is on the PATH
+XCODEGEN="$("$CI/install-xcodegen")"
+(cd "$IOS_DIR" && "$XCODEGEN" generate --quiet)
+[ "${PREPARE_ONLY:-0}" = 1 ] && exit 0
+
+SIGNING=()
+[ "$PLATFORM" = ios ] && [ $# -eq 0 ] && SIGNING=(CODE_SIGNING_ALLOWED=NO)
+LOG="${BUILD_LOG:-$OUT/xcodebuild-$CONFIG-$PLATFORM.log}"
+echo "xcodebuild $SCHEME $CONFIG $PLATFORM (log: $LOG)"
+xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" -destination "$DEST" \
+  -derivedDataPath "${DERIVED_DATA:-$OUT/DerivedData}" ${SIGNING[@]+"${SIGNING[@]}"} "$@" build 2>&1 \
+  | "$CI/progress" "$LOG" '^\*\* BUILD|: error:' \
+  || { tail -40 "$LOG"; exit 1; }

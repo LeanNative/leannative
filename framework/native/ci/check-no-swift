@@ -1,0 +1,18 @@
+#!/bin/bash
+# An ElmLean app has no Swift: none in its repository, none compiled, none linked or bundled.
+#
+#   framework/native/ci/check-no-swift <xcodebuild log> <App.app>
+#
+# The repository is the one the current directory is in.
+set -euo pipefail
+LOG="${1:?xcodebuild log}"; APP="${2:?the .app}"
+fail=0
+swift_files=$(git ls-files '*.swift')
+if [ -n "$swift_files" ]; then echo "Swift sources in the tree:"; echo "$swift_files"; fail=1; fi
+compiles=$(grep -c '^SwiftCompile\|^SwiftDriver' "$LOG" || true)
+if [ "$compiles" != 0 ]; then echo "$compiles Swift compile steps in $LOG"; fail=1; fi
+bin="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+if otool -L "$bin" | grep -i swift; then echo "the app links Swift libraries"; fail=1; fi
+if [ -d "$APP/Frameworks" ] && ls "$APP/Frameworks" | grep -i swift; then echo "the app bundles Swift libraries"; fail=1; fi
+[ "$fail" = 0 ] && echo "no Swift: 0 sources, 0 compile steps, no Swift library linked or bundled"
+exit "$fail"

@@ -1,0 +1,112 @@
+#!/bin/bash
+# An ElmLean app's UI tests on a throwaway simulator, with a screen recording:
+#
+#   APP_DIR=… APP_ROOT=… SCHEME=… framework/native/ci/ui-tests [xcodebuild test arguments, e.g. -only-testing:…]
+#
+# The app's sources and project are prepared as build-ios does (its variables apply), then `xcodebuild test`
+# runs on a simulator this script creates and deletes, never one that may hold a real install of the app.
+# Evidence goes to $UI_OUT: <name>.xcresult, <name>.mp4 (the recording), xcodebuild.log, device.json.
+#
+#   UI_OUT          the evidence directory (default $IOS_DIR/build/ui-tests); emptied first, one run at a time
+#   UI_NAME         the result bundle's and recording's name (default ui-tests)
+#   UI_SIMULATOR    an existing simulator to use instead (a name or UDID; it is not deleted)
+#   UI_RUNTIME      the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest)
+#   UI_DEVICE_TYPE  the iPhone model (default iPhone 17 Pro), so screenshots keep their size from run to run;
+#                   a runtime without it fails the run; device.json records it
+#   UI_BEFORE       a command run as `$UI_BEFORE <UI_OUT>` once the simulator is chosen: the app's fixture
+#                   (a node, files, a config). Each KEY=VALUE line it leaves in <UI_OUT>/test-env reaches the
+#                   test runner as TEST_RUNNER_KEY, i.e. as KEY in the tests' environment.
+#   UI_AFTER        a command run as `$UI_AFTER <UI_OUT> <simulator>` when the run ends, passed or not, while
+#                   the simulator still exists: collect the app's files, stop the fixture
+#
+# The CI log gets each test's result as it ends and a line every 30 s; the whole output is in xcodebuild.log.
+set -euo pipefail
+CI="$(cd "$(dirname "$0")" && pwd)"
+APP_DIR="$(cd "${APP_DIR:?set APP_DIR to the app Lake package}" && pwd)"
+SCHEME="${SCHEME:?set SCHEME to the Xcode scheme}"
+IOS_DIR="${IOS_DIR:-$APP_DIR/ios}"
+PROJECT="${PROJECT:-$IOS_DIR/$SCHEME.xcodeproj}"
+OUT="${UI_OUT:-$IOS_DIR/build/ui-tests}"
+NAME="${UI_NAME:-ui-tests}"
+LOCK="${OUT%/}.lock"
+mkdir -p "$(dirname "$LOCK")"
+mkdir "$LOCK" 2>/dev/null || { echo "another ui-tests run is using $OUT ($LOCK)" >&2; exit 1; }
+rm -rf "$OUT"
+mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
+
+UDID=""
+THROWAWAY=""
+VIDEO_PID=""
+AFTER_RAN=0
+cleanup() {
+  [ -n "$VIDEO_PID" ] && kill -INT "$VIDEO_PID" 2>/dev/null && wait "$VIDEO_PID" 2>/dev/null || true
+  if [ -n "${UI_AFTER:-}" ] && [ "$AFTER_RAN" = 0 ]; then AFTER_RAN=1; $UI_AFTER "$OUT" "$UDID" || true; fi
+  if [ -n "$THROWAWAY" ]; then
+    xcrun simctl shutdown "$THROWAWAY" >/dev/null 2>&1 || true
+    xcrun simctl delete "$THROWAWAY" >/dev/null 2>&1 || true
+  fi
+  rmdir "$LOCK" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+PREPARE_ONLY=1 "$CI/build-ios" Debug iossim
+
+if [ -n "${UI_SIMULATOR:-}" ]; then
+  UDID="$UI_SIMULATOR"
+  DEVICE="$(xcrun simctl list -j | /usr/bin/python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+models = {t["identifier"]: t["name"] for t in data["devicetypes"]}
+for runtime, devices in data["devices"].items():
+    for d in devices:
+        if sys.argv[1] in (d["udid"], d["name"]):
+            kind = d.get("deviceTypeIdentifier")
+            print(json.dumps({"name": models.get(kind, d["name"]), "type": kind, "runtime": runtime})); sys.exit()
+print("{}")' "$UDID")"
+else
+  DEVICE="$(xcrun simctl list -j runtimes | UI_DEVICE_TYPE="${UI_DEVICE_TYPE:-iPhone 17 Pro}" /usr/bin/python3 -c '
+import json, os, sys
+runtimes = [r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and r.get("platform", "iOS") == "iOS"
+            and r["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS")]
+wanted = os.environ.get("UI_RUNTIME")
+if wanted:
+    runtimes = [r for r in runtimes if r["identifier"] == wanted]
+    if not runtimes: sys.exit("no available runtime " + wanted)
+if not runtimes: sys.exit("no available iOS runtime")
+runtime = max(runtimes, key=lambda r: [int(p) for p in r["version"].split(".") if p.isdigit()])
+iphones = [t for t in runtime.get("supportedDeviceTypes", []) if t["name"].startswith("iPhone")]
+if not iphones: sys.exit("no iPhone for " + runtime["identifier"])
+chosen = next((t for t in iphones if t["name"] == os.environ["UI_DEVICE_TYPE"]), None)
+if chosen is None:
+    sys.exit(os.environ["UI_DEVICE_TYPE"] + " is not available on " + runtime["identifier"] + "; set UI_DEVICE_TYPE to one of: "
+             + ", ".join(t["name"] for t in iphones))
+print(json.dumps({"name": chosen["name"], "type": chosen["identifier"], "runtime": runtime["identifier"],
+                  "os": runtime["name"]}))')"
+  MODEL="$(/usr/bin/python3 -c 'import json, sys; print(json.loads(sys.argv[1])["type"])' "$DEVICE")"
+  RUNTIME="$(/usr/bin/python3 -c 'import json, sys; print(json.loads(sys.argv[1])["runtime"])' "$DEVICE")"
+  UDID=$(xcrun simctl create "$SCHEME UI tests $$" "$MODEL" "$RUNTIME")
+  THROWAWAY="$UDID"
+fi
+echo "simulator: $DEVICE"
+printf '%s\n' "$DEVICE" > "$OUT/device.json"
+
+[ -n "${UI_BEFORE:-}" ] && $UI_BEFORE "$OUT"
+RUNNER_ENV=()
+if [ -f "$OUT/test-env" ]; then
+  while IFS='=' read -r key value; do
+    [ -n "$key" ] && RUNNER_ENV+=("TEST_RUNNER_$key=$value")
+  done < "$OUT/test-env"
+fi
+
+xcrun simctl boot "$UDID" 2>/dev/null || true
+xcrun simctl bootstatus "$UDID" -b >/dev/null
+xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$OUT/$NAME.mp4" >/dev/null 2>&1 &
+VIDEO_PID=$!
+
+status=0
+env ${RUNNER_ENV[@]+"${RUNNER_ENV[@]}"} xcodebuild test \
+  -project "$PROJECT" -scheme "$SCHEME" -destination "id=$UDID" \
+  -derivedDataPath "${DERIVED_DATA:-$IOS_DIR/build/DerivedData}" -resultBundlePath "$OUT/$NAME.xcresult" \
+  "$@" 2>&1 | "$CI/progress" "$OUT/xcodebuild.log" '^Test Case .*(passed|failed)|: error:|^\*\* TEST' || status=$?
+exit "$status"

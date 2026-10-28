@@ -19,7 +19,7 @@ variable {M Msg Cmd Host : Type} [ToJson Cmd] [FromJson Host] [ToJson Host]
 structure Options (M Host : Type) where
   /-- The pure app's options: the invariant's runtime mirror, field inputs, step bound, script. -/
   cli : Cli.Options M := {}
-  /-- Plausible host answers in a model, for the self-test and the lockstep driver (`{"samples":true}`). -/
+  /-- Plausible host answers in a model, for the self-test and test drivers (`{"samples":true}`). -/
   samples : M → List Host := fun _ => []
 
 /-- A view reply with the step's commands. -/

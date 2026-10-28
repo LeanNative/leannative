@@ -4,24 +4,14 @@
 #   name = "elmlean"
 #   path = "../../framework/lean"      # or a git source
 #
-# and then runs `lake exe elmgen …` from its own directory (see the README).
+# and builds into an iOS app with framework/native (see framework/native/README.md).
 name = "elmlean"
-defaultTargets = ["ElmLean", "ElmGen", "elmgen", "ElmShell", "elmshell"]
+defaultTargets = ["ElmLean", "ElmShell", "elmshell"]
 
 [[lean_lib]]
 name = "ElmLean"
 
-[[lean_lib]]
-name = "ElmGen"
-
-[[lean_exe]]
-name = "elmgen"
-root = "ElmGen.Main"
-# elmgen pretty-prints Lean terms in its error messages; the delaborator resolves imported formatter
-# entries through the interpreter, which needs the executable's symbols exported.
-supportInterpreter = true
-
-# The native shell: `lake exe elmshell <dir>` prints its Swift (framework/native/README.md).
+# The native shell: `lake exe elmshell <dir>` prints its Objective-C (framework/native/README.md).
 [[lean_lib]]
 name = "ElmShell"
 

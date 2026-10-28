@@ -121,8 +121,7 @@ inductive Html (msg : Type) where
   | toggle (label : String) (on : Bool) (onToggle : Bool → msg)
   | divider
   | spacer
-  -- The constructors below are rendered by the native-mode shell (framework/native); `elmgen` does
-  -- not translate them.
+  -- The constructors below came with the native shell (framework/native).
   /-- A labelled text input; `onSubmit = none` means the return key does nothing. -/
   | input (kind : InputKind) (label placeholder value : String) (onInput : String → msg) (onSubmit : Option msg)
   /-- A grouped list (a SwiftUI `Form`). -/

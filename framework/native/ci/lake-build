@@ -1,0 +1,26 @@
+#!/bin/bash
+# The app's Lean, built: `lake build` in each package, then the extra targets (test executables):
+#
+#   LEAN_PACKAGES="Lean LeanApp" BUILD_TARGETS=$'Lean my-test\nLeanApp app-test' framework/native/ci/lake-build
+#
+#   LEAN_PACKAGES   the app's Lake packages, space-separated, in build order
+#   BUILD_TARGETS   lines `<package> <targets…>`: more targets to build in that package
+#   CI_RESULTS      where the whole build output goes (default $RUNNER_TEMP/elmlean-ci, else build/elmlean-ci)
+#
+# The CI log gets each module Lake builds (not those it replays: their warnings stay in the log file), every
+# error, and a line every 30 s while a long file is being checked.
+set -euo pipefail
+CI="$(cd "$(dirname "$0")" && pwd)"
+R="${CI_RESULTS:-${RUNNER_TEMP:-build}/elmlean-ci}"
+mkdir -p "$R"
+SHOW='Built |error|✖|Build completed|^uncaught'
+for p in ${LEAN_PACKAGES:?set LEAN_PACKAGES to the app Lake packages}; do
+  echo "▶ lake build ($p)"
+  (cd "$p" && lake build) 2>&1 | "$CI/progress" "$R/lake-build-$(basename "$p").log" "$SHOW"
+done
+while read -r p targets; do
+  [ -n "${p:-}" ] && [ -n "${targets:-}" ] || continue
+  echo "▶ lake build $targets ($p)"
+  # shellcheck disable=SC2086 # targets are words
+  (cd "$p" && lake build $targets) 2>&1 | "$CI/progress" "$R/lake-build-$(basename "$p")-targets.log" "$SHOW"
+done <<< "${BUILD_TARGETS:-}"

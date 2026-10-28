@@ -125,12 +125,16 @@ def backgroundTasksClass : List Stmt := [
         .l "BGTaskScheduler *scheduler = BGTaskScheduler.sharedScheduler;",
         .l "// one request per identifier: a new one replaces the last",
         .l "[scheduler cancelTaskRequestWithIdentifier:identifier];",
+        .l "// the completion form is in the iOS 27 SDK only; an older SDK (CI's Xcode 26) builds the error form alone",
+        .pp "#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000",
         .blk [("if (@available(iOS 27.0, *)) {", [
               .l "// the completion form reports every refusal; Apple asks for it off the main thread",
               b "dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{" [
                   b "[scheduler submitTaskRequest:request completionHandler:^(NSError *error) {" [
                       .l "NSDictionary *result = ELSubmitted(error);",
-                      .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}];"] "});"]), ("} else {", [
+                      .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}];"] "});"])] "} else",
+        .pp "#endif",
+        .blk [("{", [
               .l "NSError *error = nil;",
               .pp "#pragma clang diagnostic push",
               .pp "#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"",

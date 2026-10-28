@@ -1,18 +1,11 @@
-# Native mode: full Lean, compiled to C, inside the iOS app
+# Native mode: the app in Lean, compiled to C, inside the iOS app
 
-ElmLean has two ways to run an app on iOS:
-
-| | Generated mode (`elmgen`) | Native mode (this directory) |
-|---|---|---|
-| App code | the subset `elmgen` translates | any Lean 4: recursion, `do`, `IO`, tasks, `ByteArray`, `UInt64`, hash maps… |
-| What runs on the phone | Swift printed from the proven definitions | the same definitions compiled by Lean's compiler to C, with Lean's runtime |
-| View | a SwiftUI screen printed per app | a generic UIKit renderer of the view tree Lean returns, in Objective-C |
-| Effects | commands run by a hand-written Swift host | commands run by the app's own Lean code (`perform`): TCP, files, timers, tasks; iOS-only things through capabilities |
-| Swift per app | a ~20-line shell plus the host | none, and none in the shell: it is Objective-C, printed at build time |
-
-Both modes run the same `update`/`view`/`cmds`, so the theorems about an app (and about
-`Session.step`) hold in either. Native mode is what an app needs when its logic is too large or too
-low-level for the subset — a Bitcoin wallet, for example.
+An ElmLean app runs on iOS as itself: any Lean 4 (recursion, `do`, `IO`, tasks, `ByteArray`, hash
+maps…) compiled by Lean's compiler to C and linked with Lean's runtime. The view tree it returns is drawn
+by a generic UIKit renderer in Objective-C; its commands are run by its own Lean code (`perform`: TCP,
+files, timers, tasks), and what only iOS can do goes through capabilities. No Swift is compiled, per app
+or in the shell. The shell answers events as `Session.step` does, so the theorems about an app (and about
+`Session.step`) are about the code that runs.
 
 ## How an app is built
 

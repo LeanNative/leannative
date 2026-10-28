@@ -9,7 +9,7 @@ import ElmShell.Grammar
   decodes on any node, `idKey`);
 * `decorated` is no row either: every sample, decorated, prints as itself plus a `decor` object with the
   shell's decor fields (`decoratedProblems`), and no row has a field named `id` or `decor`;
-* the string enums list every constructor (`*_complete`), so their Swift raw values are the
+* the string enums list every constructor (`*_complete`), so the shell's values are the
   Lean printer's strings;
 * every `Event` constructor has a row (`eventName_mem`), and the JSON the shell sends for each row is
   parsed back by `Event.fromJson?` into that event.

@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Keeps a long step's whole output in a log and its progress in the CI log.
+
+    <command> 2>&1 | framework/native/ci/progress <log> [<pattern>]
+
+Every line goes to <log>. A line matching <pattern> (a Python regular expression; `.` for every line)
+is also printed as it comes. When nothing has been printed for 30 seconds, a heartbeat is: the time since
+the start and the newest line, so a quiet step never leaves the CI log silent. The exit status is 0; with
+`set -o pipefail` the command's own status decides. Lines are decoded as UTF-8 with replacement.
+"""
+import os
+import re
+import select
+import sys
+import time
+
+QUIET = 30
+
+
+def main() -> int:
+    if len(sys.argv) not in (2, 3):
+        print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
+        return 2
+    log_path = sys.argv[1]
+    show = re.compile(sys.argv[2]) if len(sys.argv) == 3 and sys.argv[2] else None
+    start = said = time.monotonic()
+    newest = ""
+    pending = b""
+    fd = sys.stdin.fileno()
+
+    def emit(raw: bytes) -> None:
+        nonlocal newest, said
+        line = raw.decode("utf-8", "replace").rstrip("\r")
+        if line.strip():
+            newest = line
+        if show is not None and line and show.search(line):
+            print(line, flush=True)
+            said = time.monotonic()
+
+    with open(log_path, "wb") as log:
+        while True:
+            ready, _, _ = select.select([fd], [], [], 5)
+            if ready:
+                chunk = os.read(fd, 1 << 16)
+                if not chunk:
+                    break
+                log.write(chunk)
+                log.flush()
+                pending += chunk
+                *lines, pending = pending.split(b"\n")
+                for raw in lines:
+                    emit(raw)
+            now = time.monotonic()
+            if now - said >= QUIET:
+                print(f"  … {int(now - start)} s: {newest[:160]}", flush=True)
+                said = now
+        if pending:
+            emit(pending)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
