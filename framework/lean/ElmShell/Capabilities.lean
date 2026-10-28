@@ -168,7 +168,7 @@ def capabilities : List Capability :=
     result := "`{\"ok\":true}` disconnects; requests waiting on the peripheral fail with `disconnected`",
     body := [.l "[[ELBluetooth shared] close:args answer:answer];"] },
   { name := "bgtask.schedule", args := "`id`, `kind`? (`refresh` or `processing`; `refresh`), `after`? (s from now), `requiresNetwork`?, `requiresPower`? (processing only)",
-    result := "`{\"ok\":true}` or `{\"ok\":false,\"error\",\"detail\",\"code\"?}` (`unavailable`, `tooManyPending`, `notPermitted`, `immediateRunIneligible`, `badArgs`, `unknown`); replaces any request of that `id`, which must be in Info.plist's `BGTaskSchedulerPermittedIdentifiers`. iOS decides when, and whether, it runs",
+    result := "`{\"ok\":true}` or `{\"ok\":false,\"error\",\"detail\",\"code\"?}` (`unavailable`, `tooManyPending`, `notPermitted`, `immediateRunIneligible`, `badArgs`, `unknown`); replaces any request of that `id`, which must be in Info.plist's `BGTaskSchedulerPermittedIdentifiers`. iOS decides when, and whether, it runs; under Mac Catalyst every request answers `unavailable`",
     body := [.l "[ELBackgroundTasks.shared schedule:args answer:answer];"] },
   { name := "bgtask.complete", args := "`id`, `success`",
     result := "`{\"ok\":true}`, or `{\"ok\":false,\"error\":\"notPending\"}` when no task of that `id` is running (never launched, completed, or completed by the shell a second after it expired)",

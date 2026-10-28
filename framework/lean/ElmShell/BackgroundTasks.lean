@@ -33,7 +33,13 @@ def backgroundTasksClass : List Stmt := [
             b "switch ((BGTaskSchedulerErrorCode)error.code) {" [
                 .l "case BGTaskSchedulerErrorCodeUnavailable: name = @\"unavailable\"; break;",
                 .l "case BGTaskSchedulerErrorCodeTooManyPendingTaskRequests: name = @\"tooManyPending\"; break;",
+                .pp "#if TARGET_OS_MACCATALYST",
+                .l "// Mac Catalyst registers the launch handlers but refuses every request this way, however the",
+                .l "// identifier is listed: the Mac runs no background tasks for the app",
+                .l "case BGTaskSchedulerErrorCodeNotPermitted: name = @\"unavailable\"; break;",
+                .pp "#else",
                 .l "case BGTaskSchedulerErrorCodeNotPermitted: name = @\"notPermitted\"; break;",
+                .pp "#endif",
                 .l "case BGTaskSchedulerErrorCodeImmediateRunIneligible: name = @\"immediateRunIneligible\"; break;",
                 .l "default: break;"]],
         .l "return @{@\"ok\": @NO, @\"error\": name, @\"code\": @(error.code), @\"detail\": error.localizedDescription ?: @\"\"};"],

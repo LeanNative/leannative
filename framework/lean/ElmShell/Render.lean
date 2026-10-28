@@ -618,7 +618,8 @@ def renderBefore : List Stmt := [
     b "@implementation ELRootController {" [
         .l "UIViewController *_child;",
         .l "NSString *_kind;",
-        .l "UILabel *_failure;"],
+        .l "UILabel *_failure;",
+        .l "BOOL _snapshotPending;"],
     .blank,
     b "- (void)viewDidLoad {" [
         .l "[super viewDidLoad];",
@@ -657,7 +658,25 @@ def renderBefore : List Stmt := [
         .blk [("if ([kind isEqualToString:@\"tabs\"]) {", [
               .l "[(ELTabsController *)_child update:view];"]), ("} else if ([kind isEqualToString:@\"screen\"]) {", [
               .l "[(ELScreenController *)((UINavigationController *)_child).viewControllers.firstObject update:view];"]), ("} else {", [
-              .l "[(ELPageController *)((UINavigationController *)_child).viewControllers.firstObject updateNodes:@[view] paths:@[@[]]];"])] "}"],
+              .l "[(ELPageController *)((UINavigationController *)_child).viewControllers.firstObject updateNodes:@[view] paths:@[@[]]];"])] "}",
+        .l "[self snapshotSoon];"],
+    .blank,
+    .l "/// A test hook, Debug builds only: with `ELMLEAN_SNAPSHOT` (a file path) in the launch environment the",
+    .l "/// window is drawn into that PNG half a second after each render (the latest view wins), for runs that",
+    .l "/// cannot capture the screen. Release builds never read it.",
+    b "- (void)snapshotSoon {" [
+        .pp "#if DEBUG",
+        .l "NSString *path = NSProcessInfo.processInfo.environment[@\"ELMLEAN_SNAPSHOT\"];",
+        .l "if (path.length == 0 || _snapshotPending) return;",
+        .l "_snapshotPending = YES;",
+        b "dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{" [
+            .l "self->_snapshotPending = NO;",
+            .l "UIView *v = self.view.window ?: self.view;",
+            .l "UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithBounds:v.bounds];",
+            b "UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {" [
+                .l "[v drawViewHierarchyInRect:v.bounds afterScreenUpdates:YES];"] "}];",
+            .l "[UIImagePNGRepresentation(image) writeToFile:path atomically:YES];"] "});",
+        .pp "#endif"],
     .l "@end",
     .blank,
     .pp "#pragma mark - The node kinds",
