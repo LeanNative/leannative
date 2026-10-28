@@ -61,7 +61,10 @@ Lean builds its own C that way, and at Xcode's Debug `-O0` heavy Lean code (key 
 runs about ten times slower.
 
 The app's root module registers it: `initialize ElmLean.Native.register app`
-(`ElmLean/Native.lean`). See `examples/native-demo` for a complete app with no Swift.
+(`ElmLean/Native.lean`). See `examples/native-demo` for a complete app with no Swift. Its Probes tab asks
+for the background-task, CloudKit, iCloud Keychain and SOCKS capabilities and logs the answers and the
+system events; `examples/native-demo/socks_probe.py` is the SOCKS5 proxy its HTTP probe expects at
+127.0.0.1:1080 (it logs whether the hostname arrived unresolved, ATYP 3).
 
 **Retargeting.** Lean ships its runtime and standard library as macOS arm64 static libraries. The
 script copies them and rewrites each object's `LC_BUILD_VERSION` (platform 7 = iOS Simulator,

@@ -35,6 +35,11 @@ targets:
               - UISceneConfigurationName: Default
                 UISceneDelegateClassName: ELSceneDelegate
         NSFaceIDUsageDescription: "Shows that a Lean app can ask for Face ID."
+        # the shell registers a launch handler for each of these at launch (the Probes tab schedules them)
+        UIBackgroundModes: [fetch, processing]
+        BGTaskSchedulerPermittedIdentifiers:
+          - art.fralex.elmlean.nativedemo.refresh
+          - art.fralex.elmlean.nativedemo.processing
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: art.fralex.elmlean.nativedemo

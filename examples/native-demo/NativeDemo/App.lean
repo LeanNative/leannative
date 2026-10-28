@@ -6,7 +6,9 @@ import ElmLean.Native
 * `update`/`view`/`cmds` as in any ElmLean app;
 * a command run by a Lean task that answers every second (`tick`);
 * a command that asks the shell for an iOS capability (`auth`: Face ID or the passcode);
-* a command that talks TCP through Lean's own libuv sockets (an echo server and client in-process). -/
+* a command that talks TCP through Lean's own libuv sockets (an echo server and client in-process);
+* a Probes tab that asks the shell for capabilities (background tasks, CloudKit, iCloud Keychain, HTTP
+  through a SOCKS5 proxy at 127.0.0.1:1080) and logs their answers and the system events. -/
 
 namespace NativeDemo
 open ElmLean ElmLean.Native Lean
@@ -29,6 +31,8 @@ inductive Host where
   | tick
   | authed (ok : Bool) (detail : String)
   | echoed (reply : String)
+  | probed (label : String) (result : Json)
+  | system (event : Json)
 
 inductive Msg where
   | inc
@@ -44,15 +48,45 @@ inductive Msg where
   | closeSheet
   | openAlert
   | closeAlert
+  | probe (i : Nat)
   | host (h : Host)
 
 inductive Cmd where
   | ticker
   | auth
   | echo (text : String)
+  | probe (label name : String) (args : Json)
   deriving ToJson
 
-def note (m : Model) (s : String) : Model := { m with log := (s :: m.log).take 5 }
+/-- The Probes tab: a label, a capability and its arguments. The background task identifiers are the
+demo's Info.plist `BGTaskSchedulerPermittedIdentifiers`. -/
+def probes : List (String × String × Json) :=
+  let refresh := "art.fralex.elmlean.nativedemo.refresh"
+  let processing := "art.fralex.elmlean.nativedemo.processing"
+  let probeService := "art.fralex.elmlean.nativedemo.probe"
+  [ ("Refresh status", "bgtask.refreshStatus", Json.mkObj []),
+    ("Schedule refresh", "bgtask.schedule", Json.mkObj [("id", refresh), ("after", (900 : Nat))]),
+    ("Schedule processing", "bgtask.schedule",
+      Json.mkObj [("id", processing), ("kind", "processing"), ("requiresNetwork", true)]),
+    ("Schedule unlisted id", "bgtask.schedule", Json.mkObj [("id", "not.in.info.plist")]),
+    ("Complete (none pending)", "bgtask.complete", Json.mkObj [("id", refresh), ("success", true)]),
+    ("CloudKit account", "cloudkit.account", Json.mkObj []),
+    ("CloudKit query", "cloudkit.query", Json.mkObj [("type", "WalletBackup")]),
+    ("Keychain sync set", "keychain.set",
+      Json.mkObj [("key", "probe"), ("service", probeService), ("hex", "00ff10"), ("synchronizable", true)]),
+    ("Keychain sync get", "keychain.get",
+      Json.mkObj [("key", "probe"), ("service", probeService), ("hex", true), ("synchronizable", true)]),
+    ("Keychain local get", "keychain.get",
+      Json.mkObj [("key", "probe"), ("service", probeService), ("hex", true)]),
+    ("Keychain sync delete", "keychain.delete",
+      Json.mkObj [("key", "probe"), ("service", probeService), ("synchronizable", true)]),
+    ("HTTP via SOCKS", "http.get",
+      Json.mkObj [("url", "http://socksprobe/hello"), ("maxBytes", (10000 : Nat)),
+                  ("socks", Json.mkObj [("host", "127.0.0.1"), ("port", (1080 : Nat))])]),
+    ("HTTP bad proxy", "http.get",
+      Json.mkObj [("url", "https://example.com/"), ("socks", Json.mkObj [("host", ""), ("port", (0 : Nat))])]) ]
+
+def note (m : Model) (s : String) : Model := { m with log := (s :: m.log).take 12 }
 
 def update : Msg → Model → Model
   | .inc, m => { m with count := m.count + 1 }
@@ -68,14 +102,20 @@ def update : Msg → Model → Model
   | .closeSheet, m => { m with sheet := false }
   | .openAlert, m => { m with alert := true }
   | .closeAlert, m => { m with alert := false }
+  | .probe i, m => note m s!"asking: {(probes[i]?.map (·.1)).getD "?"}…"
   | .host .tick, m => { m with ticks := m.ticks + 1 }
   | .host (.authed ok d), m => note m (if ok then s!"authenticated {d}" else s!"not authenticated: {d}")
   | .host (.echoed r), m => note m s!"TCP echo: {r}"
+  | .host (.probed l r), m => note m s!"{l}: {r.compress}"
+  | .host (.system e), m => note m s!"system: {e.compress}"
 
 def cmds : Msg → Model → List Cmd
   | .startTicks, m => if m.ticking then [] else [.ticker]
   | .authenticate, _ => [.auth]
   | .echo, m => [.echo s!"ping {m.count}"]
+  | .probe i, _ => match probes[i]? with
+    | some (l, n, a) => [.probe l n a]
+    | none => []
   | _, _ => []
 
 def demoView (m : Model) : Html Msg :=
@@ -101,9 +141,16 @@ def widgets (m : Model) : Html Msg :=
     , (if m.sheet then .sheet "A sheet" (some .closeSheet) [.text "Swipe down or tap Close." .body, .button "Close" .plain (some .closeSheet)] else .spacer)
     , (if m.alert then .alert "An alert" "Rendered from a Lean `alert` node." [.button "OK" .plain (some .closeAlert)] else .spacer) ]
 
+def probesView (m : Model) : Html Msg :=
+  .screen "Probes" none
+    [ .list
+      [ .section "Capabilities" "Each button asks the shell; the answer is logged below."
+          (probes.zipIdx.map fun ((l, _, _), i) => .button l .plain (some (.probe i)))
+      , .section "Log" "Newest first, with system events." (m.log.map (fun s => .text s .caption)) ] ]
+
 def view (m : Model) : Html Msg :=
-  .tabs ["Demo", "Widgets"] ["sparkles", "slider.horizontal.3"] m.tab Msg.tab
-    [if m.tab == 0 then .screen "Native mode" none [demoView m] else widgets m]
+  .tabs ["Demo", "Widgets", "Probes"] ["sparkles", "slider.horizontal.3", "stethoscope"] m.tab Msg.tab
+    [if m.tab == 0 then .screen "Native mode" none [demoView m] else if m.tab == 1 then widgets m else probesView m]
 
 open Std Async Net in
 def echoOnce (port : UInt16) (text : String) : IO String := do
@@ -135,9 +182,12 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
   | .echo text => discard <| IO.asTask do
       let r ← try echoOnce 48334 text catch e => pure s!"failed: {e}"
       fx.post (.echoed r)
+  | .probe l n a => fx.cap n a (.probed l)
 
 def app : Native.App Model Msg Cmd Host :=
-  { init := { count := 0, ticks := 0, ticking := false, log := [] }, update, view, cmds, host := Msg.host, perform }
+  { init := { count := 0, ticks := 0, ticking := false, log := [] }, update, view, cmds, host := Msg.host, perform,
+    -- every system event but the scene phase is logged (the Probes tab shows bgtask launches and expirations)
+    system := fun j => if (j.getObjVal? "scene").isOk then none else some (.system j) }
 
 initialize Native.register app
 
