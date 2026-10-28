@@ -90,7 +90,10 @@ recovery words while the screen is captured.
 
 What only iOS can do, by name, for any app: `auth` (Face ID / passcode), `build` (`{"debug":…}`: test hooks read their launch environment only in a Debug build, `#if DEBUG`), `keychain.get/set/delete/clear` (`clear` empties a service: a test namespace's reset)
 (`set`/`delete` answer the `OSStatus` too; the simulator build is ad-hoc signed, since an unsigned app has
-no Keychain entitlement and every write fails with -34018),
+no Keychain entitlement and every write fails with -34018; items are this device only unless the request
+says `synchronizable`: true, which names iCloud Keychain items instead, accessible while unlocked, and
+matches only those; `set` takes raw bytes as `hex` in place of a UTF-8 `value`, and `get` with `hex`: true
+answers `{"hex":…|null}`, for keys that are not text),
 `clipboard.get/set` (`set` takes `localOnly` and `expiresIn` seconds: kept off Universal Clipboard and
 cleared after that time), `paths`, `exclude-from-backup` (with `complete`: also `FileProtectionType.complete`), `documents` (the Documents path, for Lean's file I/O), `http.get` (HTTPS through
 URLSession: ephemeral, same-host redirects only, never https→http — Lean's runtime has no TLS),
