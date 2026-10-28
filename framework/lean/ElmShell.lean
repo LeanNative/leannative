@@ -6,5 +6,6 @@ import ElmShell.Store
 import ElmShell.Node
 import ElmShell.Render
 import ElmShell.BackgroundTasks
+import ElmShell.CloudKit
 import ElmShell.Capabilities
 import ElmShell.Check

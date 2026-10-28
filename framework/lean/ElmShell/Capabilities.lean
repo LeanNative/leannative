@@ -1,5 +1,6 @@
 import ElmShell.ObjC
 import ElmShell.BackgroundTasks
+import ElmShell.CloudKit
 
 /-! # ElmShell.Capabilities: `ELCapabilities.m`
 
@@ -178,7 +179,22 @@ def capabilities : List Capability :=
       b "switch (UIApplication.sharedApplication.backgroundRefreshStatus) {" [
           .l "case UIBackgroundRefreshStatusAvailable: answer(@{@\"status\": @\"available\"}); break;",
           .l "case UIBackgroundRefreshStatusDenied: answer(@{@\"status\": @\"denied\"}); break;",
-          .l "default: answer(@{@\"status\": @\"restricted\"}); break;"]] } ]
+          .l "default: answer(@{@\"status\": @\"restricted\"}); break;"]] },
+  { name := "cloudkit.account", args := "`container`? (an identifier; the app's default container)",
+    result := "`{\"status\":…,\"user\":…}`: `available` (with `user`, the account's record name), `noAccount`, `restricted`, `couldNotDetermine` or `temporarilyUnavailable` (`user` null); or an error. Every `cloudkit.*` error is `{\"error\",\"code\",\"detail\",\"retryAfter\"?}`, named as `CKErrorCode` (`notAuthenticated`, `networkUnavailable`, `quotaExceeded`, `serverRecordChanged`, …; `notFound` for an unknown item), or `missingEntitlement` without the iCloud entitlement, `badArgs`",
+    body := [.l "[ELCloudKit.shared account:args answer:answer];"] },
+  { name := "cloudkit.query", args := "`type`, `equals`? (`{field: value}`, all must hold), `sortBy`?, `ascending`? (true), `keys`? (fields to fetch; all), `limit`? (100, at most 500), `container`?",
+    result := "`{\"records\":[{\"name\",\"type\",\"fields\",\"modified\",\"tag\"}…],\"more\":…}` from the private database, following cursors up to `limit`. A field is a string, a number, `{\"date\":s}` (since 1970), `{\"hex\":…}` (bytes), a list of those, `{\"asset\":true}` or `{\"ref\":name}`",
+    body := [.l "[ELCloudKit.shared query:args answer:answer];"] },
+  { name := "cloudkit.save", args := "`type`, `name` (the record name), `fields`? (as in a query), `asset`? (hex), `assetField`? (`asset`), `container`?",
+    result := "`{\"ok\":true,\"record\":…}`: the record made or updated, only the given fields changed (`changedKeys`, atomic); the asset goes up from a temporary file with complete protection, removed afterwards",
+    body := [.l "[ELCloudKit.shared save:args answer:answer];"] },
+  { name := "cloudkit.load", args := "`name`, `maxBytes`? (of the asset; 32 MiB), `assetField`? (`asset`), `container`?",
+    result := "`{\"record\":…,\"asset\":hex|null}`, or `{\"error\":\"notFound\"…}`, `{\"error\":\"tooLarge\"}`",
+    body := [.l "[ELCloudKit.shared load:args answer:answer];"] },
+  { name := "cloudkit.delete", args := "`name`, `container`?",
+    result := "`{\"ok\":true}` (also when there was no such record), or an error",
+    body := [.l "[ELCloudKit.shared remove:args answer:answer];"] } ]
 
 
 def unknownCapability : List Stmt := [
@@ -199,6 +215,7 @@ def capsBefore : List Stmt := [
     .pp "#import <Network/Network.h>",
     .pp "#import <Network/NSURLSession+Network.h>",
     .pp "#import <BackgroundTasks/BackgroundTasks.h>",
+    .pp "#import <CloudKit/CloudKit.h>",
     .blank,
     .l "/// The ephemeral URLSessions of `http.get`: no cookies, no cache, redirects only within the same host and",
     .l "/// never from https down to http. One shared session without a proxy, and one per SOCKS5 proxy (`host:port`),",
@@ -604,7 +621,7 @@ def bluetoothClass : List Stmt := [
 def capsImports : Nat := (capsBefore.findIdx? fun | .l _ | .blk .. => true | _ => false).getD 0
 
 def capsFile : List Stmt :=
-  capsBefore.take capsImports ++ argHelpers ++ bluetoothClass ++ [.blank] ++ backgroundTasksClass ++ [.blank] ++ capsBefore.drop capsImports ++
+  capsBefore.take capsImports ++ argHelpers ++ bluetoothClass ++ [.blank] ++ backgroundTasksClass ++ [.blank] ++ cloudKitClass ++ [.blank] ++ capsBefore.drop capsImports ++
   [ b "- (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(NSDictionary *))answer {"
       [ ifChain "" (capabilities.map (fun c => (s!"[name isEqualToString:{lit c.name}]", c.body)) ++ [("", unknownCapability)]) ] ] ++
   [

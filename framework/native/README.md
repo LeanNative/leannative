@@ -119,7 +119,7 @@ is sent to the proxy unresolved, there is no fallback to a direct connection, re
 out after 90 s and 180 s, and a host that is not a string or a port outside 1…65535 answers
 `{"error":"bad-proxy"}`),
 `open` (a URL outside the app), `bgtask.schedule/complete/refreshStatus` (background tasks, above),
-and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
+`cloudkit.account/query/save/load/delete` (below), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
 `ble.connect` (a peripheral the system already holds connected, else the first a scan finds; answers its
 characteristics), `ble.subscribe` (notifications on; iOS pairs here, so it may wait on the user),
 `ble.write` (hex, with or without response), `ble.read` (the next notified value, in arrival order per
@@ -127,6 +127,33 @@ characteristic) and `ble.close`. Framing and UUIDs are the app's (a Ledger's tra
 the central manager is made on the first `ble.*` request, so an app that never uses Bluetooth never asks
 for it, and an app that does declares `NSBluetoothAlwaysUsageDescription`. The app asks with
 `Effects.cap name args k`; the answer comes back as the host message `k result`.
+
+**CloudKit.** Records in the private database of the app's default container (or `container`, an
+identifier), default zone. A field is a string, a number, `{"date":s}` (seconds since 1970), `{"hex":…}`
+(bytes) or a list of those; a record answers as
+`{"name":…,"type":…,"fields":{…},"modified":s|null,"tag":…|null}`, with an asset field as `{"asset":true}`
+and a reference as `{"ref":name}`. One asset per record travels as bytes (hex), under `assetField`
+(default `asset`).
+
+| request | answer |
+|---|---|
+| `cloudkit.account {}` | `{"status":"available","user":recordName}`, or `noAccount` / `restricted` / `couldNotDetermine` / `temporarilyUnavailable` with `"user":null` |
+| `cloudkit.query {"type","equals"?:{field:value},"sortBy"?,"ascending"?,"keys"?:[…],"limit"?}` | `{"records":[record…],"more":bool}` (cursors followed up to `limit`, default 100, at most 500) |
+| `cloudkit.save {"type","name","fields"?:{…},"asset"?:hex,"assetField"?}` | `{"ok":true,"record":record}`: made or updated, only the given fields change (`changedKeys`), atomically |
+| `cloudkit.load {"name","maxBytes"?,"assetField"?}` | `{"record":record,"asset":hex\|null}`; an asset over `maxBytes` (32 MiB) answers `{"error":"tooLarge"}` |
+| `cloudkit.delete {"name"}` | `{"ok":true}`, also when there was no such record |
+
+Errors are `{"error":name,"code":n,"detail":…,"retryAfter":s?}`, the name being the `CKErrorCode` case in
+lower camel case (`notAuthenticated`, `networkUnavailable`, `networkFailure`, `serviceUnavailable`,
+`requestRateLimited`, `zoneBusy`, `quotaExceeded`, `serverRecordChanged`, `permissionFailure`,
+`limitExceeded`, `accountTemporarilyUnavailable`, …), except `notFound` for an unknown item; a partial
+failure answers its record's own error; `badArgs` is a malformed request. An asset goes up from a
+temporary file written with complete file protection and removed when the save ends. The app needs the
+iCloud entitlement with CloudKit (`com.apple.developer.icloud-services` `[CloudKit]` and the container in
+`com.apple.developer.icloud-container-identifiers`). Without it CloudKit raises an Objective-C exception
+when the container is made (a Swift app traps on it); the shell catches it, and every `cloudkit.*` request
+answers `{"error":"missingEntitlement","detail":…}`. iOS has no public API for an app to read its own
+entitlements, so the exception is the check; it is raised once per container and remembered.
 
 ## View nodes
 
