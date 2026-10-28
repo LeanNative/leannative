@@ -10,7 +10,8 @@ def appFile : List Stmt := [
     .blank,
     .l "// The whole iOS app of an ElmLean native app: the generic renderer around whatever view Lean returns. An",
     .l "// app ships no code of its own here; its name comes from Info.plist (`CFBundleDisplayName`). While the",
-    .l "// scene is not active the window is covered (app-switcher snapshots never show it).",
+    .l "// scene is not active the window is covered (app-switcher snapshots never show it); under Mac Catalyst",
+    .l "// only while it is in the background, since a Mac window is inactive whenever another app is in front.",
     .blank,
     b "int main(int argc, char *argv[]) {" [
         b "@autoreleasepool {" [
@@ -53,6 +54,10 @@ def appFile : List Stmt := [
         .l "_cover = [UIView new];",
         .l "_cover.backgroundColor = UIColor.systemBackgroundColor;",
         .l "_cover.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;",
+        .pp "#if TARGET_OS_MACCATALYST",
+        .l "// on a Mac the window is resizable: never narrower or shorter than a phone screen, the layout's design size",
+        .l "((UIWindowScene *)scene).sizeRestrictions.minimumSize = CGSizeMake(390, 640);",
+        .pp "#endif",
         .l "[self.window makeKeyAndVisible];",
         .l "[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(capturedChanged)",
         .l "                                           name:UIScreenCapturedDidChangeNotification object:nil];",
@@ -64,7 +69,14 @@ def appFile : List Stmt := [
     .l "- (void)sceneDidEnterBackground:(UIScene *)scene { [self phase:@\"background\"]; }",
     .blank,
     b "- (void)phase:(NSString *)name {" [
-        .blk [("if ([name isEqualToString:@\"active\"]) {", [
+        .pp "#if TARGET_OS_MACCATALYST",
+        .l "// a Mac window is inactive whenever another app is in front, and has no app-switcher snapshot: it is",
+        .l "// covered only in the background (the app hidden, or every window closed or minimised)",
+        .l "BOOL covered = [name isEqualToString:@\"background\"];",
+        .pp "#else",
+        .l "BOOL covered = ![name isEqualToString:@\"active\"];",
+        .pp "#endif",
+        .blk [("if (!covered) {", [
               .l "[_cover removeFromSuperview];"]), ("} else if (self.window) {", [
               .l "_cover.frame = self.window.bounds;",
               .l "[self.window addSubview:_cover];"])] "}",
