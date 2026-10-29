@@ -28,3 +28,8 @@ root = "ElmLeanTest.BackgroundRun"
 [[lean_exe]]
 name = "clients-test"
 root = "ElmLeanTest.Clients"
+
+# EffectScope: invalidation at every point its module documents (`make check`; not a default target).
+[[lean_exe]]
+name = "effect-scope-test"
+root = "ElmLeanTest.EffectScope"
