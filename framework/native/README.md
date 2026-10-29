@@ -243,6 +243,20 @@ calls them against the shell (iOS 27 simulator: `add` then `alreadyExists`, read
 ad-hoc: Keychain writes `unsupported`, -34018). The clients check what the shell answers, not what the
 platform did: the native side stays trusted.
 
+**Scoped effects: `ElmLean.Native.EffectScope`** (optional; import it). A scope is a part of the app's
+life whose effects end together (an open document, an account, a screen): the app `capture`s a token
+when work starts and `invalidate`s the scope when that part ends. Invalidation is monotonic; `spawn`
+checks the token and registers the task in one step, so a task either never starts or is cancelled and
+drained by the invalidation that makes its token stale; `deliver` drops late results; and
+`authenticated` checks the token before the prompt and, after the answer, starts the protected work
+through `spawn`, answering `done`, `failed`, `denied`, `cancelled`, `error` or `stale` with the stage. A
+validity check does not make later I/O atomic with invalidation, and invalidation cannot undo an
+external effect that has started: the module documentation names the linearization points.
+`ElmLeanTest/EffectScope.lean` (`make check`) tests invalidation before a spawn, during registration (300
+racing rounds), while awaiting authentication, after the answer, during the work, repeatedly, late
+replies, failures and cancel-and-drain; `EffectScope.Model` proves only that the pure epoch rule leaves
+earlier tokens stale. native-demo's Face ID button runs in a scope that its going to the background ends.
+
 ## View nodes
 
 Native mode renders the original eight nodes plus `input` (plain / secure / multiline / number / decimal),

@@ -1,6 +1,7 @@
 import Std.Async.TCP
 import ElmLean.Native
 import ElmLean.Native.BackgroundRun
+import ElmLean.Native.EffectScope
 import ElmLean.Native.Client.Keychain
 import ElmLean.Native.Client.Http
 import ElmLean.Native.Client.CloudKit
@@ -15,7 +16,9 @@ import ElmLean.Native.Client.CloudKit
   through a SOCKS5 proxy at 127.0.0.1:1080) and logs their answers and the system events;
 * a background task iOS launches runs as a `BackgroundRun` (`ElmLean.Native.BackgroundRun`): a short
   job that stops when expired, answered with `bgtask.complete` when it is over;
-* the headless selftest also asks through the typed clients (`ElmLean.Native.Client.*`). -/
+* the headless selftest also asks through the typed clients (`ElmLean.Native.Client.*`);
+* Face ID runs in an `EffectScope` the app's going to the background ends: an answer that comes back
+  after that is dropped. -/
 
 namespace NativeDemo
 open ElmLean ElmLean.Native Lean
@@ -44,6 +47,8 @@ inductive Host where
   | bgtask (expired : Bool) (id kind : String)
   /-- a background run ended -/
   | ran (id : String) (outcome : String)
+  /-- the app went to the background -/
+  | background
 
 inductive Msg where
   | inc
@@ -71,6 +76,8 @@ inductive Cmd where
   answers printed -/
   | selftest
   | runBackground (id kind : String)
+  /-- ends the session scope (`EffectScope.invalidate`) -/
+  | endSession
   | expireBackground (id : String)
   deriving ToJson
 
@@ -126,6 +133,7 @@ def update : Msg → Model → Model
   | .host (.system e), m => note m s!"system: {e.compress}"
   | .host (.bgtask expired id kind), m => note m s!"bgtask {if expired then "expired" else "launched"}: {id} ({kind})"
   | .host (.ran id o), m => note m s!"background run {id}: {o}"
+  | .host .background, m => m
 
 def cmds : Msg → Model → List Cmd
   | .startTicks, m => if m.ticking then [] else [.ticker]
@@ -136,6 +144,7 @@ def cmds : Msg → Model → List Cmd
     | none => []
   | .host (.bgtask false id kind), _ => [.runBackground id kind]
   | .host (.bgtask true id _), _ => [.expireBackground id]
+  | .host .background, _ => [.endSession]
   | _, _ => []
 
 def demoView (m : Model) : Html Msg :=
@@ -191,6 +200,9 @@ def echoOnce (port : UInt16) (text : String) : IO String := do
   let reply ← ask.block
   pure (String.fromUTF8! (reply.getD .empty))
 
+/-- The session: what runs while the app is in front. Going to the background ends it. -/
+initialize session : EffectScope ← EffectScope.new
+
 /-- The background tasks iOS launched and the app has not finished. -/
 initialize backgroundTasks : BackgroundTasks ← BackgroundTasks.new
 
@@ -239,8 +251,18 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
       repeat
         IO.sleep 1000
         fx.post .tick
-  | .auth => fx.cap "auth" (Json.mkObj [("reason", "Prove native capabilities work")]) fun j =>
-      .authed ((j.getObjValAs? Bool "ok").toOption.getD false) ((j.getObjValAs? String "error").toOption.getD "")
+  | .auth => discard <| IO.asTask (prio := .dedicated) do
+      -- in the session's scope: an answer after the app went to the background is not reported
+      let token ← session.capture
+      let r ← session.authenticatedWithShell token fx "Prove native capabilities work" (pure ())
+      let (ok, detail) := match r with
+        | .done () => (true, "")
+        | .denied e => (false, s!"denied ({e.name})")
+        | .cancelled e => (false, s!"cancelled ({e.name})")
+        | .error e => (false, s!"{e.kind.name} ({e.name})")
+        | .failed e => (false, toString e)
+        | .stale _ => (false, "stale")
+      discard <| session.deliver token (fx.post (.authed ok detail))
   | .echo text => discard <| IO.asTask do
       let r ← try echoOnce 48334 text catch e => pure s!"failed: {e}"
       fx.post (.echoed r)
@@ -249,6 +271,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
   | .runBackground id _ => discard <| backgroundTasks.launch fx id
       { work := backgroundWork 10, deadline := .after 20_000, completion := fun o => fx.post (.ran id (describe o)) }
   | .expireBackground id => backgroundTasks.expire fx id
+  | .endSession => discard <| IO.asTask (prio := .dedicated) session.invalidate
   | .selftest => do
       -- a headless check for runs nobody clicks through (`NATIVEDEMO_SELFTEST=1` in the launch
       -- environment): the TCP echo and every probe in order, each answer printed to stdout and logged
@@ -277,7 +300,8 @@ def app : Native.App Model Msg Cmd Host :=
   { init := { count := 0, ticks := 0, ticking := false, log := [] }, update, view, cmds, host := Msg.host, perform, boot := [.selftest],
     -- every system event but the scene phase is logged (the Probes tab shows bgtask launches and expirations)
     system := fun j =>
-      if (j.getObjVal? "scene").isOk then none
+      if (j.getObjValAs? String "scene").toOption == some "background" then some .background
+      else if (j.getObjVal? "scene").isOk then none
       else match BackgroundTasks.systemEvent? j with
         | some (expired, id, kind) => some (.bgtask expired id kind)
         | none => some (.system j) }
