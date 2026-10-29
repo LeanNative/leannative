@@ -31,6 +31,8 @@
 #                   the simulator still exists: collect the app's files, stop the fixture (under Mac Catalyst
 #                   the second argument is empty)
 #   UI_SOURCE_REVISION  the tested commit, when the app directory is not a git checkout (else it must match)
+#   UI_RECORDING    auto (default) or none: no screen recording (recording.log says so). For a Mac Catalyst run
+#                   on a Mac someone uses: its recording would be the whole screen, behind a permission prompt.
 #
 # The CI log gets each test's result as it ends and a line every 30 s; the whole output is in xcodebuild.log.
 set -euo pipefail
@@ -41,6 +43,7 @@ IOS_DIR="${IOS_DIR:-$APP_DIR/ios}"
 PROJECT="${PROJECT:-$IOS_DIR/$SCHEME.xcodeproj}"
 OUT="${UI_OUT:-$IOS_DIR/build/ui-tests}"
 NAME="${UI_NAME:-ui-tests}"
+case "${UI_RECORDING:-auto}" in auto | none) ;; *) echo "UI_RECORDING: auto or none" >&2; exit 2 ;; esac
 PLATFORM="${UI_PLATFORM:-iossim}"
 case "$PLATFORM" in
   iossim) PLATFORM_NAME="iOS Simulator" ;;
@@ -122,6 +125,7 @@ stop_mac_recording() {
     rm -f "$OUT/.screencapture-input"
   fi
   VIDEO_PID=""
+  [ "${UI_RECORDING:-auto}" = none ] && return
   if [ ! -s "$mov" ]; then echo "screencapture wrote no recording (no Screen Recording permission?)" >> "$OUT/recording.log"; return; fi
   if avconvert --source "$mov" --preset Preset1280x720 --output "$OUT/$NAME.mp4" --replace >> "$OUT/recording.log" 2>&1; then
     rm -f "$mov"
@@ -255,7 +259,13 @@ if [ -f "$OUT/test-env" ]; then
   done < "$OUT/test-env"
 fi
 
-if [ "$PLATFORM" = maccatalyst ]; then
+if [ "${UI_RECORDING:-auto}" = none ]; then
+  echo "not recorded: UI_RECORDING=none" > "$OUT/recording.log"
+  if [ "$PLATFORM" = iossim ]; then
+    xcrun simctl boot "$UDID" 2>/dev/null || true
+    xcrun simctl bootstatus "$UDID" -b >/dev/null
+  fi
+elif [ "$PLATFORM" = maccatalyst ]; then
   # -v records until a key on its input: a FIFO this script holds open (fd 7) and writes to at the end
   mkfifo "$OUT/.screencapture-input"
   exec 7<>"$OUT/.screencapture-input"
