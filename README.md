@@ -225,8 +225,9 @@ framework/
                             Native/ (optional native support: BackgroundRun, the typed capability clients, EffectScope)
     ElmLeanTest/            the native support modules' tests and fixtures (`make check`)
     ElmShell/               the native shell as Lean data; `lake exe elmshell <dir>` prints its Objective-C
-  native/                   README (the shell, capabilities, Mac Catalyst), c/ (the C shim), scripts/
-                            (ios_lean_sources.sh, retarget_ar.py, …), ci/ (the workflow's scripts)
+  native/                   README (the shell, capabilities, Mac Catalyst, UI tests), c/ (the C shim), scripts/
+                            (ios_lean_sources.sh, retarget_ar.py, …), ci/ (the workflow's scripts),
+                            testkit/ (Objective-C XCTest helpers for an app's UI-test target only)
   scripts/                  check-axioms.sh, protocol_test.py, fake_cli.py
   Makefile                  the framework's own checks
 examples/

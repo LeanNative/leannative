@@ -1,0 +1,7 @@
+#!/bin/bash
+# native-demo's UI_BEFORE for framework/native/ci/ui-tests: the screenshots go next to the run's other
+# evidence, as <UI_OUT>/screenshots/<name>.png (the tests read SCREENSHOTS; the runner passes test-env).
+set -euo pipefail
+OUT="${1:?the ui-tests evidence directory}"
+mkdir -p "$OUT/screenshots"
+echo "SCREENSHOTS=$OUT/screenshots" >> "$OUT/test-env"

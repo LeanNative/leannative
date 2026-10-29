@@ -256,6 +256,44 @@ external effect that has started: the module documentation names the linearizati
 racing rounds), while awaiting authentication, after the answer, during the work, repeatedly, late
 replies, failures and cancel-and-drain; `EffectScope.Model` proves only that the pure epoch rule leaves
 earlier tokens stale. native-demo's Face ID button runs in a scope that its going to the background ends.
+## UI tests: `framework/native/ci/ui-tests` and the XCTest kit (`testkit/`)
+
+`ui-tests` runs an app's XCUITest target on a simulator it creates and deletes, with a recording and
+`device.json` and `run.json` (what was tested, recorded as the run starts); `UI_BEFORE` / `UI_AFTER` set
+up and take down a fixture, and each `KEY=VALUE` line `UI_BEFORE` leaves in `<UI_OUT>/test-env` reaches the
+tests' environment. Run native-demo's:
+
+```
+APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo \
+  UI_BEFORE="$PWD/examples/native-demo/ios/ui-before" framework/native/ci/ui-tests
+python3 -I framework/native/ci/export-evidence examples/native-demo/ios/build/ui-tests /tmp/demo-evidence
+```
+
+`testkit/ELTest.{h,m}` are Objective-C helpers for any app's UI-test target, and only for it (add the
+directory to the `bundle.ui-testing` target's sources; native-demo's `project.yml` shows how): the app
+never links XCTest. `ELElement` finds a node by the identifier the app gives it (`Html.identified`);
+`ELTap`, `ELType` (replaces a field's text), `ELWait`, `ELExpectDisabled` and `ELExpectMissing` check
+their preconditions first (the element appears, within `ELAppearTimeout`, scrolling for it if a list has
+not made it yet; it can be brought into view; it is enabled within `ELEnabledTimeout`) and, when one
+fails, record an XCTest failure at the caller's line and return NO without acting; `ELShot` attaches a
+screenshot and writes it only where an explicit `ELScreenshots` says (`inDirectory:`, `fromEnvironment:`,
+`attachmentsOnly`). `ELText` reads a label without the shell's zero-width wrap points; `ELPoll` and
+`ELScrollTo` are the building blocks.
+
+| helper | iOS (device, simulator) | Mac Catalyst |
+|---|---|---|
+| `ELTap` | tap | click |
+| `ELScrollTo` (and the scrolling in the actions) | a drag in the middle of the screen | the scroll wheel over the window |
+| `ELType` | tap, delete the old text, type, then the shell's Done bar or return | click, Command-A, type (the field keeps focus) |
+| `ELElement`, `ELWait`, `ELExpect*`, `ELShot`, `ELText`, `ELPoll` | the same | the same |
+
+native-demo's `UITests/NativeDemoUITests.m` drives them against its real controls: a counter, text
+replacement and clearing, a control the view disables, missing and disabled controls (the failures are
+expected and the test checks nothing was tapped), the last button of a list below the fold, Face ID in
+the session's EffectScope ended by going to the background (a cancellation or a dropped stale answer), and
+screenshots written and refused. They have run on the iOS simulator (CI's macOS runner and Xcode 27.1
+locally); the Catalyst branches compile in the Catalyst build but have not been run (a Mac UI test takes
+over the machine's pointer and keyboard), so Mac coverage is not inferred from the iOS runs.
 
 ## View nodes
 

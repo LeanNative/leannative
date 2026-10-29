@@ -63,3 +63,33 @@ targets:
         DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
+  # The UI tests (Objective-C XCUITest, UITests/) with the framework's test kit, which only this target
+  # compiles: the app never links XCTest. framework/native/ci/ui-tests runs them on a throwaway simulator.
+  NativeDemoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+      - { path: ../../../framework/native/testkit, name: ElmLeanTestKit }
+    dependencies:
+      - target: NativeDemo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: art.fralex.elmlean.nativedemo.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: NativeDemo
+        "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+        "CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]": "NO"
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+        SUPPORTS_MACCATALYST: YES
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
+schemes:
+  NativeDemo:
+    build:
+      targets:
+        NativeDemo: all
+        NativeDemoUITests: [test]
+    test:
+      config: Debug
+      targets: [NativeDemoUITests]
