@@ -110,7 +110,7 @@ whenever another app is in front, and the Mac takes no app-switcher snapshots.
 
 **Headless runs.** A Debug build of any native app draws its window into the PNG named by
 `ELMLEAN_SNAPSHOT` (launch environment) half a second after each render, for runs that cannot capture the
-screen; native-demo with `NATIVEDEMO_SELFTEST=1` runs the TCP echo and every probe at launch and prints
+screen; native-demo with `NATIVEDEMO_SELFTEST=1` runs the TCP echo, two background runs and every probe at launch and prints
 each answer to stdout:
 
 ```
@@ -153,6 +153,21 @@ before the store has started (a task launched early) starts it. The simulator re
 (`bgtask.schedule` answers `unavailable`), so launches and expirations can only be exercised on a device,
 where Xcode's debugger launches a scheduled task with
 `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"…"]`.
+
+**Running the work: `ElmLean.Native.BackgroundRun`** (optional; import it). A `BackgroundRun` is one job
+that may be expired at any moment: it linearizes start, expiry and the work's end under one lock,
+delivers its completion at most once (exactly once when started or expired), and, when expiry wins
+while the work runs, cancels the work (`IO.cancel` plus the app's `cancel` hook) and completes only after
+the work and its `cleanup` have returned, so a late success is never reported. Cancellation is
+cooperative: work that checks neither `IO.checkCanceled` nor anything its hook can interrupt keeps
+running, and so does the wait for it. `BackgroundTasks` keeps the runs by identifier: `launch fx id config`
+on `{"bgtask":…}`, `expire fx id` on `{"bgtaskExpired":…}` (an expiry with no run is answered
+`bgtask.complete false` at once), each run answering `bgtask.complete` with its outcome;
+`BackgroundTasks.systemEvent?` reads both events. The module documentation states every race and
+failure case, and `ElmLeanTest/BackgroundRun.lean` (`make check`) tests each one with gates. native-demo
+runs iOS-launched tasks through it, and its headless selftest runs one run to completion and one past
+its deadline (verified on the iOS 27 simulator and under Mac Catalyst on arm64 and x86_64). These are
+tests, not proofs.
 
 ## Capabilities (`lean/ElmShell/Capabilities.lean`)
 
