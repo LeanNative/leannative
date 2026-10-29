@@ -210,8 +210,8 @@ framework/
   lean/                     Lake package `elmlean`
     ElmLean/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,
                             Native (trusted shell); Gate; Proofs/ and Proofs.lean (the framework's gate);
-                            Native/ (optional native support: BackgroundRun)
-    ElmLeanTest/            the native support modules' tests (`make check`)
+                            Native/ (optional native support: BackgroundRun, the typed capability clients)
+    ElmLeanTest/            the native support modules' tests and fixtures (`make check`)
     ElmShell/               the native shell as Lean data; `lake exe elmshell <dir>` prints its Objective-C
   native/                   README (the shell, capabilities, Mac Catalyst), c/ (the C shim), scripts/
                             (ios_lean_sources.sh, retarget_ar.py, …), ci/ (the workflow's scripts)

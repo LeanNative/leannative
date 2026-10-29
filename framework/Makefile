@@ -15,8 +15,9 @@ axioms:
 protocol-fake:
 	$(PY) -I scripts/protocol_test.py --shape list "$(FAKE)"
 
-# The optional native support modules (ElmLean/Native/*), headless: BackgroundRun's lifecycle.
+# The optional native support modules (ElmLean/Native/*), headless: BackgroundRun's lifecycle and the
+# typed clients against wire fixtures.
 native-support:
-	cd lean && lake build background-run-test && .lake/build/bin/background-run-test
+	cd lean && lake build background-run-test clients-test && .lake/build/bin/background-run-test && .lake/build/bin/clients-test
 
 check: build axioms protocol-fake native-support

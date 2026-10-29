@@ -24,22 +24,24 @@ structure Capability where
 set_option maxRecDepth 8000 in
 def capabilities : List Capability :=
 [
-  { name := "auth", args := "`reason`", result := "`{\"ok\":true}` or `{\"ok\":false,\"error\":…}` (device-owner authentication)",
+  { name := "auth", args := "`reason`", result := "`{\"ok\":true}` or `{\"ok\":false,\"error\":…,\"name\":…,\"code\":…}` (device-owner authentication; `error` is the system's text, `name` and `code` the `LAError`: `userCancel`, `systemCancel`, `appCancel`, `userFallback`, `authenticationFailed`, `biometryLockout`, `passcodeNotSet`, `biometryNotAvailable`, `biometryNotEnrolled`, `notInteractive`, `invalidContext` or `unknown`)",
     body := [
       .l "LAContext *context = [LAContext new];",
-      b "if (![context canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication error:nil]) {" [
+      .l "NSError *unable = nil;",
+      b "if (![context canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication error:&unable]) {" [
           .pp "#if TARGET_OS_SIMULATOR",
           .l "answer(@{@\"ok\": @YES, @\"note\": @\"simulator without a passcode\"});",
           .pp "#else",
-          .l "answer(@{@\"ok\": @NO, @\"error\": @\"Set a device passcode first.\"});",
+          .l "answer(@{@\"ok\": @NO, @\"error\": @\"Set a device passcode first.\", @\"name\": ELAuthErrorName(unable), @\"code\": @(unable.code)});",
           .pp "#endif",
           .l "return;"],
       .l "NSString *reason = ELArgString(args, @\"reason\") ?: @\"Confirm\";",
       b "[context evaluatePolicy:LAPolicyDeviceOwnerAuthentication localizedReason:reason reply:^(BOOL ok, NSError *error) {" [
-          .l "NSDictionary *result = ok ? @{@\"ok\": @YES} : @{@\"ok\": @NO, @\"error\": error.localizedDescription ?: @\"Authentication failed.\"};",
+          .l "NSDictionary *result = ok ? @{@\"ok\": @YES} : @{@\"ok\": @NO, @\"error\": error.localizedDescription ?: @\"Authentication failed.\",",
+          .l "                                                @\"name\": ELAuthErrorName(error), @\"code\": @(error.code)};",
           .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}];"] },
   { name := "keychain.get", args := "`key`, `service`?, `synchronizable`?, `hex`?",
-    result := "`{\"value\":…}` or `{\"value\":null}` (`service` defaults to the bundle id); with `hex`, `{\"hex\":…}` or `{\"hex\":null}`: the raw bytes",
+    result := "`{\"value\":…,\"status\":…}` or `{\"value\":null,\"status\":…}` (`service` defaults to the bundle id; `status` is the `OSStatus`: `-25300` for no such item); with `hex`, `{\"hex\":…|null,\"status\":…}`: the raw bytes",
     body := [
       .l "NSMutableDictionary *query = [self base:args];",
       .l "query[(__bridge id)kSecReturnData] = @YES;",
@@ -48,10 +50,23 @@ def capabilities : List Capability :=
       .l "OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &out);",
       .l "NSData *data = status == errSecSuccess ? (__bridge_transfer NSData *)out : nil;",
       b "if ([ELArgNumber(args, @\"hex\") boolValue]) {" [
-          .l "answer(@{@\"hex\": data ? ELHexOf(data) : NSNull.null});",
+          .l "answer(@{@\"hex\": data ? ELHexOf(data) : NSNull.null, @\"status\": @(status)});",
           .l "return;"],
       .l "NSString *s = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;",
-      .l "answer(@{@\"value\": s ?: NSNull.null});"] },
+      .l "answer(@{@\"value\": s ?: NSNull.null, @\"status\": @(status)});"] },
+  { name := "keychain.add", args := "`key`, `value` or `hex`, `service`?, `synchronizable`?",
+    result := "`{\"ok\":…,\"status\":…,\"exists\":…}`: creates the item only if there is none (one `SecItemAdd`; `-25299`, `errSecDuplicateItem`, with `exists` when there is, and the item is untouched); protection as `keychain.set`",
+    body := [
+      .l "NSString *hex = ELArgString(args, @\"hex\");",
+      .l "NSData *data = hex ? ELDataOf(hex) : [(ELArgString(args, @\"value\") ?: @\"\") dataUsingEncoding:NSUTF8StringEncoding];",
+      .l "if (!data) { answer(@{@\"ok\": @NO, @\"status\": @(errSecParam), @\"exists\": @NO}); return; }",
+      .l "NSMutableDictionary *query = [self base:args];",
+      .l "query[(__bridge id)kSecValueData] = data;",
+      .l "query[(__bridge id)kSecAttrAccessible] = [self synchronizable:args] ? (__bridge id)kSecAttrAccessibleWhenUnlocked",
+      .l "                                                                    : (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly;",
+      .l "// no delete first: the Keychain refuses a second item of the same name, so racing adds cannot both succeed",
+      .l "OSStatus status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);",
+      .l "answer(@{@\"ok\": @((BOOL)(status == errSecSuccess)), @\"status\": @(status), @\"exists\": @((BOOL)(status == errSecDuplicateItem))});"] },
   { name := "keychain.set", args := "`key`, `value` or `hex`, `service`?, `synchronizable`?",
     result := "`{\"ok\":…,\"status\":…}` (the `OSStatus`; `-50` for bad hex); this device only, while unlocked; with `synchronizable`, iCloud Keychain (`kSecAttrSynchronizable`), while unlocked",
     body := [
@@ -117,7 +132,7 @@ def capabilities : List Capability :=
       .l "    ok = [NSFileManager.defaultManager setAttributes:@{NSFileProtectionKey: NSFileProtectionComplete} ofItemAtPath:url.path error:nil];",
       .l "answer(@{@\"ok\": @(ok)});"] },
   { name := "http.get", args := "`url`, `maxBytes`, `timeout` (s), `accept`?, `socks`? (`{\"host\",\"port\"}`)",
-    result := "`{\"status\":…,\"body\":hex}` or `{\"error\":…}` (`bad-url`, `bad-proxy`, `tooLarge`, `response`, or the system's description); ephemeral session, no cookies or cache, redirects only within the same host and never from https to http; with `socks`, through that SOCKS5 proxy only (names resolved by the proxy, no direct fallback)",
+    result := "`{\"status\":…,\"body\":hex}` or `{\"error\":…}` (`bad-url`, `bad-proxy`, `tooLarge`, `response`, or the system's description with its `code` and `domain`); ephemeral session, no cookies or cache, redirects only within the same host and never from https to http; with `socks`, through that SOCKS5 proxy only (names resolved by the proxy, no direct fallback)",
     body := [
       .l "NSURL *url = [NSURL URLWithString:ELArgString(args, @\"url\") ?: @\"\"];",
       .l "NSString *scheme = url.scheme.lowercaseString ?: @\"\";",
@@ -133,7 +148,7 @@ def capabilities : List Capability :=
       b "[[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {" [
           .l "NSDictionary *result;",
           .blk [("if (error) {", [
-                .l "result = @{@\"error\": error.localizedDescription};"]), ("} else if ([response isKindOfClass:NSHTTPURLResponse.class] && data) {", [
+                .l "result = @{@\"error\": error.localizedDescription ?: @\"\", @\"code\": @(error.code), @\"domain\": error.domain ?: @\"\"};"]), ("} else if ([response isKindOfClass:NSHTTPURLResponse.class] && data) {", [
                 .blk [("if ((NSInteger)data.length > maxBytes) {", [
                       .l "result = @{@\"error\": @\"tooLarge\"};"]), ("} else {", [
                       .l "NSMutableString *hex = [NSMutableString stringWithCapacity:data.length * 2];",
@@ -219,6 +234,23 @@ def capsBefore : List Stmt := [
     .pp "#import <mach-o/dyld.h>",
     .pp "#import <mach-o/getsect.h>",
     .pp "#import <mach-o/loader.h>",
+    .blank,
+    .l "/// An `LAError`'s name for `auth` (`unknown` for any other error, or none).",
+    b "static NSString *ELAuthErrorName(NSError *error) {" [
+        .l "if (![error.domain isEqualToString:LAErrorDomain]) return @\"unknown\";",
+        b "switch ((LAError)error.code) {" [
+            .l "case LAErrorAuthenticationFailed: return @\"authenticationFailed\";",
+            .l "case LAErrorUserCancel: return @\"userCancel\";",
+            .l "case LAErrorUserFallback: return @\"userFallback\";",
+            .l "case LAErrorSystemCancel: return @\"systemCancel\";",
+            .l "case LAErrorPasscodeNotSet: return @\"passcodeNotSet\";",
+            .l "case LAErrorAppCancel: return @\"appCancel\";",
+            .l "case LAErrorInvalidContext: return @\"invalidContext\";",
+            .l "case LAErrorNotInteractive: return @\"notInteractive\";",
+            .l "case LAErrorBiometryNotAvailable: return @\"biometryNotAvailable\";",
+            .l "case LAErrorBiometryNotEnrolled: return @\"biometryNotEnrolled\";",
+            .l "case LAErrorBiometryLockout: return @\"biometryLockout\";",
+            .l "default: return @\"unknown\";"]],
     .blank,
     .l "/// The ephemeral URLSessions of `http.get`: no cookies, no cache, redirects only within the same host and",
     .l "/// never from https down to http. One shared session without a proxy, and one per SOCKS5 proxy (`host:port`),",

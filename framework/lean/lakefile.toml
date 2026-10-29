@@ -23,3 +23,8 @@ root = "ElmShell.Main"
 [[lean_exe]]
 name = "background-run-test"
 root = "ElmLeanTest.BackgroundRun"
+
+# The typed capability clients against wire fixtures and a fake shell (`make check`; not a default target).
+[[lean_exe]]
+name = "clients-test"
+root = "ElmLeanTest.Clients"
