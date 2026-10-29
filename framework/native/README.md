@@ -316,8 +316,33 @@ screenshots, which the sandboxed Mac test runner writes to its own temporary dir
 them from the result bundle). Not run under Catalyst: `auth`, whose prompt is the Mac's password sheet in
 another process that going to the background does not dismiss, on a runner with no Touch ID; background
 tasks, which the Mac never launches (`bgtask.schedule` answers `unavailable`); Bluetooth; and anything
-needing a team-signed build (iCloud, a keychain access group). Nothing runs on an x86_64 Mac in CI (the
-universal build's x86_64 half ran under Rosetta locally only).
+needing a team-signed build in CI (iCloud, a keychain access group).
+
+**Team-signed, on a Mac of your own.** A development build signed with your team gets a keychain access
+group, and the Keychain answers as on iOS (native-demo's selftest: `add` then `alreadyExists`, read,
+delete; checked on an M5 Max with macOS 27.0.1 and Xcode 27.1). Pass the signing as build settings, so
+nothing committed changes; with no `-allowProvisioningUpdates`, Xcode uses the team profiles already on
+the Mac (a Mac Catalyst team profile that lists the Mac) and asks Apple for nothing:
+
+```
+SIGN=(CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=<team> "CODE_SIGN_IDENTITY=Apple Development"
+      CODE_SIGN_ENTITLEMENTS="$PWD/examples/native-demo/ios/NativeDemo-team.entitlements")
+# the selftest, headless: no UI test, nothing takes over the Mac
+PREPARE_ONLY=1 APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo \
+  framework/native/ci/build-ios Debug maccatalyst
+xcodebuild -project examples/native-demo/ios/NativeDemo.xcodeproj -scheme NativeDemo \
+  -destination 'platform=macOS,variant=Mac Catalyst,arch=arm64' -derivedDataPath /tmp/dd-team "${SIGN[@]}" build
+open -n --env NATIVEDEMO_SELFTEST=1 --stdout /tmp/selftest.out /tmp/dd-team/Build/Products/Debug-maccatalyst/NativeDemo.app
+# the UI tests: they take over the pointer and keyboard; no recording of the whole screen
+TEST_RUNNER_NATIVEDEMO_KEYCHAIN=access-group UI_PLATFORM=maccatalyst UI_RECORDING=none \
+  APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo framework/native/ci/ui-tests "${SIGN[@]}"
+```
+
+The UI tests need macOS's Automation Mode, which a Mac that asks for authentication to enable it
+(`automationmodetool` says which) prompts for on the first run: someone at the Mac answers it, or enables
+it beforehand with `sudo automationmodetool enable-automationmode-without-authentication`.
+`TEST_RUNNER_NATIVEDEMO_KEYCHAIN=access-group` tells the selftest test to expect the real Keychain rather
+than `-34018`.
 
 ## View nodes
 

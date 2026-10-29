@@ -165,16 +165,22 @@
     XCTAssertTrue([said[@"typed http.get unreachable"] hasPrefix:@"failed system"], @"unreachable: %@", said[@"typed http.get unreachable"]);
     // an ad-hoc build has no iCloud entitlement
     XCTAssertEqualObjects(said[@"typed cloudkit.account"], @"unsupported missingEntitlement");
-#if TARGET_OS_MACCATALYST
-    // an ad-hoc Mac app has no keychain access group: the data protection keychain refuses it (errSecMissingEntitlement)
-    XCTAssertEqualObjects(said[@"typed keychain.add"], @"unsupported status -34018 (-34018)");
-#else
-    XCTAssertEqualObjects(said[@"typed keychain.add"], @"ok added");
-    XCTAssertEqualObjects(said[@"typed keychain.add again"], @"ok alreadyExists");
-    XCTAssertEqualObjects(said[@"typed keychain.get"], @"ok 010203");
-    XCTAssertTrue([said[@"typed keychain.delete"] hasPrefix:@"ok"], @"delete: %@", said[@"typed keychain.delete"]);
-    XCTAssertEqualObjects(said[@"typed keychain.get after delete"], @"ok none");
-#endif
+    // the Keychain: an iOS app (the simulator's ad-hoc signature included) and a team-signed Mac app have an
+    // access group; an ad-hoc Mac app has none, and the data protection keychain refuses it
+    // (errSecMissingEntitlement). A team-signed Mac run says so: NATIVEDEMO_KEYCHAIN=access-group in the
+    // tests' environment (TEST_RUNNER_NATIVEDEMO_KEYCHAIN for xcodebuild; framework/native/README.md).
+    BOOL accessGroup = !TARGET_OS_MACCATALYST
+        || [NSProcessInfo.processInfo.environment[@"NATIVEDEMO_KEYCHAIN"] isEqualToString:@"access-group"];
+    NSLog(@"keychain: %@", accessGroup ? @"an access group" : @"none (ad-hoc Mac app)");
+    if (accessGroup) {
+        XCTAssertEqualObjects(said[@"typed keychain.add"], @"ok added");
+        XCTAssertEqualObjects(said[@"typed keychain.add again"], @"ok alreadyExists");
+        XCTAssertEqualObjects(said[@"typed keychain.get"], @"ok 010203");
+        XCTAssertTrue([said[@"typed keychain.delete"] hasPrefix:@"ok"], @"delete: %@", said[@"typed keychain.delete"]);
+        XCTAssertEqualObjects(said[@"typed keychain.get after delete"], @"ok none");
+    } else {
+        XCTAssertEqualObjects(said[@"typed keychain.add"], @"unsupported status -34018 (-34018)");
+    }
 }
 
 #if !TARGET_OS_MACCATALYST
