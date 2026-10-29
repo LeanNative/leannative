@@ -5,6 +5,7 @@ import ElmLean.Native.EffectScope
 import ElmLean.Native.Client.Keychain
 import ElmLean.Native.Client.Http
 import ElmLean.Native.Client.CloudKit
+import ElmLean.Native.Client.Bluetooth
 
 /-! # A native-mode demo: the pieces Winnow needs, in one screen
 
@@ -20,7 +21,11 @@ import ElmLean.Native.Client.CloudKit
   invalidation drains, and the typed clients (`ElmLean.Native.Client.*`) against the real shell; its lines
   are printed and shown on the Demo tab (`selftest-<n>`), so UI tests read them on iOS and Mac Catalyst alike;
 * Face ID runs in an `EffectScope` the app's going to the background ends: an answer that comes back
-  after that is dropped. -/
+  after that is dropped;
+* with `NATIVEDEMO_BLE_SERVICE=<a service UUID>` at launch, the Probes tab has a Bluetooth section: the
+  Bluetooth state, and a connection to the first peripheral offering that service (its id and name logged),
+  closed at once. Nothing else is said to the peripheral; without the variable the app never touches
+  Bluetooth, so no run that does not set it is asked for the permission. -/
 
 namespace NativeDemo
 open ElmLean ElmLean.Native Lean
@@ -40,6 +45,8 @@ structure Model where
   name : String := ""
   /-- the selftest's lines, newest first -/
   selftest : List String := []
+  /-- `NATIVEDEMO_BLE_SERVICE`, when set at launch -/
+  bleService : Option String := none
   deriving Inhabited
 
 inductive Host where
@@ -58,6 +65,10 @@ inductive Host where
   | dropped (what : String)
   /-- one line of the selftest -/
   | checked (line : String)
+  /-- the Bluetooth service to connect to (`NATIVEDEMO_BLE_SERVICE`) -/
+  | bleService (uuid : String)
+  /-- one answer of the Bluetooth probes -/
+  | bleSaid (line : String)
 
 inductive Msg where
   | inc
@@ -75,6 +86,8 @@ inductive Msg where
   | closeAlert
   | probe (i : Nat)
   | name (s : String)
+  | bleState
+  | bleConnect
   | host (h : Host)
 
 inductive Cmd where
@@ -85,6 +98,11 @@ inductive Cmd where
   /-- at launch: with `NATIVEDEMO_SELFTEST` set, the TCP echo, two background runs and every probe,
   answers printed -/
   | selftest
+  /-- at launch: reads `NATIVEDEMO_BLE_SERVICE` -/
+  | bleSetup
+  | bleState
+  /-- connects to the first peripheral offering the service, logs it and closes the connection -/
+  | bleConnect (service : String)
   | runBackground (id kind : String)
   /-- ends the session scope (`EffectScope.invalidate`) -/
   | endSession
@@ -147,6 +165,10 @@ def update : Msg → Model → Model
   | .host .background, m => m
   | .host (.dropped what), m => note m s!"dropped a stale answer: {what}"
   | .host (.checked line), m => { m with selftest := line :: m.selftest }
+  | .bleState, m => note m "asking: BLE state…"
+  | .bleConnect, m => note m "asking: BLE connect…"
+  | .host (.bleService s), m => { m with bleService := some s }
+  | .host (.bleSaid line), m => note m line
 
 def cmds : Msg → Model → List Cmd
   | .startTicks, m => if m.ticking then [] else [.ticker]
@@ -154,6 +176,10 @@ def cmds : Msg → Model → List Cmd
   | .echo, m => [.echo s!"ping {m.count}"]
   | .probe i, _ => match probes[i]? with
     | some (l, n, a) => [.probe l n a]
+    | none => []
+  | .bleState, _ => [.bleState]
+  | .bleConnect, m => match m.bleService with
+    | some s => [.bleConnect s]
     | none => []
   | .host (.bgtask false id kind), _ => [.runBackground id kind]
   | .host (.bgtask true id _), _ => [.expireBackground id]
@@ -190,9 +216,15 @@ def widgets (m : Model) : Html Msg :=
 def probesView (m : Model) : Html Msg :=
   .screen "Probes" none
     [ .list
-      [ .section "Capabilities" "Each button asks the shell; the answer is logged below."
-          (probes.zipIdx.map fun ((l, _, _), i) => .identified s!"probe-{i}" (.button l .plain (some (.probe i))))
-      , .section "Log" "Newest first, with system events." (m.log.map (fun s => .text s .caption)) ] ]
+      ([ .section "Capabilities" "Each button asks the shell; the answer is logged below."
+          (probes.zipIdx.map fun ((l, _, _), i) => .identified s!"probe-{i}" (.button l .plain (some (.probe i)))) ]
+      -- only with NATIVEDEMO_BLE_SERVICE: otherwise the list is as it always was
+      ++ (match m.bleService with
+          | some s => [.section "Bluetooth" s!"The first peripheral offering {s} (NATIVEDEMO_BLE_SERVICE); connected, logged and closed."
+              [ .identified "ble-state" (.button "BLE state" .plain (some .bleState))
+              , .identified "ble-connect" (.button "BLE connect" .plain (some .bleConnect)) ]]
+          | none => [])
+      ++ [.section "Log" "Newest first, with system events." (m.log.map (fun s => .text s .caption))]) ]
 
 def view (m : Model) : Html Msg :=
   .tabs ["Demo", "Widgets", "Probes"] ["sparkles", "slider.horizontal.3", "stethoscope"] m.tab Msg.tab
@@ -262,6 +294,16 @@ def typedSelftest (fx : Effects Host) (say : String → IO Unit) : IO Unit := do
   say s!"typed http.get unreachable: {shown (← (Client.Http.get { url := "http://127.0.0.1:1/", timeout := some 5 }).call fx) fun r => toString r.status}"
   say s!"typed cloudkit.account: {shown (← (Client.CloudKit.account).call fx) fun a => (a.user.getD "no user")}"
 
+def bleStateName : Client.Bluetooth.State → String
+  | .poweredOn => "poweredOn" | .poweredOff => "poweredOff" | .unauthorized => "unauthorized"
+  | .unsupported => "unsupported" | .resetting => "resetting" | .unknown => "unknown"
+
+/-- A Bluetooth probe's answer: printed to stdout (the run's evidence) and logged. -/
+def bleSay (fx : Effects Host) (line : String) : IO Unit := do
+  let out ← IO.getStdout
+  out.putStrLn s!"ble: {line}"; out.flush
+  fx.post (.bleSaid line)
+
 def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
   match c with
   | .ticker => discard <| IO.asTask do
@@ -292,6 +334,17 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
   | .runBackground id _ => discard <| backgroundTasks.launch fx id
       { work := backgroundWork 10, deadline := .after 20_000, completion := fun o => fx.post (.ran id (describe o)) }
   | .expireBackground id => backgroundTasks.expire fx id
+  | .bleSetup => do
+      if let some s ← IO.getEnv "NATIVEDEMO_BLE_SERVICE" then
+        if !s.isEmpty then fx.post (.bleService s)
+  | .bleState => discard <| IO.asTask (prio := .dedicated) do
+      bleSay fx s!"BLE state: {shown (← Client.Bluetooth.state.call fx) bleStateName}"
+  | .bleConnect service => discard <| IO.asTask (prio := .dedicated) do
+      match ← (Client.Bluetooth.connect [service] (some 90)).call fx with
+      | .ok c =>
+        bleSay fx s!"BLE connected: id {c.id}, name {c.name.getD "(none)"}, service {c.service}, {c.characteristics.size} characteristics"
+        bleSay fx s!"BLE closed: {shown (← (Client.Bluetooth.close c.id).call fx) fun _ => ""}"
+      | r => bleSay fx s!"BLE connect: {shown r fun _ => ""}"
   | .endSession => discard <| IO.asTask (prio := .dedicated) session.invalidate
   | .selftest => do
       -- a headless check for runs nobody clicks through (`NATIVEDEMO_SELFTEST=1` in the launch
@@ -326,7 +379,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         say "done"
 
 def app : Native.App Model Msg Cmd Host :=
-  { init := { count := 0, ticks := 0, ticking := false, log := [] }, update, view, cmds, host := Msg.host, perform, boot := [.selftest],
+  { init := { count := 0, ticks := 0, ticking := false, log := [] }, update, view, cmds, host := Msg.host, perform, boot := [.selftest, .bleSetup],
     -- every system event but the scene phase is logged (the Probes tab shows bgtask launches and expirations)
     system := fun j =>
       if (j.getObjValAs? String "scene").toOption == some "background" then some .background

@@ -168,7 +168,7 @@ def capabilities : List Capability :=
     result := "`{\"state\":…}`: `poweredOn`, `poweredOff`, `unauthorized`, `unsupported`, `resetting` or `unknown`",
     body := [.l "[[ELBluetooth shared] state:answer];"] },
   { name := "ble.connect", args := "`services` (UUIDs), `timeout`? (s, 45)",
-    result := "`{\"ok\":true,\"id\",\"service\",\"characteristics\"}` for the first peripheral offering one of the services (one the system already holds connected, else the first found by a scan), or `{\"ok\":false,\"error\":…}` (a Bluetooth state, `timeout`, `refused`, `busy`, …)",
+    result := "`{\"ok\":true,\"id\",\"name\",\"service\",\"characteristics\"}` (`name` the peripheral's advertised name, or null) for the first peripheral offering one of the services (one the system already holds connected, else the first found by a scan), or `{\"ok\":false,\"error\":…}` (a Bluetooth state, `timeout`, `refused`, `busy`, …)",
     body := [.l "[[ELBluetooth shared] connect:args answer:answer];"] },
   { name := "ble.subscribe", args := "`id`, `characteristic`, `timeout`? (s, 90)",
     result := "`{\"ok\":…}` once notifications are on: iOS pairs on the first encrypted access, so this can wait on the user",
@@ -619,7 +619,7 @@ def bluetoothClass : List Stmt := [
         .l "_peripherals[id_] = peripheral;",
         .l "NSMutableArray *uuids = [NSMutableArray array];",
         .l "for (CBCharacteristic *c in service.characteristics) [uuids addObject:c.UUID.UUIDString];",
-        .l "[self endConnect:@{@\"ok\": @YES, @\"id\": id_, @\"service\": service.UUID.UUIDString, @\"characteristics\": uuids}];"],
+        .l "[self endConnect:@{@\"ok\": @YES, @\"id\": id_, @\"name\": (id)peripheral.name ?: NSNull.null, @\"service\": service.UUID.UUIDString, @\"characteristics\": uuids}];"],
     .blank,
     .l "- (void)peripheral:(CBPeripheral *)peripheral didUpdateNotificationStateForCharacteristic:(CBCharacteristic *)characteristic",
     b "             error:(NSError *)error {" [

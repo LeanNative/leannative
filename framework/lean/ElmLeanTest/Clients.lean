@@ -82,7 +82,8 @@ def cases : List (String × Case) := [
     | .poweredOn => "poweredOn" | .poweredOff => "poweredOff" | .unauthorized => "unauthorized"
     | .unsupported => "unsupported" | .resetting => "resetting" | .unknown => "unknown")),
   ("ble.connect", .of (Bluetooth.connect ["13D63400-2C97-0004-0000-4C6564676572"] (some 45))
-    fun c => Json.mkObj [("id", Json.str c.id), ("service", Json.str c.service), ("characteristics", Json.arr (c.characteristics.map Json.str))]),
+    fun c => Json.mkObj ([("id", Json.str c.id)] ++ (c.name.map fun n => [("name", Json.str n)]).getD [] ++
+      [("service", Json.str c.service), ("characteristics", Json.arr (c.characteristics.map Json.str))])),
   ("ble.subscribe", .of (Bluetooth.subscribe "p1" "c1" (some 90)) unit),
   ("ble.write", .of (Bluetooth.write "p1" "c2" (ByteArray.mk #[8, 0]) (timeout := some 15)) unit),
   ("ble.read", .of (Bluetooth.read "p1" "c1" (some 30)) (Json.str ∘ hexOf)),
