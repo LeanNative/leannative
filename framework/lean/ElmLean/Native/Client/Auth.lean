@@ -36,7 +36,7 @@ def decode (j : Json) : Result Success := do
   if ← reqBool j "ok" then
     return { note := ← optString j "note" }
   let name := (← optString j "name").getD "unknown"
-  throw { kind := kindOf name, name, code := ← optInt j "code", detail := (← optString j "error").getD "" }
+  throw { kind := kindOf name, name, code := ← optInt j "code", domain := ← optString j "domain", detail := (← optString j "error").getD "" }
 
 def authenticate (reason : String) : Request Success :=
   { capability := "auth", args := Json.mkObj [("reason", Json.str reason)], decode }

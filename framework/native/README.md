@@ -259,7 +259,10 @@ earlier tokens stale. native-demo's Face ID button runs in a scope that its goin
 ## UI tests: `framework/native/ci/ui-tests` and the XCTest kit (`testkit/`)
 
 `ui-tests` runs an app's XCUITest target on a simulator it creates and deletes, with a recording and
-`device.json` and `run.json` (what was tested, recorded as the run starts); `UI_BEFORE` / `UI_AFTER` set
+`device.json` and `run.json` (what was tested, recorded as the run starts); the recording is of every
+screen the simulator lists that can show the app (not its TV-out, CarPlay or resizable ones), keeping the
+one the app drew on, since a device with two integrated screens (iPhone Duo) can otherwise record the
+wrong one as a single frame (`recording.json` lists them and the one kept); `UI_BEFORE` / `UI_AFTER` set
 up and take down a fixture, and each `KEY=VALUE` line `UI_BEFORE` leaves in `<UI_OUT>/test-env` reaches the
 tests' environment. Run native-demo's:
 
@@ -268,6 +271,15 @@ APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo \
   UI_BEFORE="$PWD/examples/native-demo/ios/ui-before" framework/native/ci/ui-tests
 python3 -I framework/native/ci/export-evidence examples/native-demo/ios/build/ui-tests /tmp/demo-evidence
 ```
+
+`UI_PLATFORM=maccatalyst` (with `LEAN_X86_64_PREFIX`, as for the Catalyst build) runs the same target as a
+Mac Catalyst app on the Mac itself, in its logged-in session: the tests move the real pointer and type on
+the real keyboard, so it is for a CI runner, not a Mac in use. `run.json` records the platform as
+`Mac Catalyst` and `device.json` the Mac (model, macOS version and build, architecture); the recording
+is `screencapture -v` (stopped at the end, never left to hold the run open), converted to `<name>.mp4` by `avconvert`, and needs the Screen Recording
+permission (`recording.log` says why there is none). `export-evidence` refuses a run whose `run.json`
+platform and result bundle disagree, so a Catalyst run is never recorded as a simulator run or the
+reverse.
 
 `testkit/ELTest.{h,m}` are Objective-C helpers for any app's UI-test target, and only for it (add the
 directory to the `bundle.ui-testing` target's sources; native-demo's `project.yml` shows how): the app
@@ -289,11 +301,23 @@ screenshot and writes it only where an explicit `ELScreenshots` says (`inDirecto
 
 native-demo's `UITests/NativeDemoUITests.m` drives them against its real controls: a counter, text
 replacement and clearing, a control the view disables, missing and disabled controls (the failures are
-expected and the test checks nothing was tapped), the last button of a list below the fold, Face ID in
-the session's EffectScope ended by going to the background (a cancellation or a dropped stale answer), and
-screenshots written and refused. They have run on the iOS simulator (CI's macOS runner and Xcode 27.1
-locally); the Catalyst branches compile in the Catalyst build but have not been run (a Mac UI test takes
-over the machine's pointer and keyboard), so Mac coverage is not inferred from the iOS runs.
+expected and the test checks nothing was tapped), the last button of a list below the fold, a list's end
+that always needs scrolling (down to the oldest log row, back up to the first probe), Face ID in the
+session's EffectScope ended by going to the background (the system's dismissal or a dropped stale answer),
+the selftest through the shell (two BackgroundRuns, an EffectScope drain, the typed clients), and
+screenshots written and refused.
+
+CI runs them on both platforms (check.yml): `ui` on an iOS simulator, `ui-catalyst` under Mac Catalyst on
+the same GitHub-hosted macOS runner (an arm64 virtual Mac), each with its evidence exported. Under
+Catalyst every test runs but Face ID: the click, scroll-wheel and Command-A paths, the selftest (BackgroundRun
+and the EffectScope drain as on iOS; the typed Keychain calls answer `unsupported status -34018`, an ad-hoc
+Mac app having no keychain access group, and reads `ok none`; HTTP and CloudKit as on iOS), and the
+screenshots, which the sandboxed Mac test runner writes to its own temporary directory (the evidence takes
+them from the result bundle). Not run under Catalyst: `auth`, whose prompt is the Mac's password sheet in
+another process that going to the background does not dismiss, on a runner with no Touch ID; background
+tasks, which the Mac never launches (`bgtask.schedule` answers `unavailable`); Bluetooth; and anything
+needing a team-signed build (iCloud, a keychain access group). Nothing runs on an x86_64 Mac in CI (the
+universal build's x86_64 half ran under Rosetta locally only).
 
 ## View nodes
 

@@ -110,20 +110,90 @@
     XCTAssertTrue([logged waitForExistenceWithTimeout:10], @"the probe's answer is not logged");
 }
 
+- (void)testScrollingToTheEndOfTheLog {
+    // the Probes list made longer than any window (13 probes, then 10 log rows), its oldest row looked for from
+    // the top: ELScrollTo drags on iOS and turns the scroll wheel under Mac Catalyst. That row starts out of
+    // view, so this always scrolls; then back up to the first probe.
+    if (![self openTab:@"Probes"]) return;
+    if (!ELTap(self.app, @"probe-12")) return;
+    for (int i = 0; i < 4; i++) if (!ELTap(self.app, @"probe-0")) return;
+    NSPredicate *oldest = [NSPredicate predicateWithFormat:@"label BEGINSWITH 'asking: HTTP bad proxy'"];
+    XCUIElement *row = [[self.app descendantsMatchingType:XCUIElementTypeAny] matchingPredicate:oldest].firstMatch;
+    XCTAssertFalse(row.exists && row.hittable, @"the oldest log row is in view before scrolling: nothing to scroll");
+    XCTAssertTrue(ELScrollTo(self.app, row), @"the oldest log row was not scrolled into view");
+    XCUIElement *first = ELElement(self.app, @"probe-0");
+    NSLog(@"after scrolling down, probe-0 is %@", first.exists && first.hittable ? @"still in view" : @"out of view");
+    XCTAssertTrue(ELScrollTo(self.app, first), @"the first probe was not scrolled back into view");
+}
+
+/// The selftest (`NATIVEDEMO_SELFTEST=1`): BackgroundRun, an EffectScope drain and the typed clients, run by the
+/// real shell on this platform, its lines shown on the Demo tab. Each line is logged, so the run's
+/// xcodebuild.log keeps what this platform answered.
+- (void)testSelftestThroughTheShell {
+    [self.app terminate];
+    self.app.launchEnvironment = @{@"NATIVEDEMO_SELFTEST": @"1"};
+    [self.app launch];
+    if (!ELWait(self.app, @"selftest-0")) return;
+    // its lines are selftest-0, selftest-1, …; the last is "done"
+    NSArray<NSString *> *(^lines)(void) = ^{
+        NSMutableArray<NSString *> *all = [NSMutableArray array];
+        for (NSUInteger i = 0; ELElement(self.app, [NSString stringWithFormat:@"selftest-%lu", (unsigned long)i]).exists; i++)
+            [all addObject:ELText(ELElement(self.app, [NSString stringWithFormat:@"selftest-%lu", (unsigned long)i]))];
+        return all;
+    };
+    XCTAssertTrue(ELPoll(90, 1, ^BOOL{ return [lines().lastObject isEqualToString:@"done"]; }), @"the selftest did not finish: %@", lines());
+    NSMutableDictionary<NSString *, NSString *> *said = [NSMutableDictionary dictionary];
+    for (NSString *line in lines()) {
+        NSLog(@"selftest: %@", line);
+        NSRange colon = [line rangeOfString:@": "];
+        if (colon.location != NSNotFound) said[[line substringToIndex:colon.location]] = [line substringFromIndex:NSMaxRange(colon)];
+    }
+    XCTAssertEqualObjects(said[@"TCP echo"], @"echo: selftest");
+    // BackgroundRun: one run completes, one that never stops is expired at its deadline
+    XCTAssertEqualObjects(said[@"background run"], @"completed, work started, success true");
+    XCTAssertEqualObjects(said[@"background run past its deadline"], @"expired, work started, success false");
+    // EffectScope: the invalidation cancelled and drained the task, and its late result was not delivered
+    XCTAssertEqualObjects(said[@"effect scope"], @"started, drained true, late result delivered false, now 0 tasks");
+    // the typed clients: every answer decoded (ok, or a classified error; never malformed)
+    NSRegularExpression *decoded = [NSRegularExpression regularExpressionWithPattern:@"^(ok|denied|cancelled|unsupported|failed)( .*)?$" options:0 error:nil];
+    for (NSString *key in said) {
+        if (![key hasPrefix:@"typed "]) continue;
+        NSString *answer = said[key];
+        XCTAssertNotNil([decoded firstMatchInString:answer options:0 range:NSMakeRange(0, answer.length)], @"%@: %@", key, answer);
+    }
+    XCTAssertEqualObjects(said[@"typed http.get ftp"], @"failed bad-url");
+    XCTAssertTrue([said[@"typed http.get unreachable"] hasPrefix:@"failed system"], @"unreachable: %@", said[@"typed http.get unreachable"]);
+    // an ad-hoc build has no iCloud entitlement
+    XCTAssertEqualObjects(said[@"typed cloudkit.account"], @"unsupported missingEntitlement");
+#if TARGET_OS_MACCATALYST
+    // an ad-hoc Mac app has no keychain access group: the data protection keychain refuses it (errSecMissingEntitlement)
+    XCTAssertEqualObjects(said[@"typed keychain.add"], @"unsupported status -34018 (-34018)");
+#else
+    XCTAssertEqualObjects(said[@"typed keychain.add"], @"ok added");
+    XCTAssertEqualObjects(said[@"typed keychain.add again"], @"ok alreadyExists");
+    XCTAssertEqualObjects(said[@"typed keychain.get"], @"ok 010203");
+    XCTAssertTrue([said[@"typed keychain.delete"] hasPrefix:@"ok"], @"delete: %@", said[@"typed keychain.delete"]);
+    XCTAssertEqualObjects(said[@"typed keychain.get after delete"], @"ok none");
+#endif
+}
+
 #if !TARGET_OS_MACCATALYST
+// Not under Mac Catalyst: there the passcode is the Mac's password, asked by a system sheet of another
+// process that going to the background does not dismiss, and a CI Mac has no Touch ID.
 - (void)testScopedAuthenticationEndsWithTheSession {
     // Face ID or the passcode runs in the session's EffectScope. The system's sheet is another process's;
-    // going to the background dismisses it (a cancellation) and ends the session. Whichever comes first,
-    // the answer is a cancellation delivered while the session lived, or a stale answer dropped: never a
-    // success, and never reported as the person's denial.
+    // going to the background dismisses it and ends the session. Whichever comes first, the answer is the
+    // system's dismissal delivered while the session lived (a cancellation, or on some simulators an error the
+    // shell names `unknown`: CI's iOS 26.5 gave one; the log keeps its code and domain), or a stale answer
+    // dropped: never a success, and never reported as the person's denial.
     if (!ELTap(self.app, @"faceID")) return;
     [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
     [XCUIDevice.sharedDevice pressButton:XCUIDeviceButtonHome];
     [self.app activate];
     NSPredicate *ended = [NSPredicate predicateWithFormat:
-        @"label BEGINSWITH 'not authenticated: cancelled' OR label BEGINSWITH 'dropped a stale answer'"];
+        @"label BEGINSWITH 'not authenticated: cancelled' OR label BEGINSWITH 'not authenticated: failed' OR label BEGINSWITH 'dropped a stale answer'"];
     XCUIElement *logged = [[self.app descendantsMatchingType:XCUIElementTypeAny] matchingPredicate:ended].firstMatch;
-    XCTAssertTrue([logged waitForExistenceWithTimeout:15], @"neither a cancellation nor a dropped answer was logged");
+    XCTAssertTrue([logged waitForExistenceWithTimeout:15], @"neither the dismissal nor a dropped answer was logged");
     NSPredicate *wrong = [NSPredicate predicateWithFormat:@"label BEGINSWITH 'authenticated' OR label BEGINSWITH 'not authenticated: denied'"];
     XCTAssertFalse([[self.app descendantsMatchingType:XCUIElementTypeAny] matchingPredicate:wrong].firstMatch.exists);
     NSLog(@"scoped authentication ended as: %@", ELText(logged));

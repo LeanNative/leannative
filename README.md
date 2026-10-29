@@ -189,8 +189,9 @@ The inputs are documented at the top of the workflow.
 evidence an app can keep or publish: the screenshots the tests attached (each attributed to the tests
 that took it, checked byte for byte against any copy the tests wrote, hashed before and after), the
 recording (transcoded with ffmpeg when present, else copied when small enough, else omitted with the
-reason), and `evidence.json` (schema `leannative.ui-evidence/1`): the tested revision as `run.json`
-recorded it when the tests ran (never the exporting checkout's), the device, each test's result, the
+reason; a truncated one, under 1 s or under half the tests' time, is omitted too), and `evidence.json` (schema `leannative.ui-evidence/1`): the tested revision as `run.json`
+recorded it when the tests ran (never the exporting checkout's), the platform (iOS Simulator or Mac
+Catalyst, checked against the result bundle), the device, each test's result, the
 hashes of every input, and the export's own time apart from the run's. A run that did not pass is
 recorded as `failed`, `skipped`, `incomplete` or `contradictory` (the result bundle and the log
 disagree), never as `passed`; `--require-passed` makes such a run exit 3 once the manifest is written.
@@ -205,7 +206,7 @@ Publishing the output is the app's: an `after-ui` hook can call the exporter and
 | An app's `update`/`view`/`cmds` | Application-specific | the app's supplied invariants, proofs, and proof gate; using the framework alone does not prove them |
 | JSON codecs, the CLI loop, `ElmLean.Native` (the C entry points), the native support modules (`ElmLean.Native.*`) | Trusted, tested | `selftest`; `protocol_test.py`, itself validated against `framework/scripts/fake_cli.py`, an independent implementation of the protocol |
 | The shell's agreement with the UI grammar (node decoding, dispatch, enums, events) | Checked as it builds | `ElmShell/Check.lean`: the kernel and the build evaluate every row against `Wire.toJson` and `Event.fromJson?` |
-| The shell itself (renderer, store, capabilities, C shim) and the retargeted libraries | Trusted, driven in the simulator | the apps' UI tests |
+| The shell itself (renderer, store, capabilities, C shim) and the retargeted libraries | Trusted, driven in the simulator and under Mac Catalyst | the apps' UI tests |
 | An app's `perform` | the app's | that app's own tests |
 | Lean's compiler and runtime, UIKit, iOS, and macOS | Trusted | — |
 
@@ -217,7 +218,7 @@ Makefile                    check: the framework's checks
 docs/ISSUES.md              issues moved from posix4e/elmlean
 .github/workflows/
   ios-app.yml               the reusable CI workflow for an app
-  check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst)
+  check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst, its UI tests on both)
 framework/
   lean/                     Lake package `elmlean`
     ElmLean/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,

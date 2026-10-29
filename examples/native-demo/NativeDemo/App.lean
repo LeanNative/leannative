@@ -16,7 +16,9 @@ import ElmLean.Native.Client.CloudKit
   through a SOCKS5 proxy at 127.0.0.1:1080) and logs their answers and the system events;
 * a background task iOS launches runs as a `BackgroundRun` (`ElmLean.Native.BackgroundRun`): a short
   job that stops when expired, answered with `bgtask.complete` when it is over;
-* the headless selftest also asks through the typed clients (`ElmLean.Native.Client.*`);
+* the selftest (`NATIVEDEMO_SELFTEST=1` at launch) runs two `BackgroundRun`s, a scoped task an
+  invalidation drains, and the typed clients (`ElmLean.Native.Client.*`) against the real shell; its lines
+  are printed and shown on the Demo tab (`selftest-<n>`), so UI tests read them on iOS and Mac Catalyst alike;
 * Face ID runs in an `EffectScope` the app's going to the background ends: an answer that comes back
   after that is dropped. -/
 
@@ -36,6 +38,8 @@ structure Model where
   sheet : Bool := false
   alert : Bool := false
   name : String := ""
+  /-- the selftest's lines, newest first -/
+  selftest : List String := []
   deriving Inhabited
 
 inductive Host where
@@ -52,6 +56,8 @@ inductive Host where
   | background
   /-- a scoped answer came back stale and was not delivered -/
   | dropped (what : String)
+  /-- one line of the selftest -/
+  | checked (line : String)
 
 inductive Msg where
   | inc
@@ -140,6 +146,7 @@ def update : Msg → Model → Model
   | .host (.ran id o), m => note m s!"background run {id}: {o}"
   | .host .background, m => m
   | .host (.dropped what), m => note m s!"dropped a stale answer: {what}"
+  | .host (.checked line), m => { m with selftest := line :: m.selftest }
 
 def cmds : Msg → Model → List Cmd
   | .startTicks, m => if m.ticking then [] else [.ticker]
@@ -161,8 +168,10 @@ def demoView (m : Model) : Html Msg :=
                 .identified "startTicks" (.button "Start" .plain (if m.ticking then none else some .startTicks))]
         , .identified "name" (.input .plain "Name" "Who is asking" m.name Msg.name none)
         , .identified "greeting" (.text (if m.name.isEmpty then "Nobody yet" else s!"Hello, {m.name}") .body)
-        , .row [.identified "faceID" (.button "Face ID" .plain (some .authenticate)), .button "TCP echo" .plain (some .echo)]
-        , .divider ] ++ m.log.map (fun s => .text s .caption))
+        , .row [.identified "faceID" (.button "Face ID" .plain (some .authenticate)), .button "TCP echo" .plain (some .echo)] ]
+        -- one element a line (an accessibility label has no line breaks): selftest-0, selftest-1, …
+        ++ m.selftest.reverse.zipIdx.map (fun (l, i) => .identified s!"selftest-{i}" (.text l .caption))
+        ++ [.divider] ++ m.log.map (fun s => .text s .caption))
 
 def widgets (m : Model) : Html Msg :=
   .screen "Widgets" none
@@ -270,7 +279,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         | .done () => (true, "")
         | .denied e => (false, s!"denied ({e.name})")
         | .cancelled e => (false, s!"cancelled ({e.name})")
-        | .error e => (false, s!"{e.kind.name} ({e.name})")
+        | .error e => (false, s!"{e.kind.name} ({e.name}{match e.code with | some c => s!" {c}" | none => ""}{match e.domain with | some d => s!" {d}" | none => ""})")
         | .failed e => (false, toString e)
         | .stale _ => (false, "stale")
       -- a stale answer is not the session's; it is noted apart, so a test can see it was dropped
@@ -290,7 +299,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
       let some _ ← IO.getEnv "NATIVEDEMO_SELFTEST" | pure ()
       discard <| IO.asTask do
         let out ← IO.getStdout
-        let say (s : String) : IO Unit := do out.putStrLn s!"selftest: {s}"; out.flush
+        let say (s : String) : IO Unit := do out.putStrLn s!"selftest: {s}"; out.flush; fx.post (.checked s)
         let r ← try echoOnce 48335 "selftest" catch e => pure s!"failed: {e}"
         say s!"TCP echo: {r}"
         fx.post (.echoed r)
@@ -301,6 +310,14 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         let hung ← BackgroundRun.new { work := untilCancelled, completion := fun _ => pure (), deadline := .after 300 }
         hung.start
         say s!"background run past its deadline: {describe (← hung.wait)}"
+        -- a scope's task, cancelled and drained by its invalidation; its late result is dropped
+        let scope ← EffectScope.new
+        let token ← scope.capture
+        let drained ← IO.mkRef false
+        let spawned ← scope.spawn token (do discard untilCancelled; drained.set true)
+        scope.invalidate
+        let late ← scope.deliver token (pure ())
+        say s!"effect scope: {if spawned matches .started _ then "started" else "stale"}, drained {← drained.get}, late result delivered {late}, now {← scope.liveTasks} tasks"
         typedSelftest fx say
         for (l, n, a) in probes do
           let j ← IO.wait (← fx.ask n a)

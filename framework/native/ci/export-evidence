@@ -11,7 +11,9 @@ device.json, run.json, <name>.mp4 (optional) and, when the tests write them, a s
 
   screenshots/<name>.png    each screenshot the tests attached, copied from the result bundle
   <video-out>               the recording (default video/<name>.mp4), H.264 ≤ 720 wide at 24 fps when ffmpeg
-                            is there and asked for, else copied when it fits --max-video-bytes
+                            is there and asked for, else copied when it fits --max-video-bytes; none when the
+                            recording is truncated (under 1 s, or under half the time the tests ran: the
+                            recorder runs for the whole of `xcodebuild test`, so a whole one is never shorter)
   evidence.json             the manifest (schema "leannative.ui-evidence/1"), below
 
 What is checked, and how a run that did not pass is recorded:
@@ -28,7 +30,9 @@ What is checked, and how a run that did not pass is recorded:
 * The tested revision is run.json's "source.revision", recorded by ui-tests as the tests started. It is
   never this checkout's HEAD. --source-revision must match it; without a recorded one, --source-revision
   is required and is recorded as given ("recorded_by": "export-evidence --source-revision").
-* device.json (the simulator ui-tests chose) must agree with the device the result bundle names.
+* device.json (the simulator ui-tests chose, or the Mac) must agree with the device the result bundle names,
+  and run.json's platform with the bundle's: a Mac Catalyst run's bundle names macOS, a simulator run's
+  the iOS Simulator, so neither is ever recorded as the other.
 
 Nothing is published: where the output goes is the caller's (a CI artifact, a website). Python 3 stdlib.
 """
@@ -48,6 +52,11 @@ import tempfile
 
 SCHEMA = "leannative.ui-evidence/1"
 MANIFEST = "evidence.json"
+# a recording is truncated below this many seconds, or below this share of the tests' time
+MIN_VIDEO_SECONDS = 1.0
+MIN_VIDEO_SHARE = 0.5
+# the transcoder's bitrate ceiling: plenty for ≤ 720 wide at 24 fps, and within libx264's range
+MAX_BITRATE = 8_000_000
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 SHA = re.compile(r"[0-9a-f]{40}")
@@ -55,6 +64,8 @@ LOG_STARTED = re.compile(r"^Test Case '-\[(?:[\w.]+\.)?(\w+) (\w+)\]' started", 
 LOG_CASE = re.compile(r"^Test Case '-\[(?:[\w.]+\.)?(\w+) (\w+)\]' (passed|failed|skipped) \(([0-9.]+) seconds\)\.", re.M)
 LOG_TOTAL = re.compile(r"Executed (\d+) tests?, with (\d+) failures? \(\d+ unexpected\) in ([0-9.]+) ")
 RESULTS = {"passed": "passed", "failed": "failed", "skipped": "skipped", "expected failure": "passed"}
+# run.json's platform (ui-tests) → the platforms a result bundle names for it
+BUNDLE_PLATFORMS = {"iOS Simulator": {"iOS Simulator"}, "Mac Catalyst": {"macOS", "Mac Catalyst"}}
 
 
 class Failure(Exception):
@@ -290,7 +301,7 @@ def probe(path):
 
 def transcode(source, destination, original, max_bytes):
     # leave 1 MiB for the container; the size check afterwards is the authority
-    bitrate = int(max(max_bytes - (1 << 20), 1) * 8 / original["duration_seconds"])
+    bitrate = min(int(max(max_bytes - (1 << 20), 1) * 8 / original["duration_seconds"]), MAX_BITRATE)
     if bitrate < 150_000:
         raise Failure(f"a {original['duration_seconds']:.0f} s recording cannot fit {max_bytes:,} bytes at a readable bitrate")
     # simctl can give the last frame the previous sample's long duration; -t keeps the container's timeline
@@ -307,7 +318,7 @@ def transcode(source, destination, original, max_bytes):
     return video
 
 
-def video(source, destination_rel, out, transcoder, max_bytes):
+def video(source, destination_rel, out, transcoder, max_bytes, test_seconds=0.0):
     """(video entry, original entry, None) or (None, original or None, why there is no video)."""
     if not source.is_file() or source.stat().st_size == 0:
         return None, None, f"the run has no screen recording ({source.name})"
@@ -316,6 +327,10 @@ def video(source, destination_rel, out, transcoder, max_bytes):
     except (Failure, subprocess.CalledProcessError, KeyError, IndexError, ValueError, struct.error) as error:
         return None, None, f"the screen recording is unreadable: {error}"
     original["path_in_run"] = source.name
+    seconds = original["duration_seconds"]
+    if seconds < MIN_VIDEO_SECONDS or seconds < MIN_VIDEO_SHARE * test_seconds:
+        return None, original, (f"the screen recording is truncated: {seconds:g} s for {test_seconds:g} s of tests "
+                                "(the recorder stopped early, or recorded a display the app was not on)")
     destination = out / destination_rel
     destination.parent.mkdir(parents=True, exist_ok=True)
     have_ffmpeg = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
@@ -359,13 +374,17 @@ def source_identity(run, given):
     return source
 
 
-def device_identity(chosen, bundle_device):
-    result = {"name": chosen.get("name"), "type": chosen.get("type"), "runtime": chosen.get("runtime"), "os": chosen.get("os")}
+def device_identity(chosen, bundle_device, platform=None):
+    result = {"name": chosen.get("name"), "type": chosen.get("type"), "runtime": chosen.get("runtime"), "os": chosen.get("os"),
+              "model": chosen.get("model"), "architecture": chosen.get("architecture")}
     if bundle_device:
         if chosen.get("name") and bundle_device.get("name") and chosen["name"] != bundle_device["name"]:
             raise Failure(f"device.json chose {chosen['name']} but the tests ran on {bundle_device['name']}")
+        allowed = BUNDLE_PLATFORMS.get(platform)
+        if allowed and bundle_device.get("platform") and bundle_device["platform"] not in allowed:
+            raise Failure(f"run.json records the tests as run on {platform} but the result bundle names {bundle_device['platform']}")
         result.update(name=bundle_device.get("name") or result["name"], platform=bundle_device.get("platform"),
-                      os_version=bundle_device.get("os_version"), architecture=bundle_device.get("architecture"))
+                      os_version=bundle_device.get("os_version"), architecture=bundle_device.get("architecture") or result["architecture"])
     return {key: value for key, value in result.items() if value}
 
 
@@ -400,19 +419,19 @@ def export(run_dir, out, args, now=None):
         raise Failure(f"the result bundle's results are malformed: {error}")
     log = parse_log(log_path.read_text(errors="replace"))
     result, reasons = outcome(bundled["tests"], log)
-    device = device_identity(chosen, bundled["device"])
+    device = device_identity(chosen, bundled["device"], run.get("platform"))
     app = read_json(args.app_metadata, "the app metadata") if args.app_metadata else None
     out.mkdir(parents=True, exist_ok=True)
     on_disk = (run_dir / args.screenshots) if args.screenshots else run_dir / "screenshots"
     with tempfile.TemporaryDirectory() as scratch:
         shots = screenshots(bundle, on_disk, out, Path(scratch))
+    total = log["total_seconds"] if log["total_seconds"] is not None else sum(t["seconds"] for t in bundled["tests"])
     recording, original, omitted = video(run_dir / f"{name}.mp4", args.video_out or f"video/{name}.mp4", out,
-                                         args.transcode, args.max_video_bytes)
+                                         args.transcode, args.max_video_bytes, total)
     artifacts = {"xcodebuild.log": digest(log_path), "device.json": digest(run_dir / "device.json"),
                  "run.json": digest(run_dir / "run.json"), f"{name}.xcresult": tree_digest(bundle)}
     if args.app_metadata:
         artifacts["app_metadata"] = digest(args.app_metadata)
-    total = log["total_seconds"] if log["total_seconds"] is not None else sum(t["seconds"] for t in bundled["tests"])
     evidence = {
         "schema": SCHEMA,
         "run": {"name": name, "scheme": run.get("scheme"), "platform": run.get("platform"),

@@ -3,5 +3,8 @@
 # evidence, as <UI_OUT>/screenshots/<name>.png (the tests read SCREENSHOTS; the runner passes test-env).
 set -euo pipefail
 OUT="${1:?the ui-tests evidence directory}"
+# under Mac Catalyst the test runner is sandboxed and cannot write there: the tests then write to their own
+# temporary directory, and the screenshots reach the evidence from the result bundle as on iOS
+[ "${UI_PLATFORM:-iossim}" = maccatalyst ] && exit 0
 mkdir -p "$OUT/screenshots"
 echo "SCREENSHOTS=$OUT/screenshots" >> "$OUT/test-env"

@@ -66,7 +66,7 @@ jobs:
       - name: The UI tests build for Mac Catalyst; no app links XCTest
         run: |
           set -euo pipefail
-          # the test kit's Catalyst branches compile (they are run on the simulator only, by the ui job)
+          # the test kit's Catalyst branches compile (the ui-catalyst job runs them)
           xcodebuild -project examples/native-demo/ios/NativeDemo.xcodeproj -scheme "$SCHEME" -configuration Debug \
             -destination 'generic/platform=macOS,variant=Mac Catalyst' -derivedDataPath "$RUNNER_TEMP/dd-catalyst" \
             build-for-testing > "$RUNNER_TEMP/Debug-maccatalyst-tests.log" 2>&1 || { tail -40 "$RUNNER_TEMP/Debug-maccatalyst-tests.log"; exit 1; }
@@ -128,6 +128,61 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ui/
+            ${{ runner.temp }}/evidence/
+            !${{ runner.temp }}/ui/*.xcresult/**/private/
+          if-no-files-found: warn
+          retention-days: 14
+  # the same UI tests under Mac Catalyst, on the runner's own logged-in session: the kit's click, scroll wheel
+  # and Command-A paths, and the selftest through the Mac shell; recorded as a Mac Catalyst run (run.json,
+  # device.json), which export-evidence checks against the result bundle
+  ui-catalyst:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tools
+        run: |
+          xcodebuild -version
+          sw_vers
+          sysctl -n hw.model
+          command -v zstd >/dev/null || brew install zstd
+      - name: Restore the Lean toolchain and builds
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.elan
+            framework/lean/.lake
+            examples/native-demo/.lake
+          key: ui-catalyst-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-${{ hashFiles('framework/lean/**/*.lean', 'examples/native-demo/**/*.lean') }}
+          restore-keys: ui-catalyst-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-
+      - name: elan and the Lean toolchain
+        run: |
+          set -euo pipefail
+          if [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/v4.1.2/elan-init.sh \
+              | sh -s -- -y --default-toolchain none --no-modify-path
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/elan" toolchain install "$(cat framework/lean/lean-toolchain)"
+      - name: native-demo UI tests under Mac Catalyst
+        run: |
+          set -euo pipefail
+          framework/native/scripts/fetch_lean_x86_64.sh "$RUNNER_TEMP/lean-x86_64"
+          export LEAN_X86_64_PREFIX="$RUNNER_TEMP/lean-x86_64/lean-$(sed 's/.*:v//' framework/lean/lean-toolchain)-darwin"
+          UI_PLATFORM=maccatalyst UI_OUT="$RUNNER_TEMP/ui" UI_BEFORE="$PWD/examples/native-demo/ios/ui-before" \
+            DERIVED_DATA="$RUNNER_TEMP/dd" framework/native/ci/ui-tests
+      - name: Their evidence
+        if: always()
+        run: python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/ui" "$RUNNER_TEMP/evidence" --require-passed
+      - name: Preserve the run and its evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-catalyst-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/ui/
             ${{ runner.temp }}/evidence/
