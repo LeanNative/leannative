@@ -269,6 +269,15 @@ APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo \
 python3 -I framework/native/ci/export-evidence examples/native-demo/ios/build/ui-tests /tmp/demo-evidence
 ```
 
+`UI_PLATFORM=maccatalyst` (with `LEAN_X86_64_PREFIX`, as for the Catalyst build) runs the same target as a
+Mac Catalyst app on the Mac itself, in its logged-in session: the tests move the real pointer and type on
+the real keyboard, so it is for a CI runner, not a Mac in use. `run.json` records the platform as
+`Mac Catalyst` and `device.json` the Mac (model, macOS version and build, architecture); the recording
+is `screencapture -V`, converted to `<name>.mp4` by `avconvert`, and needs the Screen Recording
+permission (`recording.log` says why there is none). `export-evidence` refuses a run whose `run.json`
+platform and result bundle disagree, so a Catalyst run is never recorded as a simulator run or the
+reverse.
+
 `testkit/ELTest.{h,m}` are Objective-C helpers for any app's UI-test target, and only for it (add the
 directory to the `bundle.ui-testing` target's sources; native-demo's `project.yml` shows how): the app
 never links XCTest. `ELElement` finds a node by the identifier the app gives it (`Html.identified`);

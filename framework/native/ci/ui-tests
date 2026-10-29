@@ -1,26 +1,34 @@
 #!/bin/bash
-# An ElmLean app's UI tests on a throwaway simulator, with a screen recording:
+# An ElmLean app's UI tests on a throwaway simulator, or as a Mac Catalyst app on this Mac, with a screen
+# recording:
 #
 #   APP_DIR=… APP_ROOT=… SCHEME=… framework/native/ci/ui-tests [xcodebuild test arguments, e.g. -only-testing:…]
 #
 # The app's sources and project are prepared as build-ios does (its variables apply), then `xcodebuild test`
 # runs on a simulator this script creates and deletes, never one that may hold a real install of the app.
 # Evidence goes to $UI_OUT: <name>.xcresult, <name>.mp4 (the recording), xcodebuild.log, device.json, and
-# run.json: what was tested, recorded as the run starts (schema 1: the app repository's commit and whether its
-# tree was clean, the framework commit, the CI run when there is one, the runner's start and end times and
-# exit status). framework/native/ci/export-evidence reads it; nothing else is the tested revision.
+# run.json: what was tested, recorded as the run starts (schema 1: the platform, the app repository's commit
+# and whether its tree was clean, the framework commit, the CI run when there is one, the runner's start and
+# end times and exit status). framework/native/ci/export-evidence reads it; nothing else is the tested revision.
 #
+#   UI_PLATFORM     iossim (default) or maccatalyst: the app built for Mac Catalyst and tested on this Mac,
+#                   in the logged-in session (the tests click, scroll and type with the real mouse and
+#                   keyboard: a CI runner, not a Mac someone is using). It needs LEAN_X86_64_PREFIX, as
+#                   build-ios does. The simulator variables below do not apply; device.json records the Mac.
+#                   The recording is `screencapture -V`, converted to <name>.mp4 by avconvert; without the
+#                   Screen Recording permission there is none, and recording.log says why.
 #   UI_OUT          the evidence directory (default $IOS_DIR/build/ui-tests); emptied first, one run at a time
 #   UI_NAME         the result bundle's and recording's name (default ui-tests)
-#   UI_SIMULATOR    an existing simulator to use instead (a name or UDID; it is not deleted)
-#   UI_RUNTIME      the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest)
-#   UI_DEVICE_TYPE  the iPhone model (default iPhone 17 Pro), so screenshots keep their size from run to run;
+#   UI_SIMULATOR    (simulator) an existing simulator to use instead (a name or UDID; it is not deleted)
+#   UI_RUNTIME      (simulator) the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest)
+#   UI_DEVICE_TYPE  (simulator) the iPhone model (default iPhone 17 Pro), so screenshots keep their size from run to run;
 #                   a runtime without it fails the run; device.json records it
-#   UI_BEFORE       a command run as `$UI_BEFORE <UI_OUT>` once the simulator is chosen: the app's fixture
+#   UI_BEFORE       a command run as `$UI_BEFORE <UI_OUT>` once the device is chosen: the app's fixture
 #                   (a node, files, a config). Each KEY=VALUE line it leaves in <UI_OUT>/test-env reaches the
 #                   test runner as TEST_RUNNER_KEY, i.e. as KEY in the tests' environment.
 #   UI_AFTER        a command run as `$UI_AFTER <UI_OUT> <simulator>` when the run ends, passed or not, while
-#                   the simulator still exists: collect the app's files, stop the fixture
+#                   the simulator still exists: collect the app's files, stop the fixture (under Mac Catalyst
+#                   the second argument is empty)
 #   UI_SOURCE_REVISION  the tested commit, when the app directory is not a git checkout (else it must match)
 #
 # The CI log gets each test's result as it ends and a line every 30 s; the whole output is in xcodebuild.log.
@@ -32,6 +40,12 @@ IOS_DIR="${IOS_DIR:-$APP_DIR/ios}"
 PROJECT="${PROJECT:-$IOS_DIR/$SCHEME.xcodeproj}"
 OUT="${UI_OUT:-$IOS_DIR/build/ui-tests}"
 NAME="${UI_NAME:-ui-tests}"
+PLATFORM="${UI_PLATFORM:-iossim}"
+case "$PLATFORM" in
+  iossim) PLATFORM_NAME="iOS Simulator" ;;
+  maccatalyst) PLATFORM_NAME="Mac Catalyst" ;;
+  *) echo "UI_PLATFORM: iossim or maccatalyst" >&2; exit 2 ;;
+esac
 LOCK="${OUT%/}.lock"
 mkdir -p "$(dirname "$LOCK")"
 mkdir "$LOCK" 2>/dev/null || { echo "another ui-tests run is using $OUT ($LOCK)" >&2; exit 1; }
@@ -54,7 +68,7 @@ def git(d, *a):
     try: return subprocess.run(["git", "-C", d, *a], check=True, text=True, capture_output=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError): return None
 if what == "start":
-    app, framework, name, scheme = sys.argv[3:7]
+    app, framework, name, scheme, platform = sys.argv[3:8]
     revision = git(app, "rev-parse", "HEAD")
     given = os.environ.get("UI_SOURCE_REVISION") or None
     if given and revision and given != revision:
@@ -69,7 +83,7 @@ if what == "start":
         ci = {k: os.environ.get(v) for k, v in [("server", "GITHUB_SERVER_URL"), ("repository", "GITHUB_REPOSITORY"),
               ("run_id", "GITHUB_RUN_ID"), ("run_attempt", "GITHUB_RUN_ATTEMPT"), ("workflow", "GITHUB_WORKFLOW"),
               ("job", "GITHUB_JOB"), ("event", "GITHUB_EVENT_NAME"), ("ref", "GITHUB_REF"), ("sha", "GITHUB_SHA")]}
-    run = {"schema": 1, "runner": "framework/native/ci/ui-tests", "name": name, "scheme": scheme, "platform": "iOS Simulator",
+    run = {"schema": 1, "runner": "framework/native/ci/ui-tests", "name": name, "scheme": scheme, "platform": platform,
            "started_at": now, "source": source, "framework": {"revision": git(framework, "rev-parse", "HEAD")}, "ci": ci}
 else:
     run = json.load(open(path))
@@ -78,9 +92,23 @@ with open(path + ".tmp", "w") as f: json.dump(run, f, indent=2); f.write("\n")
 os.replace(path + ".tmp", path)
 PY
 }
+# the Mac's recording, stopped and converted to the run's <name>.mp4 (H.264, as the simulator's)
+stop_mac_recording() {
+  local mov="$OUT/$NAME.mov"
+  [ -n "$VIDEO_PID" ] && kill -INT "$VIDEO_PID" 2>/dev/null && wait "$VIDEO_PID" 2>/dev/null || true
+  VIDEO_PID=""
+  if [ ! -s "$mov" ]; then echo "screencapture wrote no recording (no Screen Recording permission?)" >> "$OUT/recording.log"; return; fi
+  if avconvert --source "$mov" --preset Preset1280x720 --output "$OUT/$NAME.mp4" --replace >> "$OUT/recording.log" 2>&1; then
+    rm -f "$mov"
+  else
+    echo "avconvert could not convert $NAME.mov; it is kept as recorded" >> "$OUT/recording.log"
+    rm -f "$OUT/$NAME.mp4"
+  fi
+}
 cleanup() {
   local code=$?
-  [ -n "$VIDEO_PID" ] && kill -INT "$VIDEO_PID" 2>/dev/null && wait "$VIDEO_PID" 2>/dev/null || true
+  if [ "$PLATFORM" = maccatalyst ]; then stop_mac_recording
+  else [ -n "$VIDEO_PID" ] && kill -INT "$VIDEO_PID" 2>/dev/null && wait "$VIDEO_PID" 2>/dev/null || true; fi
   [ -f "$OUT/run.json" ] && record end "${STATUS:-$code}" || true
   if [ -n "${UI_AFTER:-}" ] && [ "$AFTER_RAN" = 0 ]; then AFTER_RAN=1; $UI_AFTER "$OUT" "$UDID" || true; fi
   if [ -n "$THROWAWAY" ]; then
@@ -91,10 +119,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-record start "$APP_DIR" "$CI/../.." "$NAME" "$SCHEME"
-PREPARE_ONLY=1 "$CI/build-ios" Debug iossim
+record start "$APP_DIR" "$CI/../.." "$NAME" "$SCHEME" "$PLATFORM_NAME"
+PREPARE_ONLY=1 "$CI/build-ios" Debug "$PLATFORM"
 
-if [ -n "${UI_SIMULATOR:-}" ]; then
+if [ "$PLATFORM" = maccatalyst ]; then
+  # this Mac: no name here (the result bundle names it), the platform the app ran as, the host it ran on
+  DEVICE="$(/usr/bin/python3 -c '
+import json, platform, subprocess
+def out(*a): return subprocess.run(a, check=True, text=True, capture_output=True).stdout.strip()
+print(json.dumps({"platform": "Mac Catalyst", "type": "Mac", "model": out("sysctl", "-n", "hw.model"),
+                  "os": "macOS " + out("sw_vers", "-productVersion") + " (" + out("sw_vers", "-buildVersion") + ")",
+                  "architecture": platform.machine()}))')"
+  DESTINATION="platform=macOS,variant=Mac Catalyst,arch=$(uname -m)"
+elif [ -n "${UI_SIMULATOR:-}" ]; then
   UDID="$UI_SIMULATOR"
   DEVICE="$(xcrun simctl list -j | /usr/bin/python3 -c '
 import json, sys
@@ -130,7 +167,8 @@ print(json.dumps({"name": chosen["name"], "type": chosen["identifier"], "runtime
   UDID=$(xcrun simctl create "$SCHEME UI tests $$" "$MODEL" "$RUNTIME")
   THROWAWAY="$UDID"
 fi
-echo "simulator: $DEVICE"
+[ "$PLATFORM" = iossim ] && DESTINATION="id=$UDID"
+echo "$PLATFORM_NAME: $DEVICE"
 printf '%s\n' "$DEVICE" > "$OUT/device.json"
 
 [ -n "${UI_BEFORE:-}" ] && $UI_BEFORE "$OUT"
@@ -141,14 +179,20 @@ if [ -f "$OUT/test-env" ]; then
   done < "$OUT/test-env"
 fi
 
-xcrun simctl boot "$UDID" 2>/dev/null || true
-xcrun simctl bootstatus "$UDID" -b >/dev/null
-xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$OUT/$NAME.mp4" >/dev/null 2>&1 &
-VIDEO_PID=$!
+if [ "$PLATFORM" = maccatalyst ]; then
+  # -V: a duration (stopped early by SIGINT) rather than -v, which waits for a key on a terminal there is none of
+  screencapture -V 3600 -C -k "$OUT/$NAME.mov" < /dev/null >> "$OUT/recording.log" 2>&1 &
+  VIDEO_PID=$!
+else
+  xcrun simctl boot "$UDID" 2>/dev/null || true
+  xcrun simctl bootstatus "$UDID" -b >/dev/null
+  xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$OUT/$NAME.mp4" >/dev/null 2>&1 &
+  VIDEO_PID=$!
+fi
 
 status=0
 env ${RUNNER_ENV[@]+"${RUNNER_ENV[@]}"} xcodebuild test \
-  -project "$PROJECT" -scheme "$SCHEME" -destination "id=$UDID" \
+  -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
   -derivedDataPath "${DERIVED_DATA:-$IOS_DIR/build/DerivedData}" -resultBundlePath "$OUT/$NAME.xcresult" \
   "$@" 2>&1 | "$CI/progress" "$OUT/xcodebuild.log" '^Test Case .*(passed|failed)|: error:|^\*\* TEST' || status=$?
 STATUS="$status"

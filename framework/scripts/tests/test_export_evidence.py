@@ -382,14 +382,31 @@ class ExportTests(unittest.TestCase):
         self.bundle_device["modelName"] = "iPhone Duo"
         self.assertFails("chose iPhone 17 Pro but the tests ran on iPhone Duo")
 
-    def test_a_mac_catalyst_run(self):
-        (self.run_dir / "device.json").write_text(json.dumps({"name": "Mac", "platform": "Mac Catalyst"}))
-        self.bundle_device = {"modelName": "Mac", "osVersion": "27.0", "platform": "macOS", "architecture": "arm64"}
+    def mac_catalyst_run(self):
+        # as ui-tests records the Mac: no name (the bundle's is used), the model and the host's OS
+        (self.run_dir / "device.json").write_text(json.dumps({
+            "platform": "Mac Catalyst", "type": "Mac", "model": "VirtualMac2,1", "os": "macOS 26.4 (25E246)", "architecture": "arm64"}))
+        self.bundle_device = {"modelName": "My Mac", "osVersion": "26.4", "platform": "macOS", "architecture": "arm64"}
         run = json.loads((self.run_dir / "run.json").read_text())
         run["platform"] = "Mac Catalyst"
         self.write_run(run)
+
+    def test_a_mac_catalyst_run(self):
+        self.mac_catalyst_run()
         evidence = self.export()
         self.assertEqual((evidence["run"]["platform"], evidence["device"]["platform"]), ("Mac Catalyst", "macOS"))
+        self.assertEqual({k: evidence["device"][k] for k in ("name", "model", "os", "os_version", "architecture")},
+                         {"name": "My Mac", "model": "VirtualMac2,1", "os": "macOS 26.4 (25E246)", "os_version": "26.4",
+                          "architecture": "arm64"})
+
+    def test_a_catalyst_run_is_never_a_simulator_run(self):
+        self.mac_catalyst_run()
+        self.bundle_device = {"modelName": "iPhone 17 Pro", "osVersion": "27.0", "platform": "iOS Simulator", "architecture": "arm64"}
+        self.assertFails("run.json records the tests as run on Mac Catalyst but the result bundle names iOS Simulator")
+
+    def test_a_simulator_run_is_never_a_catalyst_run(self):
+        self.bundle_device = {"modelName": "iPhone 17 Pro", "osVersion": "26.4", "platform": "macOS", "architecture": "arm64"}
+        self.assertFails("run.json records the tests as run on iOS Simulator but the result bundle names macOS")
 
     # -- the recording ----------------------------------------------------------------------------------
     def test_no_recording(self):

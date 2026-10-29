@@ -110,7 +110,70 @@
     XCTAssertTrue([logged waitForExistenceWithTimeout:10], @"the probe's answer is not logged");
 }
 
+- (void)testScrollingToTheEndOfTheLog {
+    // the Probes list made longer than any window (13 probes, then 10 log rows), its oldest row looked for from
+    // the top: ELScrollTo drags on iOS and turns the scroll wheel under Mac Catalyst. That row starts out of
+    // view, so this always scrolls; then back up to the first probe.
+    if (![self openTab:@"Probes"]) return;
+    if (!ELTap(self.app, @"probe-12")) return;
+    for (int i = 0; i < 4; i++) if (!ELTap(self.app, @"probe-0")) return;
+    NSPredicate *oldest = [NSPredicate predicateWithFormat:@"label BEGINSWITH 'asking: HTTP bad proxy'"];
+    XCUIElement *row = [[self.app descendantsMatchingType:XCUIElementTypeAny] matchingPredicate:oldest].firstMatch;
+    XCTAssertFalse(row.exists && row.hittable, @"the oldest log row is in view before scrolling: nothing to scroll");
+    XCTAssertTrue(ELScrollTo(self.app, row), @"the oldest log row was not scrolled into view");
+    XCUIElement *first = ELElement(self.app, @"probe-0");
+    NSLog(@"after scrolling down, probe-0 is %@", first.exists && first.hittable ? @"still in view" : @"out of view");
+    XCTAssertTrue(ELScrollTo(self.app, first), @"the first probe was not scrolled back into view");
+}
+
+/// The selftest (`NATIVEDEMO_SELFTEST=1`): BackgroundRun, an EffectScope drain and the typed clients, run by the
+/// real shell on this platform, its lines shown on the Demo tab. Each line is logged, so the run's
+/// xcodebuild.log keeps what this platform answered.
+- (void)testSelftestThroughTheShell {
+    [self.app terminate];
+    self.app.launchEnvironment = @{@"NATIVEDEMO_SELFTEST": @"1"};
+    [self.app launch];
+    if (!ELWait(self.app, @"selftest")) return;
+    XCUIElement *lines = ELElement(self.app, @"selftest");
+    XCTAssertTrue(ELPoll(90, 0.5, ^BOOL{ return [ELText(lines) hasSuffix:@"\ndone"]; }), @"the selftest did not finish: %@", ELText(lines));
+    NSMutableDictionary<NSString *, NSString *> *said = [NSMutableDictionary dictionary];
+    for (NSString *line in [ELText(lines) componentsSeparatedByString:@"\n"]) {
+        NSLog(@"selftest: %@", line);
+        NSRange colon = [line rangeOfString:@": "];
+        if (colon.location != NSNotFound) said[[line substringToIndex:colon.location]] = [line substringFromIndex:NSMaxRange(colon)];
+    }
+    XCTAssertEqualObjects(said[@"TCP echo"], @"echo: selftest");
+    // BackgroundRun: one run completes, one that never stops is expired at its deadline
+    XCTAssertEqualObjects(said[@"background run"], @"completed, work started, success true");
+    XCTAssertEqualObjects(said[@"background run past its deadline"], @"expired, work started, success false");
+    // EffectScope: the invalidation cancelled and drained the task, and its late result was not delivered
+    XCTAssertEqualObjects(said[@"effect scope"], @"started, drained true, late result delivered false, now 0 tasks");
+    // the typed clients: every answer decoded (ok, or a classified error; never malformed)
+    NSRegularExpression *decoded = [NSRegularExpression regularExpressionWithPattern:@"^(ok|denied|cancelled|unsupported|failed)( .*)?$" options:0 error:nil];
+    for (NSString *key in said) {
+        if (![key hasPrefix:@"typed "]) continue;
+        NSString *answer = said[key];
+        XCTAssertNotNil([decoded firstMatchInString:answer options:0 range:NSMakeRange(0, answer.length)], @"%@: %@", key, answer);
+    }
+    XCTAssertEqualObjects(said[@"typed http.get ftp"], @"failed bad-url");
+    XCTAssertTrue([said[@"typed http.get unreachable"] hasPrefix:@"failed system"], @"unreachable: %@", said[@"typed http.get unreachable"]);
+    // an ad-hoc build has no iCloud entitlement
+    XCTAssertEqualObjects(said[@"typed cloudkit.account"], @"unsupported missingEntitlement");
+#if TARGET_OS_MACCATALYST
+    // an ad-hoc Mac app has no keychain access group: the data protection keychain refuses it (errSecMissingEntitlement)
+    XCTAssertEqualObjects(said[@"typed keychain.add"], @"unsupported status (-34018)");
+#else
+    XCTAssertEqualObjects(said[@"typed keychain.add"], @"ok added");
+    XCTAssertEqualObjects(said[@"typed keychain.add again"], @"ok alreadyExists");
+    XCTAssertEqualObjects(said[@"typed keychain.get"], @"ok 010203");
+    XCTAssertTrue([said[@"typed keychain.delete"] hasPrefix:@"ok"], @"delete: %@", said[@"typed keychain.delete"]);
+    XCTAssertEqualObjects(said[@"typed keychain.get after delete"], @"ok none");
+#endif
+}
+
 #if !TARGET_OS_MACCATALYST
+// Not under Mac Catalyst: there the passcode is the Mac's password, asked by a system sheet of another
+// process that going to the background does not dismiss, and a CI Mac has no Touch ID.
 - (void)testScopedAuthenticationEndsWithTheSession {
     // Face ID or the passcode runs in the session's EffectScope. The system's sheet is another process's;
     // going to the background dismisses it (a cancellation) and ends the session. Whichever comes first,

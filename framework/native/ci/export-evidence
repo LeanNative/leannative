@@ -28,7 +28,9 @@ What is checked, and how a run that did not pass is recorded:
 * The tested revision is run.json's "source.revision", recorded by ui-tests as the tests started. It is
   never this checkout's HEAD. --source-revision must match it; without a recorded one, --source-revision
   is required and is recorded as given ("recorded_by": "export-evidence --source-revision").
-* device.json (the simulator ui-tests chose) must agree with the device the result bundle names.
+* device.json (the simulator ui-tests chose, or the Mac) must agree with the device the result bundle names,
+  and run.json's platform with the bundle's: a Mac Catalyst run's bundle names macOS, a simulator run's
+  the iOS Simulator, so neither is ever recorded as the other.
 
 Nothing is published: where the output goes is the caller's (a CI artifact, a website). Python 3 stdlib.
 """
@@ -55,6 +57,8 @@ LOG_STARTED = re.compile(r"^Test Case '-\[(?:[\w.]+\.)?(\w+) (\w+)\]' started", 
 LOG_CASE = re.compile(r"^Test Case '-\[(?:[\w.]+\.)?(\w+) (\w+)\]' (passed|failed|skipped) \(([0-9.]+) seconds\)\.", re.M)
 LOG_TOTAL = re.compile(r"Executed (\d+) tests?, with (\d+) failures? \(\d+ unexpected\) in ([0-9.]+) ")
 RESULTS = {"passed": "passed", "failed": "failed", "skipped": "skipped", "expected failure": "passed"}
+# run.json's platform (ui-tests) → the platforms a result bundle names for it
+BUNDLE_PLATFORMS = {"iOS Simulator": {"iOS Simulator"}, "Mac Catalyst": {"macOS", "Mac Catalyst"}}
 
 
 class Failure(Exception):
@@ -359,13 +363,17 @@ def source_identity(run, given):
     return source
 
 
-def device_identity(chosen, bundle_device):
-    result = {"name": chosen.get("name"), "type": chosen.get("type"), "runtime": chosen.get("runtime"), "os": chosen.get("os")}
+def device_identity(chosen, bundle_device, platform=None):
+    result = {"name": chosen.get("name"), "type": chosen.get("type"), "runtime": chosen.get("runtime"), "os": chosen.get("os"),
+              "model": chosen.get("model"), "architecture": chosen.get("architecture")}
     if bundle_device:
         if chosen.get("name") and bundle_device.get("name") and chosen["name"] != bundle_device["name"]:
             raise Failure(f"device.json chose {chosen['name']} but the tests ran on {bundle_device['name']}")
+        allowed = BUNDLE_PLATFORMS.get(platform)
+        if allowed and bundle_device.get("platform") and bundle_device["platform"] not in allowed:
+            raise Failure(f"run.json records the tests as run on {platform} but the result bundle names {bundle_device['platform']}")
         result.update(name=bundle_device.get("name") or result["name"], platform=bundle_device.get("platform"),
-                      os_version=bundle_device.get("os_version"), architecture=bundle_device.get("architecture"))
+                      os_version=bundle_device.get("os_version"), architecture=bundle_device.get("architecture") or result["architecture"])
     return {key: value for key, value in result.items() if value}
 
 
@@ -400,7 +408,7 @@ def export(run_dir, out, args, now=None):
         raise Failure(f"the result bundle's results are malformed: {error}")
     log = parse_log(log_path.read_text(errors="replace"))
     result, reasons = outcome(bundled["tests"], log)
-    device = device_identity(chosen, bundled["device"])
+    device = device_identity(chosen, bundled["device"], run.get("platform"))
     app = read_json(args.app_metadata, "the app metadata") if args.app_metadata else None
     out.mkdir(parents=True, exist_ok=True)
     on_disk = (run_dir / args.screenshots) if args.screenshots else run_dir / "screenshots"
