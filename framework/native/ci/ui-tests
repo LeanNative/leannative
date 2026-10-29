@@ -16,7 +16,7 @@
 #                   in the logged-in session (the tests click, scroll and type with the real mouse and
 #                   keyboard: a CI runner, not a Mac someone is using). It needs LEAN_X86_64_PREFIX, as
 #                   build-ios does. The simulator variables below do not apply; device.json records the Mac.
-#                   The recording is `screencapture -V`, converted to <name>.mp4 by avconvert; without the
+#                   The recording is `screencapture -v`, converted to <name>.mp4 by avconvert; without the
 #                   Screen Recording permission there is none, and recording.log says why.
 #   UI_OUT          the evidence directory (default $IOS_DIR/build/ui-tests); emptied first, one run at a time
 #   UI_NAME         the result bundle's and recording's name (default ui-tests)
@@ -94,10 +94,33 @@ with open(path + ".tmp", "w") as f: json.dump(run, f, indent=2); f.write("\n")
 os.replace(path + ".tmp", path)
 PY
 }
-# the Mac's recording, stopped and converted to the run's <name>.mp4 (H.264, as the simulator's)
+# whether process $1 exits within $2 s (a recorder that ignores its stop must not hold the run open)
+exits_within() {
+  local i
+  for ((i = 0; i < $2 * 10; i++)); do
+    kill -0 "$1" 2>/dev/null || { wait "$1" 2>/dev/null || true; return 0; }
+    sleep 0.1
+  done
+  return 1
+}
+# stops recorder $1 with one SIGINT (it finishes its file), killed if it has not within $2 s
+stop_recorder() {
+  kill -INT "$1" 2>/dev/null || true
+  exits_within "$1" "$2" && return 0
+  kill -KILL "$1" 2>/dev/null || true
+  wait "$1" 2>/dev/null || true
+  echo "recorder $1 ignored SIGINT for $2 s and was killed" >> "$OUT/recording.log"
+}
+# the Mac's recording, stopped and converted to the run's <name>.mp4 (H.264, as the simulator's).
+# screencapture -v stops at a key on its input (a FIFO here); SIGINT, then a kill, only if it does not
 stop_mac_recording() {
   local mov="$OUT/$NAME.mov"
-  [ -n "$VIDEO_PID" ] && kill -INT "$VIDEO_PID" 2>/dev/null && wait "$VIDEO_PID" 2>/dev/null || true
+  if [ -n "$VIDEO_PID" ]; then
+    { printf ' \n' >&7; } 2>/dev/null || true
+    exits_within "$VIDEO_PID" 20 || stop_recorder "$VIDEO_PID" 10
+    exec 7>&- 2>/dev/null || true
+    rm -f "$OUT/.screencapture-input"
+  fi
   VIDEO_PID=""
   if [ ! -s "$mov" ]; then echo "screencapture wrote no recording (no Screen Recording permission?)" >> "$OUT/recording.log"; return; fi
   if avconvert --source "$mov" --preset Preset1280x720 --output "$OUT/$NAME.mp4" --replace >> "$OUT/recording.log" 2>&1; then
@@ -140,7 +163,11 @@ stop_sim_recording() {
   local pid
   [ ${#SIM_RECORDERS[@]} = 0 ] && return
   for pid in "${SIM_RECORDERS[@]}"; do kill -INT "$pid" 2>/dev/null || true; done
-  for pid in "${SIM_RECORDERS[@]}"; do wait "$pid" 2>/dev/null || true; done
+  for pid in "${SIM_RECORDERS[@]}"; do
+    exits_within "$pid" 30 && continue
+    kill -KILL "$pid" 2>/dev/null || true
+    echo "recordVideo $pid did not finish within 30 s of SIGINT and was killed" >> "$OUT/recording.log"
+  done
   SIM_RECORDERS=()
   /usr/bin/python3 -c '
 import json, os, sys
@@ -233,8 +260,10 @@ if [ -f "$OUT/test-env" ]; then
 fi
 
 if [ "$PLATFORM" = maccatalyst ]; then
-  # -V: a duration (stopped early by SIGINT) rather than -v, which waits for a key on a terminal there is none of
-  screencapture -V 3600 -C -k "$OUT/$NAME.mov" < /dev/null >> "$OUT/recording.log" 2>&1 &
+  # -v records until a key on its input: a FIFO this script holds open (fd 7) and writes to at the end
+  mkfifo "$OUT/.screencapture-input"
+  exec 7<>"$OUT/.screencapture-input"
+  screencapture -v -C -k "$OUT/$NAME.mov" < "$OUT/.screencapture-input" >> "$OUT/recording.log" 2>&1 &
   VIDEO_PID=$!
 else
   xcrun simctl boot "$UDID" 2>/dev/null || true

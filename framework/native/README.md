@@ -276,7 +276,7 @@ python3 -I framework/native/ci/export-evidence examples/native-demo/ios/build/ui
 Mac Catalyst app on the Mac itself, in its logged-in session: the tests move the real pointer and type on
 the real keyboard, so it is for a CI runner, not a Mac in use. `run.json` records the platform as
 `Mac Catalyst` and `device.json` the Mac (model, macOS version and build, architecture); the recording
-is `screencapture -V`, converted to `<name>.mp4` by `avconvert`, and needs the Screen Recording
+is `screencapture -v` (stopped at the end, never left to hold the run open), converted to `<name>.mp4` by `avconvert`, and needs the Screen Recording
 permission (`recording.log` says why there is none). `export-evidence` refuses a run whose `run.json`
 platform and result bundle disagree, so a Catalyst run is never recorded as a simulator run or the
 reverse.

@@ -279,7 +279,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         | .done () => (true, "")
         | .denied e => (false, s!"denied ({e.name})")
         | .cancelled e => (false, s!"cancelled ({e.name})")
-        | .error e => (false, s!"{e.kind.name} ({e.name})")
+        | .error e => (false, s!"{e.kind.name} ({e.name}{match e.code with | some c => s!" {c}" | none => ""}{match e.domain with | some d => s!" {d}" | none => ""})")
         | .failed e => (false, toString e)
         | .stale _ => (false, "stale")
       -- a stale answer is not the session's; it is noted apart, so a test can see it was dropped

@@ -50,8 +50,9 @@ NSString *ELText(XCUIElement *element) {
 /// One scroll of the content, down (towards the end) or up.
 static void ELScrollStep(XCUIApplication *app, BOOL down) {
 #if TARGET_OS_MACCATALYST
-    // no touch screen: the scroll wheel, over the window's middle (negative deltaY scrolls the content up)
-    [[app coordinateWithNormalizedOffset:CGVectorMake(0.5, 0.5)] scrollByDeltaX:0 deltaY:down ? -200 : 200];
+    // no touch screen: the scroll wheel, over the window's middle (negative deltaY scrolls the content up); the
+    // window's, as a Mac application's own frame is unbounded (a point in it is at infinity)
+    [[app.windows.firstMatch coordinateWithNormalizedOffset:CGVectorMake(0.5, 0.5)] scrollByDeltaX:0 deltaY:down ? -200 : 200];
 #else
     // drag in the middle of the screen: the bottom edge belongs to the home indicator
     XCUICoordinate *from = [app coordinateWithNormalizedOffset:CGVectorMake(0.5, down ? 0.7 : 0.35)];

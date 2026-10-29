@@ -24,7 +24,7 @@ structure Capability where
 set_option maxRecDepth 8000 in
 def capabilities : List Capability :=
 [
-  { name := "auth", args := "`reason`", result := "`{\"ok\":true}` or `{\"ok\":false,\"error\":…,\"name\":…,\"code\":…}` (device-owner authentication; `error` is the system's text, `name` and `code` the `LAError`: `userCancel`, `systemCancel`, `appCancel`, `userFallback`, `authenticationFailed`, `biometryLockout`, `passcodeNotSet`, `biometryNotAvailable`, `biometryNotEnrolled`, `notInteractive`, `invalidContext` or `unknown`)",
+  { name := "auth", args := "`reason`", result := "`{\"ok\":true}` or `{\"ok\":false,\"error\":…,\"name\":…,\"code\":…,\"domain\":…}` (device-owner authentication; `error` is the system's text, `name` and `code` the `LAError` (`domain` the error's, so a non-`LAError` answer, named `unknown`, can be told apart): `userCancel`, `systemCancel`, `appCancel`, `userFallback`, `authenticationFailed`, `biometryLockout`, `passcodeNotSet`, `biometryNotAvailable`, `biometryNotEnrolled`, `notInteractive`, `invalidContext` or `unknown`)",
     body := [
       .l "LAContext *context = [LAContext new];",
       .l "NSError *unable = nil;",
@@ -38,7 +38,7 @@ def capabilities : List Capability :=
       .l "NSString *reason = ELArgString(args, @\"reason\") ?: @\"Confirm\";",
       b "[context evaluatePolicy:LAPolicyDeviceOwnerAuthentication localizedReason:reason reply:^(BOOL ok, NSError *error) {" [
           .l "NSDictionary *result = ok ? @{@\"ok\": @YES} : @{@\"ok\": @NO, @\"error\": error.localizedDescription ?: @\"Authentication failed.\",",
-          .l "                                                @\"name\": ELAuthErrorName(error), @\"code\": @(error.code)};",
+          .l "                                                @\"name\": ELAuthErrorName(error), @\"code\": @(error.code), @\"domain\": error.domain ?: @\"\"};",
           .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}];"] },
   { name := "keychain.get", args := "`key`, `service`?, `synchronizable`?, `hex`?",
     result := "`{\"value\":…,\"status\":…}` or `{\"value\":null,\"status\":…}` (`service` defaults to the bundle id; `status` is the `OSStatus`: `-25300` for no such item); with `hex`, `{\"hex\":…|null,\"status\":…}`: the raw bytes",
