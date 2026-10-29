@@ -63,6 +63,18 @@ jobs:
           export DERIVED_DATA="$RUNNER_TEMP/dd-catalyst" BUILD_LOG="$RUNNER_TEMP/Debug-maccatalyst.log"
           framework/native/ci/build-ios Debug maccatalyst
           framework/native/ci/check-no-swift "$BUILD_LOG" "$DERIVED_DATA/Build/Products/Debug-maccatalyst/$SCHEME.app"
+      - name: The UI tests build for Mac Catalyst; no app links XCTest
+        run: |
+          set -euo pipefail
+          # the test kit's Catalyst branches compile (they are run on the simulator only, by the ui job)
+          xcodebuild -project examples/native-demo/ios/NativeDemo.xcodeproj -scheme "$SCHEME" -configuration Debug \
+            -destination 'generic/platform=macOS,variant=Mac Catalyst' -derivedDataPath "$RUNNER_TEMP/dd-catalyst" \
+            build-for-testing > "$RUNNER_TEMP/Debug-maccatalyst-tests.log" 2>&1 || { tail -40 "$RUNNER_TEMP/Debug-maccatalyst-tests.log"; exit 1; }
+          for app in "$RUNNER_TEMP/dd-iossim/Build/Products/Debug-iphonesimulator/$SCHEME.app/$SCHEME" \
+                     "$RUNNER_TEMP/dd-catalyst/Build/Products/Debug-maccatalyst/$SCHEME.app/Contents/MacOS/$SCHEME"; do
+            if otool -L "$app" | grep -i xctest; then echo "::error::$app links XCTest"; exit 1; fi
+          done
+          echo "no app links XCTest"
       - name: Preserve the build logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -71,5 +83,54 @@ jobs:
           path: |
             ${{ runner.temp }}/*.log
             examples/native-demo/ios/build/*.log
+          if-no-files-found: warn
+          retention-days: 14
+  # native-demo's UI tests (the framework's XCTest kit against real controls) on a throwaway simulator,
+  # then their evidence (framework/native/ci/export-evidence), both kept as artifacts
+  ui:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tools
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes | grep -i ios || true
+      - name: Restore the Lean toolchain and builds
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.elan
+            framework/lean/.lake
+            examples/native-demo/.lake
+          key: ui-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-${{ hashFiles('framework/lean/**/*.lean', 'examples/native-demo/**/*.lean') }}
+          restore-keys: ui-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-
+      - name: elan and the Lean toolchain
+        run: |
+          set -euo pipefail
+          if [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/v4.1.2/elan-init.sh \
+              | sh -s -- -y --default-toolchain none --no-modify-path
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/elan" toolchain install "$(cat framework/lean/lean-toolchain)"
+      - name: native-demo UI tests
+        run: |
+          UI_OUT="$RUNNER_TEMP/ui" UI_BEFORE="$PWD/examples/native-demo/ios/ui-before" DERIVED_DATA="$RUNNER_TEMP/dd" \
+            framework/native/ci/ui-tests
+      - name: Their evidence
+        if: always()
+        run: python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/ui" "$RUNNER_TEMP/evidence" --require-passed
+      - name: Preserve the run and its evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ui/
+            ${{ runner.temp }}/evidence/
+            !${{ runner.temp }}/ui/*.xcresult/**/private/
           if-no-files-found: warn
           retention-days: 14

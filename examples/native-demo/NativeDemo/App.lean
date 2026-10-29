@@ -35,6 +35,7 @@ structure Model where
   secret : String := ""
   sheet : Bool := false
   alert : Bool := false
+  name : String := ""
   deriving Inhabited
 
 inductive Host where
@@ -49,6 +50,8 @@ inductive Host where
   | ran (id : String) (outcome : String)
   /-- the app went to the background -/
   | background
+  /-- a scoped answer came back stale and was not delivered -/
+  | dropped (what : String)
 
 inductive Msg where
   | inc
@@ -65,6 +68,7 @@ inductive Msg where
   | openAlert
   | closeAlert
   | probe (i : Nat)
+  | name (s : String)
   | host (h : Host)
 
 inductive Cmd where
@@ -125,6 +129,7 @@ def update : Msg → Model → Model
   | .closeSheet, m => { m with sheet := false }
   | .openAlert, m => { m with alert := true }
   | .closeAlert, m => { m with alert := false }
+  | .name s, m => { m with name := s }
   | .probe i, m => note m s!"asking: {(probes[i]?.map (·.1)).getD "?"}…"
   | .host .tick, m => { m with ticks := m.ticks + 1 }
   | .host (.authed ok d), m => note m (if ok then s!"authenticated {d}" else s!"not authenticated: {d}")
@@ -134,6 +139,7 @@ def update : Msg → Model → Model
   | .host (.bgtask expired id kind), m => note m s!"bgtask {if expired then "expired" else "launched"}: {id} ({kind})"
   | .host (.ran id o), m => note m s!"background run {id}: {o}"
   | .host .background, m => m
+  | .host (.dropped what), m => note m s!"dropped a stale answer: {what}"
 
 def cmds : Msg → Model → List Cmd
   | .startTicks, m => if m.ticking then [] else [.ticker]
@@ -150,10 +156,12 @@ def cmds : Msg → Model → List Cmd
 def demoView (m : Model) : Html Msg :=
   .col ([ .text "Native mode" .title
         , .text "This screen is Lean compiled to C, running inside the iOS app." .caption
-        , .row [.text s!"Count: {m.count}" .body, .spacer, .button "+1" .primary (some .inc)]
+        , .row [.identified "count" (.text s!"Count: {m.count}" .body), .spacer, .identified "inc" (.button "+1" .primary (some .inc))]
         , .row [.text s!"Ticks from a Lean task: {m.ticks}" .body, .spacer,
-                .button "Start" .plain (if m.ticking then none else some .startTicks)]
-        , .row [.button "Face ID" .plain (some .authenticate), .button "TCP echo" .plain (some .echo)]
+                .identified "startTicks" (.button "Start" .plain (if m.ticking then none else some .startTicks))]
+        , .identified "name" (.input .plain "Name" "Who is asking" m.name Msg.name none)
+        , .identified "greeting" (.text (if m.name.isEmpty then "Nobody yet" else s!"Hello, {m.name}") .body)
+        , .row [.identified "faceID" (.button "Face ID" .plain (some .authenticate)), .button "TCP echo" .plain (some .echo)]
         , .divider ] ++ m.log.map (fun s => .text s .caption))
 
 def widgets (m : Model) : Html Msg :=
@@ -174,7 +182,7 @@ def probesView (m : Model) : Html Msg :=
   .screen "Probes" none
     [ .list
       [ .section "Capabilities" "Each button asks the shell; the answer is logged below."
-          (probes.zipIdx.map fun ((l, _, _), i) => .button l .plain (some (.probe i)))
+          (probes.zipIdx.map fun ((l, _, _), i) => .identified s!"probe-{i}" (.button l .plain (some (.probe i))))
       , .section "Log" "Newest first, with system events." (m.log.map (fun s => .text s .caption)) ] ]
 
 def view (m : Model) : Html Msg :=
@@ -255,6 +263,9 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
       -- in the session's scope: an answer after the app went to the background is not reported
       let token ← session.capture
       let r ← session.authenticatedWithShell token fx "Prove native capabilities work" (pure ())
+      let stage := match r with
+        | .stale .beforePrompt => "before the prompt" | .stale .afterAnswer => "after the answer"
+        | .stale .duringAction => "during the action" | _ => "authentication"
       let (ok, detail) := match r with
         | .done () => (true, "")
         | .denied e => (false, s!"denied ({e.name})")
@@ -262,7 +273,8 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         | .error e => (false, s!"{e.kind.name} ({e.name})")
         | .failed e => (false, toString e)
         | .stale _ => (false, "stale")
-      discard <| session.deliver token (fx.post (.authed ok detail))
+      -- a stale answer is not the session's; it is noted apart, so a test can see it was dropped
+      unless ← session.deliver token (fx.post (.authed ok detail)) do fx.post (.dropped stage)
   | .echo text => discard <| IO.asTask do
       let r ← try echoOnce 48334 text catch e => pure s!"failed: {e}"
       fx.post (.echoed r)
