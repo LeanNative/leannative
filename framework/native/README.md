@@ -171,8 +171,11 @@ tests, not proofs.
 
 ## Capabilities (`lean/ElmShell/Capabilities.lean`)
 
-What only iOS can do, by name, for any app: `auth` (Face ID / passcode), `build` (`{"debug":…}`: test hooks read their launch environment only in a Debug build, `#if DEBUG`), `keychain.get/set/delete/clear` (`clear` empties a service: a test namespace's reset)
-(`set`/`delete` answer the `OSStatus` too; the simulator build is ad-hoc signed, since an unsigned app has
+What only iOS can do, by name, for any app: `auth` (Face ID / passcode; a failure answers the `LAError` as
+`name` and `code` beside the system's text, so a cancellation is told from a denial), `build` (`{"debug":…}`: test hooks read their launch environment only in a Debug build, `#if DEBUG`), `keychain.get/set/add/delete/clear` (`clear` empties a service: a test namespace's reset; `add` creates an
+item only if there is none, one `SecItemAdd` that answers `-25299` with `"exists":true` otherwise, where
+`set` replaces whatever is there)
+(`get`, `set`, `add` and `delete` answer the `OSStatus` too, `-25300` for no such item; the simulator build is ad-hoc signed, since an unsigned app has
 no Keychain entitlement and every write fails with -34018; items are this device only unless the request
 says `synchronizable`: true, which names iCloud Keychain items instead, accessible while unlocked, and
 matches only those; `set` takes raw bytes as `hex` in place of a UTF-8 `value`, and `get` with `hex`: true
@@ -183,7 +186,7 @@ URLSession: ephemeral, same-host redirects only, never https→http — Lean's r
 `"socks":{"host":…,"port":…}` the request goes through that SOCKS5 proxy, a Tor daemon say: the hostname
 is sent to the proxy unresolved, there is no fallback to a direct connection, request and resource time
 out after 90 s and 180 s, and a host that is not a string or a port outside 1…65535 answers
-`{"error":"bad-proxy"}`),
+`{"error":"bad-proxy"}`; a system error answers its text with its `code` and `domain`),
 `open` (a URL outside the app), `bgtask.schedule/complete/refreshStatus` (background tasks, above),
 `cloudkit.account/query/save/load/delete` (below), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
 `ble.connect` (a peripheral the system already holds connected, else the first a scan finds; answers its
@@ -224,6 +227,21 @@ entitlements blob of the code signature — and when they lack CloudKit or the c
 `cloudkit.*` request answers `{"error":"missingEntitlement","detail":…}` without touching CloudKit. (In the
 simulator, native-demo answers `missingEntitlement`; built with the entitlement it answers
 `{"status":"noAccount","user":null}` and a query `notAuthenticated`.)
+
+**Typed clients: `ElmLean.Native.Client.*`** (optional; import them). `Client.Auth`, `Client.Keychain`,
+`Client.Http`, `Client.CloudKit` and `Client.Bluetooth` build each capability's arguments from a typed
+request and read its answer into a typed result or a `Client.Error`: `denied`, `cancelled`,
+`unsupported` (an unknown capability, the platform, a missing entitlement), `malformed` (never read as
+a successful default) or `failed`, keeping the shell's error name, code, domain, text and whole answer.
+`Keychain.add` is the only create-only operation, and it is the atomic `keychain.add`, never a read
+then a write. The raw `Effects.ask`/`cap` stay for everything else. The `name`/`code` of `auth`, the
+`status` of `keychain.get`, `keychain.add`, and the `code`/`domain` of `http.get` are additions to the
+answers above that leave every existing field as it was. `ElmLeanTest/Clients.lean` (`make check`) reads
+`ElmLeanTest/fixtures/clients.json`, written from this section and the capability table rather than from
+the decoders, and checks that every capability it names is one the shell offers; native-demo's selftest
+calls them against the shell (iOS 27 simulator: `add` then `alreadyExists`, read, delete; Mac Catalyst
+ad-hoc: Keychain writes `unsupported`, -34018). The clients check what the shell answers, not what the
+platform did: the native side stays trusted.
 
 ## View nodes
 

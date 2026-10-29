@@ -1,6 +1,9 @@
 import Std.Async.TCP
 import ElmLean.Native
 import ElmLean.Native.BackgroundRun
+import ElmLean.Native.Client.Keychain
+import ElmLean.Native.Client.Http
+import ElmLean.Native.Client.CloudKit
 
 /-! # A native-mode demo: the pieces Winnow needs, in one screen
 
@@ -11,7 +14,8 @@ import ElmLean.Native.BackgroundRun
 * a Probes tab that asks the shell for capabilities (background tasks, CloudKit, iCloud Keychain, HTTP
   through a SOCKS5 proxy at 127.0.0.1:1080) and logs their answers and the system events;
 * a background task iOS launches runs as a `BackgroundRun` (`ElmLean.Native.BackgroundRun`): a short
-  job that stops when expired, answered with `bgtask.complete` when it is over. -/
+  job that stops when expired, answered with `bgtask.complete` when it is over;
+* the headless selftest also asks through the typed clients (`ElmLean.Native.Client.*`). -/
 
 namespace NativeDemo
 open ElmLean ElmLean.Native Lean
@@ -206,6 +210,28 @@ def describe (o : BackgroundRun.Outcome) : String :=
   let ended := match o.ended with
     | .completed => "completed" | .unfinished => "unfinished" | .failed e => s!"failed ({e})" | .expired => "expired"
   s!"{ended}, work {if o.workStarted then "started" else "never started"}, success {o.success}"
+/-- A typed client's result, for the selftest's output. -/
+def shown (r : Client.Result α) (render : α → String) : String :=
+  match r with
+  | .ok a => s!"ok {render a}"
+  | .error e => s!"{e.kind.name} {e.name}{match e.code with | some c => s!" ({c})" | none => ""}"
+
+/-- The typed clients against the real shell: an atomic create-only Keychain item, read and deleted; an
+HTTP request the shell refuses; the CloudKit account (an ad-hoc build has no entitlement). -/
+def typedSelftest (fx : Effects Host) (say : String → IO Unit) : IO Unit := do
+  let item : Client.Keychain.Item := { key := "typed", service := some "art.fralex.elmlean.nativedemo.probe" }
+  let bytes := ByteArray.mk #[1, 2, 3]
+  let hex := fun (b : Option ByteArray) => (b.map Client.hexOf).getD "none"
+  let added := fun (a : Client.Keychain.Added) => match a with | .added => "added" | .alreadyExists => "alreadyExists"
+  discard <| (Client.Keychain.delete item).call fx
+  say s!"typed keychain.add: {shown (← (Client.Keychain.add item bytes).call fx) added}"
+  say s!"typed keychain.add again: {shown (← (Client.Keychain.add item (ByteArray.mk #[9])).call fx) added}"
+  say s!"typed keychain.get: {shown (← (Client.Keychain.get item).call fx) hex}"
+  say s!"typed keychain.delete: {shown (← (Client.Keychain.delete item).call fx) fun _ => ""}"
+  say s!"typed keychain.get after delete: {shown (← (Client.Keychain.get item).call fx) hex}"
+  say s!"typed http.get ftp: {shown (← (Client.Http.get { url := "ftp://example.com/" }).call fx) fun r => toString r.status}"
+  say s!"typed http.get unreachable: {shown (← (Client.Http.get { url := "http://127.0.0.1:1/", timeout := some 5 }).call fx) fun r => toString r.status}"
+  say s!"typed cloudkit.account: {shown (← (Client.CloudKit.account).call fx) fun a => (a.user.getD "no user")}"
 
 def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
   match c with
@@ -240,6 +266,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         let hung ← BackgroundRun.new { work := untilCancelled, completion := fun _ => pure (), deadline := .after 300 }
         hung.start
         say s!"background run past its deadline: {describe (← hung.wait)}"
+        typedSelftest fx say
         for (l, n, a) in probes do
           let j ← IO.wait (← fx.ask n a)
           say s!"{l}: {j.compress}"
