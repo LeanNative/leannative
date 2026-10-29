@@ -1,11 +1,51 @@
-# ElmLean — Elm-style apps written and proven in Lean 4, running natively on iOS and Mac
+# ElmLean — native iOS and macOS apps in Lean 4
 
-ElmLean is a framework for writing apps in the Elm architecture (`Model`, `Msg`, `update`,
-`view`) in **Lean 4**, proving things about them with Lean's checker, and running the very same
-definitions on iOS and Mac. An app is an ordinary Lean package that depends on the framework. Lean's
-compiler turns it into C, which is linked into the iOS app with Lean's runtime; a generic shell draws
-the view tree the app returns with UIKit and does what only iOS can do. No Swift is compiled, and none
-is written per app.
+**Write your app in Lean. Prove the state transitions that matter.**
+
+ElmLean is a framework for building native apps for **iPhone, iPad, and Mac**. Write your model,
+messages, updates, views, and commands in Lean 4. Lean compiles the application to C; a shared
+Objective-C shell renders its views with UIKit on iOS and Mac Catalyst on macOS.
+
+The same state-transition functions you test and reason about run in the app. You can add proofs of
+your application's invariants and have Lean check them when you build. The application follows the Elm
+architecture (`Model`, `Msg`, `update`, `view`), with explicit commands for effects. No Swift is compiled
+or written per app.
+
+## What you get
+
+* **Native Apple interfaces.** Lists, navigation, tabs, sheets, toolbars, text input, sharing, and other
+  controls rendered by the shared UIKit shell. On macOS, the shell uses Mac Catalyst, including
+  resizable windows, sidebar tabs, and popovers.
+* **One application model.** The model, updates, and views used in headless tests are the definitions
+  compiled into the native app.
+* **Proofs about application behavior.** State the invariants your app needs and prove that its updates
+  preserve them. The framework supplies proofs about dispatch and sessions; each app supplies its own
+  application-specific proofs.
+* **Apple platform capabilities.** Device authentication, Keychain, clipboard, file protection, HTTPS,
+  CloudKit, Bluetooth LE, and iOS background tasks are available through the shell. Availability and
+  signing requirements differ by platform; see the [native platform guide](framework/native/README.md).
+
+ElmLean is being developed alongside [Winnow](https://github.com/winnowwallet/winnow-lean), a Bitcoin
+wallet written in Lean. Start with [`examples/native-demo`](examples/native-demo) for a smaller app that
+exercises the framework's controls and capabilities.
+
+## Current scope and limits
+
+* **iOS and macOS are the application targets.** The Mac implementation uses Mac Catalyst. An AppKit
+  renderer is not implemented.
+* **Application proofs are explicit.** Using Lean does not automatically prove an app correct. A proof
+  covers the property it states and its assumptions; the native renderer, platform effects, compiler,
+  and runtime remain part of the trusted system. See [What is trusted](#what-is-trusted).
+* **The native runtime integration is experimental.** The build currently retargets Lean's macOS static
+  libraries by rewriting their platform metadata. This is not a supported Lean cross-compilation path.
+  The [native platform guide](framework/native/README.md) records the validation performed and the
+  remaining device and platform limitations. The reusable app workflow currently covers iOS builds
+  and simulator tests; Mac Catalyst validation is documented separately.
+
+## From Lean to a native app
+
+An app is an ordinary Lean package that depends on the framework. Lean's compiler generates C for the
+app and framework; the native build links it with Lean's runtime and the shared shell.
 
 ```
         your app: Model · Msg · update · view : Model → Html Msg · cmds · perform · theorems
@@ -13,14 +53,10 @@ is written per app.
                      lake build ──► the app and ElmLean as C (.lake/build/ir)
                                     │
      framework/native/scripts/ios_lean_sources.sh: the C of the app's import closure, Lean's runtime
-                                    │  retargeted to iOS, and the shell's Objective-C printed from Lean
+                                    │  retargeted to iOS / Mac Catalyst, and the shell printed from Lean
                                     ▼                  (`lake exe elmshell`, checked against the grammar)
                     Xcode (project.yml): one iOS / Mac Catalyst app, no Swift
 ```
-
-Winnow, a Bitcoin wallet, is the app this is built for
-([winnowwallet/winnow-lean](https://github.com/winnowwallet/winnow-lean)); `examples/native-demo` is a
-small complete app that exercises every capability.
 
 ## What an app is
 
@@ -54,8 +90,9 @@ commands. The framework turns those into guarantees about every session:
 | `Session.handle_inv`, `Session.run_inv`, `Spec.reachable_inv`, `Spec.reachable_sound` | Any invariant preserved by `update` holds after any trace, and dispatch is well targeted. |
 | `Session.step_origin`, `CmdSpec.reachable_inv`, `CmdSpec.trace_origin` | Apps with commands: every step runs `update` on at most one message and asks for exactly `cmds` of it, and that message is an in-sync dispatch from the view shown or a host answer through `app.host`. |
 
-The shell answers user events exactly as `Session.step` does, so these theorems are about the code that
-runs on the phone, not about a translation of it.
+The native runtime calls `Session.step` to process events, so these theorems apply to the state
+transition used by the running app. The renderer and the execution of effects have separate trust
+and testing requirements, described below.
 
 **The gate.** A gate file lists the theorems an app advertises and scans the rest:
 
@@ -75,7 +112,7 @@ speaks the wire protocol ([PROTOCOL.md](PROTOCOL.md)) on stdin/stdout: `selftest
 initial model and re-checks at run time what the theorems state, and `framework/scripts/protocol_test.py`
 drives it. It is the same `update`/`view`, run without the phone.
 
-## Building an app for iOS
+## Building an app for iOS and macOS
 
 ```bash
 cd my-app && lake build
@@ -90,6 +127,12 @@ above for one configuration and platform.
 
 Prerequisites on a Mac with Xcode: `elan` (the toolchain is pinned per package by `lean-toolchain`) and
 XcodeGen (`framework/native/ci/install-xcodegen` installs the audited release).
+
+For macOS, use the `maccatalyst` build target. The current build produces a universal arm64/x86_64 app
+and needs the matching x86_64 Lean libraries as well as the host toolchain. Follow the
+[Mac Catalyst setup and build instructions](framework/native/README.md#how-an-app-is-built) in the native
+platform guide. Some capabilities require a team-signed app, and iOS background-task scheduling is
+unavailable on macOS.
 
 ## Continuous integration for an app
 
@@ -127,12 +170,13 @@ The inputs are documented at the top of the workflow.
 
 | Layer | Status | How it is checked |
 |---|---|---|
-| `Html`, `Wire`, `toWire`, `dispatch`, `Session`, `Spec`, `CmdSpec`, each app's `update`/`view`/`cmds` | **Proven** | each package's gate |
+| Framework properties of `Html`, `Wire`, `toWire`, `dispatch`, `Session`, `Spec`, and `CmdSpec` | **Proven** | the framework's proof gate |
+| An app's `update`/`view`/`cmds` | Application-specific | the app's supplied invariants, proofs, and proof gate; using the framework alone does not prove them |
 | JSON codecs, the CLI loop, `ElmLean.Native` (the C entry points) | Trusted, tested | `selftest`; `protocol_test.py`, itself validated against `framework/scripts/fake_cli.py`, an independent implementation of the protocol |
-| The shell's agreement with the grammar (node decoding, dispatch, enums, events, capabilities) | Checked as it builds | `ElmShell/Check.lean`: the kernel and the build evaluate every row against `Wire.toJson` and `Event.fromJson?` |
+| The shell's agreement with the UI grammar (node decoding, dispatch, enums, events) | Checked as it builds | `ElmShell/Check.lean`: the kernel and the build evaluate every row against `Wire.toJson` and `Event.fromJson?` |
 | The shell itself (renderer, store, capabilities, C shim) and the retargeted libraries | Trusted, driven in the simulator | the apps' UI tests |
 | An app's `perform` | the app's | that app's own tests |
-| Lean's compiler and runtime, UIKit and iOS | Trusted | — |
+| Lean's compiler and runtime, UIKit, iOS, and macOS | Trusted | — |
 
 ## Repository layout
 
