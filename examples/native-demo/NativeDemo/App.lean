@@ -18,7 +18,7 @@ import ElmLean.Native.Client.CloudKit
   job that stops when expired, answered with `bgtask.complete` when it is over;
 * the selftest (`NATIVEDEMO_SELFTEST=1` at launch) runs two `BackgroundRun`s, a scoped task an
   invalidation drains, and the typed clients (`ElmLean.Native.Client.*`) against the real shell; its lines
-  are printed and shown on the Demo tab (`selftest`), so UI tests read them on iOS and Mac Catalyst alike;
+  are printed and shown on the Demo tab (`selftest-<n>`), so UI tests read them on iOS and Mac Catalyst alike;
 * Face ID runs in an `EffectScope` the app's going to the background ends: an answer that comes back
   after that is dropped. -/
 
@@ -169,7 +169,8 @@ def demoView (m : Model) : Html Msg :=
         , .identified "name" (.input .plain "Name" "Who is asking" m.name Msg.name none)
         , .identified "greeting" (.text (if m.name.isEmpty then "Nobody yet" else s!"Hello, {m.name}") .body)
         , .row [.identified "faceID" (.button "Face ID" .plain (some .authenticate)), .button "TCP echo" .plain (some .echo)] ]
-        ++ (if m.selftest.isEmpty then [] else [.identified "selftest" (.text ("\n".intercalate m.selftest.reverse) .caption)])
+        -- one element a line (an accessibility label has no line breaks): selftest-0, selftest-1, …
+        ++ m.selftest.reverse.zipIdx.map (fun (l, i) => .identified s!"selftest-{i}" (.text l .caption))
         ++ [.divider] ++ m.log.map (fun s => .text s .caption))
 
 def widgets (m : Model) : Html Msg :=

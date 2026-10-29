@@ -133,11 +133,17 @@
     [self.app terminate];
     self.app.launchEnvironment = @{@"NATIVEDEMO_SELFTEST": @"1"};
     [self.app launch];
-    if (!ELWait(self.app, @"selftest")) return;
-    XCUIElement *lines = ELElement(self.app, @"selftest");
-    XCTAssertTrue(ELPoll(90, 0.5, ^BOOL{ return [ELText(lines) hasSuffix:@"\ndone"]; }), @"the selftest did not finish: %@", ELText(lines));
+    if (!ELWait(self.app, @"selftest-0")) return;
+    // its lines are selftest-0, selftest-1, …; the last is "done"
+    NSArray<NSString *> *(^lines)(void) = ^{
+        NSMutableArray<NSString *> *all = [NSMutableArray array];
+        for (NSUInteger i = 0; ELElement(self.app, [NSString stringWithFormat:@"selftest-%lu", (unsigned long)i]).exists; i++)
+            [all addObject:ELText(ELElement(self.app, [NSString stringWithFormat:@"selftest-%lu", (unsigned long)i]))];
+        return all;
+    };
+    XCTAssertTrue(ELPoll(90, 1, ^BOOL{ return [lines().lastObject isEqualToString:@"done"]; }), @"the selftest did not finish: %@", lines());
     NSMutableDictionary<NSString *, NSString *> *said = [NSMutableDictionary dictionary];
-    for (NSString *line in [ELText(lines) componentsSeparatedByString:@"\n"]) {
+    for (NSString *line in lines()) {
         NSLog(@"selftest: %@", line);
         NSRange colon = [line rangeOfString:@": "];
         if (colon.location != NSNotFound) said[[line substringToIndex:colon.location]] = [line substringFromIndex:NSMaxRange(colon)];
