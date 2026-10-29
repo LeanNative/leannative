@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""The simulator screen ui-tests records: `xcrun simctl io <udid> enumerate` on stdin.
+
+  xcrun simctl io <udid> enumerate | framework/native/ci/sim-screens <record.json>
+
+Prints the chosen screen's id (nothing when there is none: ui-tests then lets recordVideo choose) and writes
+{"screens": [...], "recorded": id or null} to <record.json>. The choice is the screen simctl names
+`primary`, else the first integrated one. Not "whichever one recordVideo takes": on a phone with two
+integrated screens (iPhone Duo) that has been the one the app is not on, one frame for a whole run; and
+not several recorders at once, which left the primary screen's empty. Python 3 stdlib.
+"""
+import json
+import re
+import sys
+
+
+def screens(text):
+    """[{id, name, device_name, screen_type, pixel_size}] from the listing's "Connected Screens"."""
+    found, current, listing = [], None, False
+    for line in text.splitlines():
+        if "Connected Screens:" in line:
+            listing = True
+            continue
+        m = re.match(r"\s*([A-Za-z ]+):\s*(.*)$", line) if listing else None
+        if not m:
+            continue
+        key, value = m.group(1).strip(), m.group(2).strip()
+        if key == "Screen ID":
+            current = {"id": value}
+            found.append(current)
+        elif current is not None and key in ("Name", "Device Name", "Screen Type", "Pixel Size"):
+            current[key.lower().replace(" ", "_")] = value
+    return found
+
+
+def choose(listed):
+    return (next((s for s in listed if s.get("device_name") == "primary"), None)
+            or next((s for s in listed if s.get("screen_type") == "Integrated"), None))
+
+
+def main():
+    listed = screens(sys.stdin.read())
+    chosen = choose(listed)
+    with open(sys.argv[1], "w") as f:
+        json.dump({"screens": listed, "recorded": chosen["id"] if chosen else None}, f)
+    print(chosen["id"] if chosen else "")
+
+
+if __name__ == "__main__":
+    main()
