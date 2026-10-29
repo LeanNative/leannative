@@ -164,7 +164,7 @@ jobs restore it read-only and run in parallel:
 | `build` | elan and the toolchain, `lake build` of the app's packages and test executables, the app's `prepare` command; the only job that saves the cache |
 | `tests` | each line of `tests`: a Lean test executable or any command, streamed |
 | `extra` | the app's own command (Winnow: its tests against a regtest Bitcoin node) |
-| `app` | the iOS app: Debug and Release for the simulator, Release for devices (unsigned), each checked for Swift (`check-no-swift`); the app's `release-check`; the UI tests on a throwaway simulator with a screen recording (`ui-tests`) |
+| `app` | the iOS app: Debug and Release for the simulator, Release for devices (unsigned), each checked for Swift (`check-no-swift`); the app's `release-check`; the UI tests on a throwaway simulator with a screen recording and a record of the tested revision, `run.json` (`ui-tests`) |
 
 Every long step prints its output as it comes, and a line at least every 30 seconds while a step is
 quiet (`framework/native/ci/progress`). An app calls it with its own paths and hooks:
@@ -184,6 +184,18 @@ jobs:
 ```
 
 The inputs are documented at the top of the workflow.
+
+**UI-test evidence.** `framework/native/ci/export-evidence <run> <out>` turns one `ui-tests` run into
+evidence an app can keep or publish: the screenshots the tests attached (each attributed to the tests
+that took it, checked byte for byte against any copy the tests wrote, hashed before and after), the
+recording (transcoded with ffmpeg when present, else copied when small enough, else omitted with the
+reason), and `evidence.json` (schema `leannative.ui-evidence/1`): the tested revision as `run.json`
+recorded it when the tests ran (never the exporting checkout's), the device, each test's result, the
+hashes of every input, and the export's own time apart from the run's. A run that did not pass is
+recorded as `failed`, `skipped`, `incomplete` or `contradictory` (the result bundle and the log
+disagree), never as `passed`; `--require-passed` makes such a run exit 3 once the manifest is written.
+Publishing the output is the app's: an `after-ui` hook can call the exporter and the workflow's
+`publish-path` upload it.
 
 ## What is trusted
 
