@@ -301,11 +301,23 @@ screenshot and writes it only where an explicit `ELScreenshots` says (`inDirecto
 
 native-demo's `UITests/NativeDemoUITests.m` drives them against its real controls: a counter, text
 replacement and clearing, a control the view disables, missing and disabled controls (the failures are
-expected and the test checks nothing was tapped), the last button of a list below the fold, Face ID in
-the session's EffectScope ended by going to the background (a cancellation or a dropped stale answer), and
-screenshots written and refused. They have run on the iOS simulator (CI's macOS runner and Xcode 27.1
-locally); the Catalyst branches compile in the Catalyst build but have not been run (a Mac UI test takes
-over the machine's pointer and keyboard), so Mac coverage is not inferred from the iOS runs.
+expected and the test checks nothing was tapped), the last button of a list below the fold, a list's end
+that always needs scrolling (down to the oldest log row, back up to the first probe), Face ID in the
+session's EffectScope ended by going to the background (the system's dismissal or a dropped stale answer),
+the selftest through the shell (two BackgroundRuns, an EffectScope drain, the typed clients), and
+screenshots written and refused.
+
+CI runs them on both platforms (check.yml): `ui` on an iOS simulator, `ui-catalyst` under Mac Catalyst on
+the same GitHub-hosted macOS runner (an arm64 virtual Mac), each with its evidence exported. Under
+Catalyst every test runs but Face ID: the click, scroll-wheel and Command-A paths, the selftest (BackgroundRun
+and the EffectScope drain as on iOS; the typed Keychain calls answer `unsupported status -34018`, an ad-hoc
+Mac app having no keychain access group, and reads `ok none`; HTTP and CloudKit as on iOS), and the
+screenshots, which the sandboxed Mac test runner writes to its own temporary directory (the evidence takes
+them from the result bundle). Not run under Catalyst: `auth`, whose prompt is the Mac's password sheet in
+another process that going to the background does not dismiss, on a runner with no Touch ID; background
+tasks, which the Mac never launches (`bgtask.schedule` answers `unavailable`); Bluetooth; and anything
+needing a team-signed build (iCloud, a keychain access group). Nothing runs on an x86_64 Mac in CI (the
+universal build's x86_64 half ran under Rosetta locally only).
 
 ## View nodes
 

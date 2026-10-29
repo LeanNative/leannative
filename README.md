@@ -206,7 +206,7 @@ Publishing the output is the app's: an `after-ui` hook can call the exporter and
 | An app's `update`/`view`/`cmds` | Application-specific | the app's supplied invariants, proofs, and proof gate; using the framework alone does not prove them |
 | JSON codecs, the CLI loop, `ElmLean.Native` (the C entry points), the native support modules (`ElmLean.Native.*`) | Trusted, tested | `selftest`; `protocol_test.py`, itself validated against `framework/scripts/fake_cli.py`, an independent implementation of the protocol |
 | The shell's agreement with the UI grammar (node decoding, dispatch, enums, events) | Checked as it builds | `ElmShell/Check.lean`: the kernel and the build evaluate every row against `Wire.toJson` and `Event.fromJson?` |
-| The shell itself (renderer, store, capabilities, C shim) and the retargeted libraries | Trusted, driven in the simulator | the apps' UI tests |
+| The shell itself (renderer, store, capabilities, C shim) and the retargeted libraries | Trusted, driven in the simulator and under Mac Catalyst | the apps' UI tests |
 | An app's `perform` | the app's | that app's own tests |
 | Lean's compiler and runtime, UIKit, iOS, and macOS | Trusted | — |
 
@@ -218,7 +218,7 @@ Makefile                    check: the framework's checks
 docs/ISSUES.md              issues moved from posix4e/elmlean
 .github/workflows/
   ios-app.yml               the reusable CI workflow for an app
-  check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst)
+  check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst, its UI tests on both)
 framework/
   lean/                     Lake package `elmlean`
     ElmLean/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,
