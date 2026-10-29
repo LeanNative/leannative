@@ -36,6 +36,8 @@ targets:
               - UISceneConfigurationName: Default
                 UISceneDelegateClassName: ELSceneDelegate
         NSFaceIDUsageDescription: "Shows that a Lean app can ask for Face ID."
+        # asked only when NATIVEDEMO_BLE_SERVICE is set at launch (the Probes tab's Bluetooth section)
+        NSBluetoothAlwaysUsageDescription: "Shows that a Lean app can connect to a Bluetooth LE peripheral."
         # the shell registers a launch handler for each of these at launch (the Probes tab schedules them)
         UIBackgroundModes: [fetch, processing]
         BGTaskSchedulerPermittedIdentifiers:

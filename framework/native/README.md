@@ -118,6 +118,19 @@ open -n --arch x86_64 --env NATIVEDEMO_SELFTEST=1 --env ELMLEAN_SNAPSHOT=/tmp/de
   --stdout /tmp/demo.out ios/build/dd-catalyst/Build/Products/Debug-maccatalyst/NativeDemo.app
 ```
 
+**Bluetooth with a real peripheral.** With `NATIVEDEMO_BLE_SERVICE=<service UUID>` in the launch
+environment, native-demo's Probes tab gains a Bluetooth section: `BLE state`, and `BLE connect`, which
+connects to the first peripheral offering that service (`ble.connect`, 90 s), logs its id and advertised
+name (`name` in the answer) and closes the connection. Each answer is logged and printed to stdout as
+`ble: …`. It says nothing else to the peripheral: a device's protocol is its app's. Without the variable
+the app never touches Bluetooth, so CI and the UI tests are never asked for the Bluetooth permission. A
+person runs it, since macOS or iOS asks them to allow Bluetooth the first time:
+
+```
+open -n --env NATIVEDEMO_BLE_SERVICE=13d63400-2c97-0004-0000-4c6564676572 --env ELMLEAN_SNAPSHOT=/tmp/ble.png \
+  --stdout /tmp/ble.out …/Debug-maccatalyst/NativeDemo.app     # a Ledger Nano X's advertised service
+```
+
 **`lean_initialize`.** Modules that import anything under `Lean` (ElmLean's JSON uses
 `Lean.Data.Json`) call `lean_initialize()` first. The toolchain's version starts the whole
 compiler, which an app neither needs nor links; the shim defines it as runtime start-up only.

@@ -55,6 +55,8 @@ def state : Request State :=
 structure Connection where
   /-- The peripheral, for the other requests. -/
   id : String
+  /-- Its advertised name, when it has one (a shell that does not report it gives none). -/
+  name : Option String := none
   /-- The service it offered (one of those asked for). -/
   service : String
   characteristics : Array String
@@ -72,7 +74,7 @@ def connect (services : List String) (timeout : Option Nat := none) : Request Co
           | .str s => pure s
           | _ => throw (malformed "a characteristic is not a string")
         | _ => throw (malformed "no `characteristics`")
-      return { id := ← reqString j "id", service := ← reqString j "service", characteristics := chars } }
+      return { id := ← reqString j "id", name := ← optString j "name", service := ← reqString j "service", characteristics := chars } }
 
 /-- Notifications on: answered once they are on (pairing may happen here). -/
 def subscribe (id characteristic : String) (timeout : Option Nat := none) : Request Unit :=
