@@ -1,11 +1,12 @@
-# Native mode: the app in Lean, compiled to C, inside the iOS app
+# Native iOS and macOS apps: Lean compiled to C
 
-An ElmLean app runs on iOS as itself: any Lean 4 (recursion, `do`, `IO`, tasks, `ByteArray`, hash
-maps…) compiled by Lean's compiler to C and linked with Lean's runtime. The view tree it returns is drawn
-by a generic UIKit renderer in Objective-C; its commands are run by its own Lean code (`perform`: TCP,
-files, timers, tasks), and what only iOS can do goes through capabilities. No Swift is compiled, per app
-or in the shell. The shell answers events as `Session.step` does, so the theorems about an app (and about
-`Session.step`) are about the code that runs.
+An ElmLean app runs on iOS and macOS with the same Lean definitions: any Lean 4 (recursion, `do`, `IO`,
+tasks, `ByteArray`, hash maps…) compiled by Lean's compiler to C and linked with Lean's runtime. A shared
+Objective-C renderer draws the view tree with UIKit on iOS and Mac Catalyst on macOS. The app runs its
+commands in Lean (`perform`: TCP, files, timers, tasks) and requests platform services through
+capabilities. No Swift is compiled, per app or in the shell. The native runtime calls `Session.step`,
+so its state-transition theorems apply to the transition used by the running app. The renderer and
+platform effects remain trusted and tested separately.
 
 ## How an app is built
 
@@ -14,7 +15,7 @@ app (Lean package)      lake build ──► .lake/build/ir/*.c   (the app and E
                                          │
 scripts/ios_lean_sources.sh ─────────────┤ copies the C of the root's import closure,
                                          │ writes elm_app_initialize.c (calls the root initializer),
-                                         │ retargets Lean's runtime and stdlib (.a) to iOS
+                                         │ retargets Lean's runtime and stdlib (.a) to iOS / Mac Catalyst
                                          ▼
                                          │ runs `lake exe elmshell build/native-shell`: the shell's
                                          │ Objective-C (renderer, store, capabilities), printed from Lean
@@ -225,5 +226,5 @@ A screen whose title changes is a new screen to the renderer: it starts scrolled
 
 The shell (renderer, store, capabilities, C shim) — its Objective-C is printed by `elmshell`, and only
 its agreement with the grammar is checked — Lean's compiler and runtime, the retargeted libraries, UIKit
-and iOS. The renderer's `path` of each control must match the tree's `children`
+and the iOS and macOS platforms. The renderer's `path` of each control must match the tree's `children`
 order; that correspondence is tested by driving apps in the simulator, not proven.
