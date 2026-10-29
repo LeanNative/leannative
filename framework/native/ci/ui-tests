@@ -7,7 +7,7 @@
 # The app's sources and project are prepared as build-ios does (its variables apply), then `xcodebuild test`
 # runs on a simulator this script creates and deletes, never one that may hold a real install of the app.
 # Evidence goes to $UI_OUT: <name>.xcresult, <name>.mp4 (the recording; recording.json says which screen it
-# is), xcodebuild.log, device.json, and
+# is and how long), xcodebuild.log, device.json, and
 # run.json: what was tested, recorded as the run starts (schema 1: the platform, the app repository's commit
 # and whether its tree was clean, the framework commit, the CI run when there is one, the runner's start and
 # end times and exit status). framework/native/ci/export-evidence reads it; nothing else is the tested revision.
@@ -130,34 +130,22 @@ stop_mac_recording() {
     rm -f "$OUT/$NAME.mp4"
   fi
 }
-# The simulator's recording, one per screen that can show the app. A phone also has virtual screens (TV out,
-# CarPlay, a resizable scene) that stay blank, and some (iPhone Duo) have two integrated ones: recordVideo
-# without --display may take one the app is not on, which gives a single frame. So each candidate is
-# recorded and the one the app drew on (the largest file) is kept as <name>.mp4; recording.json lists them.
+# The simulator's recording: one recordVideo, of the device's primary screen. A phone also lists virtual
+# screens (TV out, CarPlay, a resizable scene), and some (iPhone Duo) two integrated ones; recordVideo
+# without --display has taken the one the app is not on (one frame for a whole run), and two recorders at
+# once left the primary one empty. So: the screen simctl names `primary`, else the first integrated one,
+# else recordVideo's own choice (sim-screens). recording.json lists the screens, the one recorded and its length, and a
+# recording much shorter than the tests is flagged in the CI log (export-evidence then omits it).
 start_sim_recording() {
   local id
-  xcrun simctl io "$UDID" enumerate 2>/dev/null | /usr/bin/python3 -c '
-import json, re, sys
-screens, current, listing = [], None, False
-for line in sys.stdin:
-    if "Connected Screens:" in line: listing = True; continue
-    m = re.match(r"\s*([A-Za-z ]+):\s*(.*)$", line) if listing else None
-    if not m: continue
-    key, value = m.group(1).strip(), m.group(2).strip()
-    if key == "Screen ID": current = {"id": value}; screens.append(current)
-    elif current is not None and key in ("Name", "Device Name", "Screen Type", "Pixel Size"):
-        current[key.lower().replace(" ", "_")] = value
-json.dump([s for s in screens if s.get("screen_type") not in ("TVOut", "CarPlay", "Scene")], open(sys.argv[1], "w"))
-' "$OUT/.screens.json" || echo "[]" > "$OUT/.screens.json"
-  for id in $(/usr/bin/python3 -c 'import json, sys; print(" ".join(s["id"] for s in json.load(open(sys.argv[1]))))' "$OUT/.screens.json"); do
-    xcrun simctl io "$UDID" recordVideo --codec=h264 --display="$id" --force "$OUT/.recording-$id.mp4" >/dev/null 2>&1 &
-    SIM_RECORDERS+=("$!")
-  done
-  if [ ${#SIM_RECORDERS[@]} = 0 ]; then
-    echo "[]" > "$OUT/.screens.json"
-    xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$OUT/.recording-default.mp4" >/dev/null 2>&1 &
-    SIM_RECORDERS+=("$!")
+  id="$(xcrun simctl io "$UDID" enumerate 2>/dev/null | /usr/bin/python3 -I "$CI/sim-screens" "$OUT/.screens.json")" || { id=""; echo '{"screens": [], "recorded": null}' > "$OUT/.screens.json"; }
+  RECORDING_STARTED=$(date +%s)
+  if [ -n "$id" ]; then
+    xcrun simctl io "$UDID" recordVideo --codec=h264 --display="$id" --force "$OUT/$NAME.mp4" >/dev/null 2>&1 &
+  else
+    xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$OUT/$NAME.mp4" >/dev/null 2>&1 &
   fi
+  SIM_RECORDERS+=("$!")
 }
 stop_sim_recording() {
   local pid
@@ -169,22 +157,30 @@ stop_sim_recording() {
     echo "recordVideo $pid did not finish within 30 s of SIGINT and was killed" >> "$OUT/recording.log"
   done
   SIM_RECORDERS=()
+  # its length, read as export-evidence reads it (stdlib MP4 boxes), against the time it ran
   /usr/bin/python3 -c '
-import json, os, sys
-out, name = sys.argv[1:3]
-screens = json.load(open(os.path.join(out, ".screens.json"))) or [{"id": "default"}]
-path = lambda s: os.path.join(out, ".recording-" + s["id"] + ".mp4")
-for s in screens:
-    s["bytes"] = os.path.getsize(path(s)) if os.path.exists(path(s)) else 0
-kept = max(screens, key=lambda s: s["bytes"])
-if kept["bytes"]:
-    os.replace(path(kept), os.path.join(out, name + ".mp4"))
-for s in screens:
-    if os.path.exists(path(s)): os.remove(path(s))
+import importlib.machinery, importlib.util, json, os, sys, time
+out, name, exporter, started = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+record = json.load(open(os.path.join(out, ".screens.json")))
 os.remove(os.path.join(out, ".screens.json"))
-json.dump({"recorder": "simctl io recordVideo", "screens": screens, "kept": kept["id"] if kept["bytes"] else None},
-          open(os.path.join(out, "recording.json"), "w"), indent=2)
-' "$OUT" "$NAME" || true
+video, elapsed = os.path.join(out, name + ".mp4"), int(time.time()) - started
+record.update(recorder="simctl io recordVideo", elapsed_seconds=elapsed,
+              bytes=os.path.getsize(video) if os.path.exists(video) else 0, duration_seconds=None)
+try:
+    loader = importlib.machinery.SourceFileLoader("export_evidence", exporter)
+    ev = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(ev)
+    record["duration_seconds"] = ev.mp4_info(video)["duration_seconds"] if record["bytes"] else 0
+except Exception as error:
+    record["duration_error"] = str(error)
+json.dump(record, open(os.path.join(out, "recording.json"), "w"), indent=2)
+seconds = record["duration_seconds"]
+shown = "unreadable" if seconds is None else f"{seconds:g} s"
+screen = record["recorded"] or "(recordVideo default)"
+print(f"recording: {shown} of screen {screen} over {elapsed} s")
+if seconds is not None and seconds < max(1, 0.5 * elapsed):
+    print(f"::warning::the screen recording is {shown} for a {elapsed} s run: truncated (recording.json lists the screens)")
+' "$OUT" "$NAME" "$CI/export-evidence" "${RECORDING_STARTED:-$(date +%s)}" || true
 }
 cleanup() {
   local code=$?
