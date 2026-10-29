@@ -259,7 +259,10 @@ earlier tokens stale. native-demo's Face ID button runs in a scope that its goin
 ## UI tests: `framework/native/ci/ui-tests` and the XCTest kit (`testkit/`)
 
 `ui-tests` runs an app's XCUITest target on a simulator it creates and deletes, with a recording and
-`device.json` and `run.json` (what was tested, recorded as the run starts); `UI_BEFORE` / `UI_AFTER` set
+`device.json` and `run.json` (what was tested, recorded as the run starts); the recording is of every
+screen the simulator lists that can show the app (not its TV-out, CarPlay or resizable ones), keeping the
+one the app drew on, since a device with two integrated screens (iPhone Duo) can otherwise record the
+wrong one as a single frame (`recording.json` lists them and the one kept); `UI_BEFORE` / `UI_AFTER` set
 up and take down a fixture, and each `KEY=VALUE` line `UI_BEFORE` leaves in `<UI_OUT>/test-env` reaches the
 tests' environment. Run native-demo's:
 

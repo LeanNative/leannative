@@ -347,7 +347,7 @@ class ExportTests(unittest.TestCase):
     # -- names ------------------------------------------------------------------------------------------
     def test_configurable_names(self):
         (self.run_dir / "ui-tests.xcresult").rename(self.run_dir / "journey.xcresult")
-        (self.run_dir / "journey.mp4").write_bytes(mp4(1206, 2622, 3.0, 64))
+        (self.run_dir / "journey.mp4").write_bytes(mp4(1206, 2622, 8.0, 64))
         (self.run_dir / "screenshots").rename(self.run_dir / "shots")
         evidence = self.export(name="journey", screenshots="shots", video_out="videos/wallet-journey.mp4")
         self.assertEqual(evidence["run"]["name"], "journey")
@@ -415,39 +415,39 @@ class ExportTests(unittest.TestCase):
         self.assertIn("no screen recording (ui-tests.mp4)", evidence["video_omitted"])
 
     def test_copied_without_a_transcoder(self):
-        data = mp4(1206, 2622, 3.0, 64)
+        data = mp4(1206, 2622, 8.0, 64)
         (self.run_dir / "ui-tests.mp4").write_bytes(data)
         evidence = self.export()
         self.assertFalse(evidence["video"]["transcoded"])
         self.assertEqual(evidence["video"]["sha256"], hashlib.sha256(data).hexdigest())
         self.assertEqual(evidence["original_video"]["sha256"], hashlib.sha256(data).hexdigest())
-        self.assertEqual((evidence["video"]["width"], evidence["video"]["duration_seconds"]), (1206, 3.0))
+        self.assertEqual((evidence["video"]["width"], evidence["video"]["duration_seconds"]), (1206, 8.0))
 
     def test_too_large_without_a_transcoder(self):
-        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(1206, 2622, 3.0, 4096))
+        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(1206, 2622, 8.0, 4096))
         evidence = self.export(max_video_bytes=1024)
         self.assertIsNone(evidence["video"])
         self.assertIn("no ffmpeg", evidence["video_omitted"])
         self.assertIsNotNone(evidence["original_video"])
 
     def test_transcode_required_but_absent(self):
-        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(1206, 2622, 3.0, 64))
+        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(1206, 2622, 8.0, 64))
         evidence = self.export(transcode="ffmpeg")
         self.assertIsNone(evidence["video"])
         self.assertIn("--transcode ffmpeg, but ffmpeg or ffprobe is not installed", evidence["video_omitted"])
 
     def test_transcode_none_copies_even_with_ffmpeg(self):
-        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(1206, 2622, 3.0, 64))
+        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(1206, 2622, 8.0, 64))
         self.patch_obj(ev.shutil, "which", lambda name: "/usr/bin/" + name)
-        self.patch("probe", lambda path: {"width": 1206, "height": 2622, "duration_seconds": 3.0,
+        self.patch("probe", lambda path: {"width": 1206, "height": 2622, "duration_seconds": 8.0,
                                           "bytes": Path(path).stat().st_size, "sha256": ev.digest(path)})
         evidence = self.export(transcode="none")
         self.assertFalse(evidence["video"]["transcoded"])
 
     def test_a_failing_transcoder_is_recorded(self):
-        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(1206, 2622, 3.0, 64))
+        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(1206, 2622, 8.0, 64))
         self.patch_obj(ev.shutil, "which", lambda name: "/usr/bin/" + name)
-        self.patch("probe", lambda path: {"width": 1206, "height": 2622, "duration_seconds": 3.0,
+        self.patch("probe", lambda path: {"width": 1206, "height": 2622, "duration_seconds": 8.0,
                                           "bytes": Path(path).stat().st_size, "sha256": ev.digest(path)})
 
         def broken(source, destination, original, max_bytes):
@@ -464,10 +464,64 @@ class ExportTests(unittest.TestCase):
         self.assertIsNone(evidence["video"])
         self.assertIn("unreadable", evidence["video_omitted"])
 
+    def test_a_truncated_recording(self):
+        # one frame of a display the app was not on (winnow-lean run 40920238845): no video, and why
+        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(2006, 2852, 0.067, 64))
+        evidence = self.export()
+        self.assertIsNone(evidence["video"])
+        self.assertEqual(evidence["original_video"]["duration_seconds"], 0.067)
+        self.assertIn("truncated: 0.067 s for 6.889 s of tests", evidence["video_omitted"])
+        self.assertFalse((self.out / "video").exists())
+        self.assertEqual(evidence["result"], "passed")
+
+    def test_a_recording_shorter_than_the_tests(self):
+        # the recorder runs through the whole of `xcodebuild test`: under half the tests' time, it stopped early
+        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(1206, 2622, 3.0, 64))
+        evidence = self.export()
+        self.assertIsNone(evidence["video"])
+        self.assertIn("truncated: 3 s for 6.889 s of tests", evidence["video_omitted"])
+
+    def test_the_video_directory_is_made(self):
+        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(1206, 2622, 8.0, 64))
+        evidence = self.export(video_out="media/videos/clip.mp4")
+        self.assertEqual(evidence["video"]["path"], "media/videos/clip.mp4")
+        self.assertTrue((self.out / "media/videos/clip.mp4").is_file())
+
+    def test_the_video_directory_is_made_for_the_transcoder(self):
+        (self.run_dir / "ui-tests.mp4").write_bytes(mp4(1206, 2622, 8.0, 64))
+        self.patch_obj(ev.shutil, "which", lambda name: "/usr/bin/" + name)
+        self.patch("probe", lambda path: {"width": 1206, "height": 2622, "duration_seconds": 8.0,
+                                          "bytes": Path(path).stat().st_size, "sha256": ev.digest(path)})
+
+        def transcode(source, destination, original, max_bytes):
+            # ffmpeg does not make its output's directory
+            self.assertTrue(destination.parent.is_dir(), destination.parent)
+            destination.write_bytes(b"transcoded")
+            return {"width": 720, "height": 1566, "duration_seconds": 8.0, "bytes": 10, "sha256": ev.digest(destination),
+                    "transcoded": True}
+        self.patch("transcode", transcode)
+        evidence = self.export(video_out="videos/wallet-journey.mp4")
+        self.assertTrue((self.out / "videos/wallet-journey.mp4").is_file())
+        self.assertEqual(evidence["video"]["path"], "videos/wallet-journey.mp4")
+
+    def test_the_bitrate_is_bounded(self):
+        # 25 MiB over a short recording would ask libx264 for gigabits a second, out of its range
+        commands = []
+
+        def run(command, *a, **k):
+            commands.append(command)
+            Path(command[-1]).write_bytes(b"x")
+        self.patch_obj(ev.subprocess, "run", run)
+        self.patch("probe", lambda path: {"width": 720, "height": 1566, "duration_seconds": 1.5, "bytes": 1, "sha256": "0"})
+        ev.transcode(self.base / "in.mp4", self.base / "out.mp4", {"duration_seconds": 1.5}, 25 * 1024 * 1024)
+        command = commands[0]
+        self.assertEqual(int(command[command.index("-b:v") + 1]), ev.MAX_BITRATE)
+        self.assertLess(ev.MAX_BITRATE, 2 ** 31)
+
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg is not installed")
     def test_a_real_transcode(self):
         source = self.base / "source.mp4"
-        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=1206x2622:d=2",
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=1206x2622:d=4",
                         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source)], check=True)
         shutil.copyfile(source, self.run_dir / "ui-tests.mp4")
         self.tools = {"ffmpeg", "ffprobe"}

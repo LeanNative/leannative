@@ -6,7 +6,8 @@
 #
 # The app's sources and project are prepared as build-ios does (its variables apply), then `xcodebuild test`
 # runs on a simulator this script creates and deletes, never one that may hold a real install of the app.
-# Evidence goes to $UI_OUT: <name>.xcresult, <name>.mp4 (the recording), xcodebuild.log, device.json, and
+# Evidence goes to $UI_OUT: <name>.xcresult, <name>.mp4 (the recording; recording.json says which screen it
+# is), xcodebuild.log, device.json, and
 # run.json: what was tested, recorded as the run starts (schema 1: the platform, the app repository's commit
 # and whether its tree was clean, the framework commit, the CI run when there is one, the runner's start and
 # end times and exit status). framework/native/ci/export-evidence reads it; nothing else is the tested revision.
@@ -56,6 +57,7 @@ OUT="$(cd "$OUT" && pwd)"
 UDID=""
 THROWAWAY=""
 VIDEO_PID=""
+SIM_RECORDERS=()
 AFTER_RAN=0
 STATUS=""
 # run.json: the identity at the start, the end time and exit status at the end (python3: no jq on runners)
@@ -105,10 +107,61 @@ stop_mac_recording() {
     rm -f "$OUT/$NAME.mp4"
   fi
 }
+# The simulator's recording, one per screen that can show the app. A phone also has virtual screens (TV out,
+# CarPlay, a resizable scene) that stay blank, and some (iPhone Duo) have two integrated ones: recordVideo
+# without --display may take one the app is not on, which gives a single frame. So each candidate is
+# recorded and the one the app drew on (the largest file) is kept as <name>.mp4; recording.json lists them.
+start_sim_recording() {
+  local id
+  xcrun simctl io "$UDID" enumerate 2>/dev/null | /usr/bin/python3 -c '
+import json, re, sys
+screens, current, listing = [], None, False
+for line in sys.stdin:
+    if "Connected Screens:" in line: listing = True; continue
+    m = re.match(r"\s*([A-Za-z ]+):\s*(.*)$", line) if listing else None
+    if not m: continue
+    key, value = m.group(1).strip(), m.group(2).strip()
+    if key == "Screen ID": current = {"id": value}; screens.append(current)
+    elif current is not None and key in ("Name", "Device Name", "Screen Type", "Pixel Size"):
+        current[key.lower().replace(" ", "_")] = value
+json.dump([s for s in screens if s.get("screen_type") not in ("TVOut", "CarPlay", "Scene")], open(sys.argv[1], "w"))
+' "$OUT/.screens.json" || echo "[]" > "$OUT/.screens.json"
+  for id in $(/usr/bin/python3 -c 'import json, sys; print(" ".join(s["id"] for s in json.load(open(sys.argv[1]))))' "$OUT/.screens.json"); do
+    xcrun simctl io "$UDID" recordVideo --codec=h264 --display="$id" --force "$OUT/.recording-$id.mp4" >/dev/null 2>&1 &
+    SIM_RECORDERS+=("$!")
+  done
+  if [ ${#SIM_RECORDERS[@]} = 0 ]; then
+    echo "[]" > "$OUT/.screens.json"
+    xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$OUT/.recording-default.mp4" >/dev/null 2>&1 &
+    SIM_RECORDERS+=("$!")
+  fi
+}
+stop_sim_recording() {
+  local pid
+  [ ${#SIM_RECORDERS[@]} = 0 ] && return
+  for pid in "${SIM_RECORDERS[@]}"; do kill -INT "$pid" 2>/dev/null || true; done
+  for pid in "${SIM_RECORDERS[@]}"; do wait "$pid" 2>/dev/null || true; done
+  SIM_RECORDERS=()
+  /usr/bin/python3 -c '
+import json, os, sys
+out, name = sys.argv[1:3]
+screens = json.load(open(os.path.join(out, ".screens.json"))) or [{"id": "default"}]
+path = lambda s: os.path.join(out, ".recording-" + s["id"] + ".mp4")
+for s in screens:
+    s["bytes"] = os.path.getsize(path(s)) if os.path.exists(path(s)) else 0
+kept = max(screens, key=lambda s: s["bytes"])
+if kept["bytes"]:
+    os.replace(path(kept), os.path.join(out, name + ".mp4"))
+for s in screens:
+    if os.path.exists(path(s)): os.remove(path(s))
+os.remove(os.path.join(out, ".screens.json"))
+json.dump({"recorder": "simctl io recordVideo", "screens": screens, "kept": kept["id"] if kept["bytes"] else None},
+          open(os.path.join(out, "recording.json"), "w"), indent=2)
+' "$OUT" "$NAME" || true
+}
 cleanup() {
   local code=$?
-  if [ "$PLATFORM" = maccatalyst ]; then stop_mac_recording
-  else [ -n "$VIDEO_PID" ] && kill -INT "$VIDEO_PID" 2>/dev/null && wait "$VIDEO_PID" 2>/dev/null || true; fi
+  if [ "$PLATFORM" = maccatalyst ]; then stop_mac_recording; else stop_sim_recording; fi
   [ -f "$OUT/run.json" ] && record end "${STATUS:-$code}" || true
   if [ -n "${UI_AFTER:-}" ] && [ "$AFTER_RAN" = 0 ]; then AFTER_RAN=1; $UI_AFTER "$OUT" "$UDID" || true; fi
   if [ -n "$THROWAWAY" ]; then
@@ -186,8 +239,7 @@ if [ "$PLATFORM" = maccatalyst ]; then
 else
   xcrun simctl boot "$UDID" 2>/dev/null || true
   xcrun simctl bootstatus "$UDID" -b >/dev/null
-  xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$OUT/$NAME.mp4" >/dev/null 2>&1 &
-  VIDEO_PID=$!
+  start_sim_recording
 fi
 
 status=0
