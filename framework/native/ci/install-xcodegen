@@ -21,6 +21,13 @@ if ! verified; then
   verified || { echo "XcodeGen archive checksum mismatch: expected $ARCHIVE_SHA256" >&2; rm -f "$ARCHIVE"; exit 1; }
   rm -rf "$ROOT/xcodegen"
 fi
-[ -x "$BIN" ] || unzip -q -o "$ARCHIVE" -d "$ROOT"
-test -x "$BIN"
+# XcodeGen reads its setting presets from share/ and, without them, writes a project with none of its base
+# settings (no CLANG_ENABLE_MODULES, so no framework is linked) and only prints "No "base" settings found".
+# macOS purges old files under $TMPDIR but keeps their directories: extract again unless every file is there.
+complete() { [ -x "$BIN" ] && [ "$(unzip -Z1 "$ARCHIVE" | grep -cv '/$')" = "$(cd "$ROOT" && find xcodegen -type f | wc -l | tr -d ' ')" ]; }
+if ! complete; then
+  rm -rf "$ROOT/xcodegen"
+  unzip -q -o "$ARCHIVE" -d "$ROOT"
+fi
+complete || { echo "XcodeGen extraction is incomplete under $ROOT/xcodegen" >&2; exit 1; }
 printf '%s\n' "$BIN"

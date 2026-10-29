@@ -1,6 +1,6 @@
 # Native iOS and macOS apps: Lean compiled to C
 
-An ElmLean app runs on iOS and macOS with the same Lean definitions: any Lean 4 (recursion, `do`, `IO`,
+A LeanNative app (package `elmlean`, see the README's names section) runs on iOS and macOS with the same Lean definitions: any Lean 4 (recursion, `do`, `IO`,
 tasks, `ByteArray`, hash maps…) compiled by Lean's compiler to C and linked with Lean's runtime. A shared
 Objective-C renderer draws the view tree with UIKit on iOS and Mac Catalyst on macOS. The app runs its
 commands in Lean (`perform`: TCP, files, timers, tasks) and requests platform services through

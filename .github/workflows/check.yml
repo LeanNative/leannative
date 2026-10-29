@@ -1,0 +1,75 @@
+name: check
+# This repository's own checks on GitHub-hosted macOS (free for a public repository): `make check` (the
+# framework's build, proof and axiom gate, protocol harness), then native-demo built for the iOS simulator
+# and for Mac Catalyst, each checked for Swift. Apps use ios-app.yml instead.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: check-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  APP_DIR: examples/native-demo
+  APP_ROOT: NativeDemo
+  SCHEME: NativeDemo
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tools
+        run: |
+          xcodebuild -version
+          sw_vers
+          command -v zstd >/dev/null || brew install zstd
+      - name: Restore the Lean toolchain and builds
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.elan
+            framework/lean/.lake
+            examples/native-demo/.lake
+          key: check-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-${{ hashFiles('framework/lean/**/*.lean', 'examples/native-demo/**/*.lean') }}
+          restore-keys: check-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-
+      - name: elan and the Lean toolchain
+        run: |
+          set -euo pipefail
+          if [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/v4.1.2/elan-init.sh \
+              | sh -s -- -y --default-toolchain none --no-modify-path
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/elan" toolchain install "$(cat framework/lean/lean-toolchain)"
+      - name: make check
+        run: make check
+      - name: native-demo for the iOS simulator
+        run: |
+          set -euo pipefail
+          export DERIVED_DATA="$RUNNER_TEMP/dd-iossim" BUILD_LOG="$RUNNER_TEMP/Debug-iossim.log"
+          framework/native/ci/build-ios Debug iossim
+          framework/native/ci/check-no-swift "$BUILD_LOG" "$DERIVED_DATA/Build/Products/Debug-iphonesimulator/$SCHEME.app"
+      - name: native-demo for Mac Catalyst
+        run: |
+          set -euo pipefail
+          framework/native/scripts/fetch_lean_x86_64.sh "$RUNNER_TEMP/lean-x86_64"
+          export LEAN_X86_64_PREFIX="$RUNNER_TEMP/lean-x86_64/lean-$(sed 's/.*:v//' framework/lean/lean-toolchain)-darwin"
+          export DERIVED_DATA="$RUNNER_TEMP/dd-catalyst" BUILD_LOG="$RUNNER_TEMP/Debug-maccatalyst.log"
+          framework/native/ci/build-ios Debug maccatalyst
+          framework/native/ci/check-no-swift "$BUILD_LOG" "$DERIVED_DATA/Build/Products/Debug-maccatalyst/$SCHEME.app"
+      - name: Preserve the build logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: check-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/*.log
+            examples/native-demo/ios/build/*.log
+          if-no-files-found: warn
+          retention-days: 14
