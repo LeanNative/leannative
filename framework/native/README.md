@@ -247,7 +247,7 @@ platform did: the native side stays trusted.
 life whose effects end together (an open document, an account, a screen): the app `capture`s a token
 when work starts and `invalidate`s the scope when that part ends. Invalidation is monotonic; `spawn`
 checks the token and registers the task in one step, so a task either never starts or is cancelled and
-drained by the invalidation that makes its token stale; `deliver` drops late results; and
+drained by the invalidation that makes its token stale (`invalidateWithoutWaiting` does the same without making the caller wait); `deliver` drops late results; and
 `authenticated` checks the token before the prompt and, after the answer, starts the protected work
 through `spawn`, answering `done`, `failed`, `denied`, `cancelled`, `error` or `stale` with the stage. A
 validity check does not make later I/O atomic with invalidation, and invalidation cannot undo an

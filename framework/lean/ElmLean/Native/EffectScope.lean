@@ -21,7 +21,8 @@ a scope stands for, and when it ends, is the app's.
   section of the scope's lock. An `invalidate` therefore either comes first (the spawn answers `.stale` and
   the work never runs) or after (the task is registered, and that invalidation cancels it and waits for it).
   No task spawned under a token escapes the invalidation that makes the token stale.
-* **Invalidation drains.** `invalidate` returns once every task registered before it has returned:
+* **Invalidation drains.** `invalidate` returns once every task registered before it has returned
+  (`invalidateWithoutWaiting` returns at once, with a task for the same drain):
   cancelled cooperatively (`IO.cancel`, which the work reads with `IO.checkCanceled`, and the task's own
   `cancel` hook for I/O the runtime cannot interrupt), then waited for. Work that ignores both keeps
   `invalidate` waiting.
@@ -132,16 +133,31 @@ def isValid (s : EffectScope) (t : Token) : BaseIO Bool := do
 /-- The tasks registered and not yet returned (for diagnostics and tests). -/
 def liveTasks (s : EffectScope) : BaseIO Nat := s.state.atomically (return (← get).tasks.size)
 
-/-- Ends the scope's current epoch: every token captured so far is stale, and every registered task is
-cancelled and waited for before this returns. Any thread; not from inside one of the scope's tasks (it
-would wait for itself). -/
-def invalidate (s : EffectScope) : IO Unit := do
+/-- Ends the epoch and cancels its tasks; the tasks to wait for. -/
+private def endEpoch (s : EffectScope) : IO (List Entry) := do
   let entries ← s.state.atomically (modifyGet fun st => (st.tasks.toList.map (·.2), { st with epoch := st.epoch + 1 }))
   for e in entries do
     IO.cancel e.task
     try e.cancel catch _ => pure ()
-  for e in entries do
+  return entries
+
+/-- Ends the scope's current epoch: every token captured so far is stale, and every registered task is
+cancelled and waited for before this returns. Any thread; not from inside one of the scope's tasks (it
+would wait for itself): use `invalidateWithoutWaiting` there, or where the caller must not block. -/
+def invalidate (s : EffectScope) : IO Unit := do
+  for e in ← s.endEpoch do
     discard <| IO.wait e.task
+
+/-- `invalidate` without the wait: when this returns, every earlier token is stale (no spawn or delivery
+under one succeeds) and the registered tasks have been cancelled; the task it returns completes when they
+have returned. For callers that must not block (a UI thread, a hook that may run inside one of the scope's
+own tasks); the draining is the same, only nobody is made to wait for it. -/
+def invalidateWithoutWaiting (s : EffectScope) : IO (Task Unit) := do
+  let entries ← s.endEpoch
+  let drained ← IO.asTask (prio := .dedicated) do
+    for e in entries do
+      discard <| IO.wait e.task
+  return drained.map fun _ => ()
 
 /-- What `spawn` did. -/
 inductive Spawned (α : Type) where

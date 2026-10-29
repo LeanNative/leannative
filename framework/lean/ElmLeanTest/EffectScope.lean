@@ -97,6 +97,29 @@ def spawning : IO Unit := do
   s.invalidate
   check "a second invalidation does not call the hook again" ((← hooks.get) == 1)
 
+/-- `invalidateWithoutWaiting`: stale at once, cancelled at once, drained later; usable from a scope's own task. -/
+def withoutWaiting : IO Unit := do
+  let s ← EffectScope.new
+  let started ← Gate.new
+  let release ← Gate.new
+  let t ← s.capture
+  discard <| s.spawn t (do started.open; release.wait; pure ()) (cancel := pure ())
+  started.wait
+  let drained ← s.invalidateWithoutWaiting
+  let staleNow := !(← s.isValid t) && isStale (← s.spawn t (pure ())) && !(← s.deliver t (pure ()))
+  let notYet := !(← IO.hasFinished drained)
+  release.open
+  IO.wait drained
+  check "without waiting: stale at once, drained later" (staleNow && notYet && (← s.liveTasks) == 0)
+  -- from inside one of the scope's own tasks: no self-wait
+  let t ← s.capture
+  let inner ← IO.mkRef false
+  match ← s.spawn t (do let d ← s.invalidateWithoutWaiting; inner.set (!(← s.isValid t)); pure d) with
+  | .started task =>
+    let r ← IO.wait task
+    check "without waiting: from the scope's own task, no deadlock" ((r matches .ok _) && (← inner.get) && (← s.liveTasks) == 0)
+  | .stale => check "without waiting: from the scope's own task, no deadlock" false
+
 /-- Spawn racing invalidation, from several threads: whichever wins, either the spawn was refused and the
 work never ran, or the work was registered and had finished when that invalidation returned. -/
 def registrationRace : IO Unit := do
@@ -202,6 +225,7 @@ def main : IO UInt32 := do
     (IO.Process.exit 2 : IO Unit)
   tokens
   spawning
+  withoutWaiting
   registrationRace
   authentication
   delivery
