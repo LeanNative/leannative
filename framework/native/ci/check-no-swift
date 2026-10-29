@@ -11,8 +11,15 @@ swift_files=$(git ls-files '*.swift')
 if [ -n "$swift_files" ]; then echo "Swift sources in the tree:"; echo "$swift_files"; fail=1; fi
 compiles=$(grep -c '^SwiftCompile\|^SwiftDriver' "$LOG" || true)
 if [ "$compiles" != 0 ]; then echo "$compiles Swift compile steps in $LOG"; fail=1; fi
-bin="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+# an iOS bundle is flat; a Mac Catalyst bundle keeps Info.plist under Contents/ and its executable in MacOS/
+if [ -f "$APP/Contents/Info.plist" ]; then
+  bin="$APP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+  frameworks="$APP/Contents/Frameworks"
+else
+  bin="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+  frameworks="$APP/Frameworks"
+fi
 if otool -L "$bin" | grep -i swift; then echo "the app links Swift libraries"; fail=1; fi
-if [ -d "$APP/Frameworks" ] && ls "$APP/Frameworks" | grep -i swift; then echo "the app bundles Swift libraries"; fail=1; fi
+if [ -d "$frameworks" ] && ls "$frameworks" | grep -i swift; then echo "the app bundles Swift libraries"; fail=1; fi
 [ "$fail" = 0 ] && echo "no Swift: 0 sources, 0 compile steps, no Swift library linked or bundled"
 exit "$fail"

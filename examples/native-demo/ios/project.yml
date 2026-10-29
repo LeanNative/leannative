@@ -46,7 +46,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: art.fralex.elmlean.nativedemo
         PRODUCT_NAME: NativeDemo
         GENERATE_INFOPLIST_FILE: NO
-        HEADER_SEARCH_PATHS: ["/Users/posix4e/.elan/toolchains/leanprover--lean4---v4.35.0/include", "$(PROJECT_DIR)/../../../framework/native/c"]
+        HEADER_SEARCH_PATHS: ["$(HOME)/.elan/toolchains/leanprover--lean4---v4.35.0/include", "$(PROJECT_DIR)/../../../framework/native/c"]
         LIBRARY_SEARCH_PATHS: ["$(PROJECT_DIR)/build/lib"]
         OTHER_LDFLAGS: [-lLean, -lStd, -lInit, -lleanrt, -luv, -lgmp, -lc++]
         # Lean's generated C at -O3 in every configuration, as Lean builds it
@@ -55,6 +55,8 @@ targets:
         # ad-hoc signed in the simulator: an unsigned app has no Keychain entitlement (errSecMissingEntitlement)
         "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
         "CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]": "NO"
+        # the retargeted libraries are arm64 only for the simulator (a generic simulator destination asks for x86_64 too)
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
         # Mac Catalyst (destination "generic/platform=macOS,variant=Mac Catalyst"): the same bundle id as on
         # iOS (one app, one iCloud container), universal, ad-hoc signed to run locally
         SUPPORTS_MACCATALYST: YES

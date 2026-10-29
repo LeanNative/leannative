@@ -1,4 +1,4 @@
-name: ElmLean iOS app
+name: LeanNative iOS app
 # Builds and tests an ElmLean app (README.md, "Continuous integration for an app"). `build` makes every Lean
 # target once and saves it in the Actions cache; `tests`, `extra` and `app` restore that build read-only and
 # run in parallel; they fail if the build is not in the cache rather than build again. The scripts it runs are
@@ -6,7 +6,7 @@ name: ElmLean iOS app
 # (<app-dir>/.lake/packages/elmlean/framework/native/ci), so they are the commit the app pins; `elmlean` must
 # name that commit, and the build fails if the app's lake-manifest.json pins another.
 #
-#   uses: posix4e/elmlean/.github/workflows/ios-app.yml@<commit>
+#   uses: LeanNative/leannative/.github/workflows/ios-app.yml@<commit>
 #   with: { elmlean: <commit>, lean-packages: …, app-dir: …, app-root: …, scheme: …, … }
 #
 # Commands given as inputs run with bash in the repository root, the app's Lean on the PATH, CI_RESULTS set

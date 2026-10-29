@@ -1,8 +1,8 @@
-# ElmLean — native iOS and macOS apps in Lean 4
+# LeanNative — native iOS and macOS apps in Lean 4
 
 **Write your app in Lean. Prove the state transitions that matter.**
 
-ElmLean is a framework for building native apps for **iPhone, iPad, and Mac**. Write your model,
+LeanNative (formerly ElmLean) is a framework for building native apps for **iPhone, iPad, and Mac**. Write your model,
 messages, updates, views, and commands in Lean 4. Lean compiles the application to C; a shared
 Objective-C shell renders its views with UIKit on iOS and Mac Catalyst on macOS.
 
@@ -25,7 +25,7 @@ or written per app.
   CloudKit, Bluetooth LE, and iOS background tasks are available through the shell. Availability and
   signing requirements differ by platform; see the [native platform guide](framework/native/README.md).
 
-ElmLean is being developed alongside [Winnow](https://github.com/winnowwallet/winnow-lean), a Bitcoin
+LeanNative is being developed alongside [Winnow](https://github.com/winnowwallet/winnow-lean), a Bitcoin
 wallet written in Lean. Start with [`examples/native-demo`](examples/native-demo) for a smaller app that
 exercises the framework's controls and capabilities.
 
@@ -41,6 +41,25 @@ exercises the framework's controls and capabilities.
   The [native platform guide](framework/native/README.md) records the validation performed and the
   remaining device and platform limitations. The reusable app workflow currently covers iOS builds
   and simulator tests; Mac Catalyst validation is documented separately.
+
+## Names: LeanNative and the ElmLean identifiers
+
+The project was called ElmLean until 2026-10-29, at [posix4e/elmlean](https://github.com/posix4e/elmlean);
+its home is now [LeanNative/leannative](https://github.com/LeanNative/leannative), with the same history
+and tags (`v0.1.0` is `ccbb1b4`). The code keeps its names, so existing apps build unchanged:
+
+| Identifier | Stays |
+|---|---|
+| Lake package | `elmlean` (`[[require]] name = "elmlean"`, subDir `framework/lean`) |
+| Libraries and namespaces | `ElmLean`, `ElmLean.*`, `ElmShell` |
+| Executable | `lake exe elmshell` |
+| Shell symbols | `elmlean_*` C entry points, `EL*` Objective-C classes |
+| Reusable workflow input | `elmlean: <commit>` |
+
+Only the repository path changes for an app: its git source and the workflow's `uses:` must name
+`LeanNative/leannative` explicitly, because GitHub Actions does not follow repository redirects for
+reusable workflows. Renaming the identifiers would be a separate, versioned migration. Issues moved from
+the old tracker are listed in [docs/ISSUES.md](docs/ISSUES.md).
 
 ## From Lean to a native app
 
@@ -136,7 +155,7 @@ unavailable on macOS.
 
 ## Continuous integration for an app
 
-`.github/workflows/ios-app.yml` is a reusable workflow that builds and tests an ElmLean app on GitHub
+`.github/workflows/ios-app.yml` is a reusable workflow that builds and tests a LeanNative app on GitHub
 Actions. It builds every Lean target once, in one job, and keeps the build in the Actions cache; the test
 jobs restore it read-only and run in parallel:
 
@@ -153,7 +172,7 @@ quiet (`framework/native/ci/progress`). An app calls it with its own paths and h
 ```yaml
 jobs:
   app:
-    uses: posix4e/elmlean/.github/workflows/ios-app.yml@<commit>
+    uses: LeanNative/leannative/.github/workflows/ios-app.yml@<commit>
     with:
       elmlean: <commit>            # the same commit; checked against the app's lake-manifest.json
       lean-packages: Lean LeanApp
@@ -183,8 +202,10 @@ The inputs are documented at the top of the workflow.
 ```
 README.md, PROTOCOL.md      this file; the wire protocol (nodes, events, seq, errors)
 Makefile                    check: the framework's checks
+docs/ISSUES.md              issues moved from posix4e/elmlean
 .github/workflows/
   ios-app.yml               the reusable CI workflow for an app
+  check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst)
 framework/
   lean/                     Lake package `elmlean`
     ElmLean/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,
@@ -198,7 +219,7 @@ examples/
   native-demo/              every capability in one app, no Swift
 ```
 
-Until 2026-10-28 ElmLean also had a generated mode: `elmgen` printed a SwiftUI app from the proven
+Until 2026-10-28 the framework also had a generated mode: `elmgen` printed a SwiftUI app from the proven
 definitions, held to the Lean CLI by lockstep tests and an independent LCNF translator, with the Todo,
 Counter and Send examples. Native mode runs the proven definitions themselves, so that machinery was
 removed; the tag `generated-mode` is its last commit.
