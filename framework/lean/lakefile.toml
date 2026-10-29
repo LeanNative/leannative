@@ -18,3 +18,8 @@ name = "ElmShell"
 [[lean_exe]]
 name = "elmshell"
 root = "ElmShell.Main"
+
+# BackgroundRun's lifecycle tests (`make check` runs them; not a default target, apps never build it).
+[[lean_exe]]
+name = "background-run-test"
+root = "ElmLeanTest.BackgroundRun"

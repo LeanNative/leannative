@@ -1,5 +1,6 @@
 import Std.Async.TCP
 import ElmLean.Native
+import ElmLean.Native.BackgroundRun
 
 /-! # A native-mode demo: the pieces Winnow needs, in one screen
 
@@ -8,7 +9,9 @@ import ElmLean.Native
 * a command that asks the shell for an iOS capability (`auth`: Face ID or the passcode);
 * a command that talks TCP through Lean's own libuv sockets (an echo server and client in-process);
 * a Probes tab that asks the shell for capabilities (background tasks, CloudKit, iCloud Keychain, HTTP
-  through a SOCKS5 proxy at 127.0.0.1:1080) and logs their answers and the system events. -/
+  through a SOCKS5 proxy at 127.0.0.1:1080) and logs their answers and the system events;
+* a background task iOS launches runs as a `BackgroundRun` (`ElmLean.Native.BackgroundRun`): a short
+  job that stops when expired, answered with `bgtask.complete` when it is over. -/
 
 namespace NativeDemo
 open ElmLean ElmLean.Native Lean
@@ -33,6 +36,10 @@ inductive Host where
   | echoed (reply : String)
   | probed (label : String) (result : Json)
   | system (event : Json)
+  /-- iOS launched (`expired := false`) or expired a background task -/
+  | bgtask (expired : Bool) (id kind : String)
+  /-- a background run ended -/
+  | ran (id : String) (outcome : String)
 
 inductive Msg where
   | inc
@@ -56,8 +63,11 @@ inductive Cmd where
   | auth
   | echo (text : String)
   | probe (label name : String) (args : Json)
-  /-- at launch: with `NATIVEDEMO_SELFTEST` set, the TCP echo and every probe, answers printed -/
+  /-- at launch: with `NATIVEDEMO_SELFTEST` set, the TCP echo, two background runs and every probe,
+  answers printed -/
   | selftest
+  | runBackground (id kind : String)
+  | expireBackground (id : String)
   deriving ToJson
 
 /-- The Probes tab: a label, a capability and its arguments. The background task identifiers are the
@@ -110,6 +120,8 @@ def update : Msg → Model → Model
   | .host (.echoed r), m => note m s!"TCP echo: {r}"
   | .host (.probed l r), m => note m s!"{l}: {r.compress}"
   | .host (.system e), m => note m s!"system: {e.compress}"
+  | .host (.bgtask expired id kind), m => note m s!"bgtask {if expired then "expired" else "launched"}: {id} ({kind})"
+  | .host (.ran id o), m => note m s!"background run {id}: {o}"
 
 def cmds : Msg → Model → List Cmd
   | .startTicks, m => if m.ticking then [] else [.ticker]
@@ -118,6 +130,8 @@ def cmds : Msg → Model → List Cmd
   | .probe i, _ => match probes[i]? with
     | some (l, n, a) => [.probe l n a]
     | none => []
+  | .host (.bgtask false id kind), _ => [.runBackground id kind]
+  | .host (.bgtask true id _), _ => [.expireBackground id]
   | _, _ => []
 
 def demoView (m : Model) : Html Msg :=
@@ -173,6 +187,26 @@ def echoOnce (port : UInt16) (text : String) : IO String := do
   let reply ← ask.block
   pure (String.fromUTF8! (reply.getD .empty))
 
+/-- The background tasks iOS launched and the app has not finished. -/
+initialize backgroundTasks : BackgroundTasks ← BackgroundTasks.new
+
+/-- The demo's background job: `steps` short steps, stopping between them once cancelled. -/
+def backgroundWork (steps : Nat) : IO Bool := do
+  for _ in [0:steps] do
+    if ← IO.checkCanceled then return false
+    IO.sleep 200
+  return true
+
+/-- Work that never finishes by itself: it stops only when the run cancels it. -/
+def untilCancelled : IO Bool := do
+  while !(← IO.checkCanceled) do IO.sleep 20
+  return true
+
+def describe (o : BackgroundRun.Outcome) : String :=
+  let ended := match o.ended with
+    | .completed => "completed" | .unfinished => "unfinished" | .failed e => s!"failed ({e})" | .expired => "expired"
+  s!"{ended}, work {if o.workStarted then "started" else "never started"}, success {o.success}"
+
 def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
   match c with
   | .ticker => discard <| IO.asTask do
@@ -185,6 +219,10 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
       let r ← try echoOnce 48334 text catch e => pure s!"failed: {e}"
       fx.post (.echoed r)
   | .probe l n a => fx.cap n a (.probed l)
+  -- iOS gives a refresh task about 30 s; the run asks its work to stop after 20
+  | .runBackground id _ => discard <| backgroundTasks.launch fx id
+      { work := backgroundWork 10, deadline := .after 20_000, completion := fun o => fx.post (.ran id (describe o)) }
+  | .expireBackground id => backgroundTasks.expire fx id
   | .selftest => do
       -- a headless check for runs nobody clicks through (`NATIVEDEMO_SELFTEST=1` in the launch
       -- environment): the TCP echo and every probe in order, each answer printed to stdout and logged
@@ -195,6 +233,13 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         let r ← try echoOnce 48335 "selftest" catch e => pure s!"failed: {e}"
         say s!"TCP echo: {r}"
         fx.post (.echoed r)
+        -- two runs that iOS did not launch: one completes, one never stops until its deadline expires it
+        let quick ← BackgroundRun.new { work := backgroundWork 2, completion := fun _ => pure () }
+        quick.start
+        say s!"background run: {describe (← quick.wait)}"
+        let hung ← BackgroundRun.new { work := untilCancelled, completion := fun _ => pure (), deadline := .after 300 }
+        hung.start
+        say s!"background run past its deadline: {describe (← hung.wait)}"
         for (l, n, a) in probes do
           let j ← IO.wait (← fx.ask n a)
           say s!"{l}: {j.compress}"
@@ -204,7 +249,11 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
 def app : Native.App Model Msg Cmd Host :=
   { init := { count := 0, ticks := 0, ticking := false, log := [] }, update, view, cmds, host := Msg.host, perform, boot := [.selftest],
     -- every system event but the scene phase is logged (the Probes tab shows bgtask launches and expirations)
-    system := fun j => if (j.getObjVal? "scene").isOk then none else some (.system j) }
+    system := fun j =>
+      if (j.getObjVal? "scene").isOk then none
+      else match BackgroundTasks.systemEvent? j with
+        | some (expired, id, kind) => some (.bgtask expired id kind)
+        | none => some (.system j) }
 
 initialize Native.register app
 

@@ -191,7 +191,7 @@ The inputs are documented at the top of the workflow.
 |---|---|---|
 | Framework properties of `Html`, `Wire`, `toWire`, `dispatch`, `Session`, `Spec`, and `CmdSpec` | **Proven** | the framework's proof gate |
 | An app's `update`/`view`/`cmds` | Application-specific | the app's supplied invariants, proofs, and proof gate; using the framework alone does not prove them |
-| JSON codecs, the CLI loop, `ElmLean.Native` (the C entry points) | Trusted, tested | `selftest`; `protocol_test.py`, itself validated against `framework/scripts/fake_cli.py`, an independent implementation of the protocol |
+| JSON codecs, the CLI loop, `ElmLean.Native` (the C entry points), the native support modules (`ElmLean.Native.*`) | Trusted, tested | `selftest`; `protocol_test.py`, itself validated against `framework/scripts/fake_cli.py`, an independent implementation of the protocol |
 | The shell's agreement with the UI grammar (node decoding, dispatch, enums, events) | Checked as it builds | `ElmShell/Check.lean`: the kernel and the build evaluate every row against `Wire.toJson` and `Event.fromJson?` |
 | The shell itself (renderer, store, capabilities, C shim) and the retargeted libraries | Trusted, driven in the simulator | the apps' UI tests |
 | An app's `perform` | the app's | that app's own tests |
@@ -209,7 +209,9 @@ docs/ISSUES.md              issues moved from posix4e/elmlean
 framework/
   lean/                     Lake package `elmlean`
     ElmLean/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,
-                            Native (trusted shell); Gate; Proofs/ and Proofs.lean (the framework's gate)
+                            Native (trusted shell); Gate; Proofs/ and Proofs.lean (the framework's gate);
+                            Native/ (optional native support: BackgroundRun)
+    ElmLeanTest/            the native support modules' tests (`make check`)
     ElmShell/               the native shell as Lean data; `lake exe elmshell <dir>` prints its Objective-C
   native/                   README (the shell, capabilities, Mac Catalyst), c/ (the C shim), scripts/
                             (ios_lean_sources.sh, retarget_ar.py, …), ci/ (the workflow's scripts)
