@@ -5,7 +5,10 @@
 #
 # The app's sources and project are prepared as build-ios does (its variables apply), then `xcodebuild test`
 # runs on a simulator this script creates and deletes, never one that may hold a real install of the app.
-# Evidence goes to $UI_OUT: <name>.xcresult, <name>.mp4 (the recording), xcodebuild.log, device.json.
+# Evidence goes to $UI_OUT: <name>.xcresult, <name>.mp4 (the recording), xcodebuild.log, device.json, and
+# run.json: what was tested, recorded as the run starts (schema 1: the app repository's commit and whether its
+# tree was clean, the framework commit, the CI run when there is one, the runner's start and end times and
+# exit status). framework/native/ci/export-evidence reads it; nothing else is the tested revision.
 #
 #   UI_OUT          the evidence directory (default $IOS_DIR/build/ui-tests); emptied first, one run at a time
 #   UI_NAME         the result bundle's and recording's name (default ui-tests)
@@ -18,6 +21,7 @@
 #                   test runner as TEST_RUNNER_KEY, i.e. as KEY in the tests' environment.
 #   UI_AFTER        a command run as `$UI_AFTER <UI_OUT> <simulator>` when the run ends, passed or not, while
 #                   the simulator still exists: collect the app's files, stop the fixture
+#   UI_SOURCE_REVISION  the tested commit, when the app directory is not a git checkout (else it must match)
 #
 # The CI log gets each test's result as it ends and a line every 30 s; the whole output is in xcodebuild.log.
 set -euo pipefail
@@ -39,8 +43,45 @@ UDID=""
 THROWAWAY=""
 VIDEO_PID=""
 AFTER_RAN=0
+STATUS=""
+# run.json: the identity at the start, the end time and exit status at the end (python3: no jq on runners)
+record() {
+  /usr/bin/python3 - "$OUT/run.json" "$@" <<'PY'
+import datetime, json, os, re, subprocess, sys
+path, what = sys.argv[1], sys.argv[2]
+now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+def git(d, *a):
+    try: return subprocess.run(["git", "-C", d, *a], check=True, text=True, capture_output=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError): return None
+if what == "start":
+    app, framework, name, scheme = sys.argv[3:7]
+    revision = git(app, "rev-parse", "HEAD")
+    given = os.environ.get("UI_SOURCE_REVISION") or None
+    if given and revision and given != revision:
+        sys.exit(f"UI_SOURCE_REVISION {given} is not the checkout's {revision}")
+    remote = git(app, "config", "--get", "remote.origin.url")
+    if remote: remote = re.sub(r"//[^/@]*@", "//", remote)  # never a credential
+    source = {"revision": revision or given, "recorded_by": "git" if revision else ("UI_SOURCE_REVISION" if given else None),
+              "dirty": (git(app, "status", "--porcelain", "--untracked-files=no") or "") != "" if revision else None,
+              "repository": remote, "path_in_repository": git(app, "rev-parse", "--show-prefix") if revision else None}
+    ci = None
+    if os.environ.get("GITHUB_RUN_ID"):
+        ci = {k: os.environ.get(v) for k, v in [("server", "GITHUB_SERVER_URL"), ("repository", "GITHUB_REPOSITORY"),
+              ("run_id", "GITHUB_RUN_ID"), ("run_attempt", "GITHUB_RUN_ATTEMPT"), ("workflow", "GITHUB_WORKFLOW"),
+              ("job", "GITHUB_JOB"), ("event", "GITHUB_EVENT_NAME"), ("ref", "GITHUB_REF"), ("sha", "GITHUB_SHA")]}
+    run = {"schema": 1, "runner": "framework/native/ci/ui-tests", "name": name, "scheme": scheme, "platform": "iOS Simulator",
+           "started_at": now, "source": source, "framework": {"revision": git(framework, "rev-parse", "HEAD")}, "ci": ci}
+else:
+    run = json.load(open(path))
+    run.update(finished_at=now, exit_status=int(sys.argv[3]))
+with open(path + ".tmp", "w") as f: json.dump(run, f, indent=2); f.write("\n")
+os.replace(path + ".tmp", path)
+PY
+}
 cleanup() {
+  local code=$?
   [ -n "$VIDEO_PID" ] && kill -INT "$VIDEO_PID" 2>/dev/null && wait "$VIDEO_PID" 2>/dev/null || true
+  [ -f "$OUT/run.json" ] && record end "${STATUS:-$code}" || true
   if [ -n "${UI_AFTER:-}" ] && [ "$AFTER_RAN" = 0 ]; then AFTER_RAN=1; $UI_AFTER "$OUT" "$UDID" || true; fi
   if [ -n "$THROWAWAY" ]; then
     xcrun simctl shutdown "$THROWAWAY" >/dev/null 2>&1 || true
@@ -50,6 +91,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+record start "$APP_DIR" "$CI/../.." "$NAME" "$SCHEME"
 PREPARE_ONLY=1 "$CI/build-ios" Debug iossim
 
 if [ -n "${UI_SIMULATOR:-}" ]; then
@@ -109,4 +151,5 @@ env ${RUNNER_ENV[@]+"${RUNNER_ENV[@]}"} xcodebuild test \
   -project "$PROJECT" -scheme "$SCHEME" -destination "id=$UDID" \
   -derivedDataPath "${DERIVED_DATA:-$IOS_DIR/build/DerivedData}" -resultBundlePath "$OUT/$NAME.xcresult" \
   "$@" 2>&1 | "$CI/progress" "$OUT/xcodebuild.log" '^Test Case .*(passed|failed)|: error:|^\*\* TEST' || status=$?
+STATUS="$status"
 exit "$status"

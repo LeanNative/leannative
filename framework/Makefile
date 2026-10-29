@@ -1,9 +1,10 @@
 # The ElmLean framework's own checks; the root Makefile runs them.
-#   make check         build · axiom gate · protocol harness against the fake CLI · native support tests
+#   make check         build · axiom gate · protocol harness against the fake CLI · native support tests ·
+#                      the CI scripts' tests (export-evidence)
 PY   := /opt/homebrew/bin/python3
 FAKE := $(PY) scripts/fake_cli.py
 
-.PHONY: build axioms protocol-fake native-support check
+.PHONY: build axioms protocol-fake native-support scripts check
 
 build:
 	cd lean && lake build
@@ -20,4 +21,8 @@ protocol-fake:
 native-support:
 	cd lean && lake build background-run-test clients-test && .lake/build/bin/background-run-test && .lake/build/bin/clients-test
 
-check: build axioms protocol-fake native-support
+# framework/native/ci's Python, against fixtures: export-evidence (scripts/tests).
+scripts:
+	$(PY) -I -m unittest discover -s scripts/tests
+
+check: build axioms protocol-fake native-support scripts
