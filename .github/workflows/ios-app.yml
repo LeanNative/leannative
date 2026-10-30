@@ -112,6 +112,12 @@ on:
         description: The UI tests' UI_AFTER hook
         type: string
         default: ''
+      ui-journey:
+        description: >-
+          A Lake executable of the app's package holding its journeys (LeanNative.Journey), built and run as the
+          UI tests' UI_JOURNEY: xcodebuild then runs only the test kit's driver
+        type: string
+        default: ''
       after-ui:
         description: A command run once the UI tests have passed (media from their evidence, say)
         type: string
@@ -490,7 +496,14 @@ jobs:
           UI_BEFORE: ${{ inputs.ui-before }}
           UI_AFTER: ${{ inputs.ui-after }}
           UI_ARGS: ${{ inputs.ui-args }}
+          JOURNEY_EXE: ${{ inputs.ui-journey }}
         run: |
+          set -euo pipefail
+          if [ -n "$JOURNEY_EXE" ]; then
+            (cd "$APP_DIR" && lake build "$JOURNEY_EXE")
+            UI_JOURNEY="$(cd "$APP_DIR" && pwd)/.lake/build/bin/$JOURNEY_EXE"
+            export UI_JOURNEY
+          fi
           # shellcheck disable=SC2086 # UI_ARGS are words
           DERIVED_DATA="$CI_RESULTS/DerivedData" UI_OUT="$CI_RESULTS/$UI_NAME" "$LEANNATIVE_CI/ui-tests" $UI_ARGS
       - name: After the UI tests

@@ -8,7 +8,7 @@ FAKE := $(PY) scripts/fake_cli.py
 .PHONY: build axioms protocol-fake native-support scripts check
 
 build:
-	cd lean && lake build
+	cd lean && lake build && lake build LeanNative.Journey
 
 axioms:
 	scripts/check-axioms.sh lean LeanNative/Proofs.lean

@@ -13,3 +13,8 @@ name = "NativeDemo"
 [[lean_exe]]
 name = "ios-project"
 root = "NativeDemo.Project"
+
+# The UI journeys (NativeDemo/Journeys.lean), run on the Mac by framework/native/ci/ui-tests as UI_JOURNEY
+[[lean_exe]]
+name = "journeys"
+root = "NativeDemo.Journeys"

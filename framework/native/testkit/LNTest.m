@@ -74,25 +74,32 @@ BOOL LNScrollTo(XCUIApplication *app, XCUIElement *element) {
     return LNScrollUntil(app, element, nil);
 }
 
-/// The element, present, in view and enabled; nil after recording why not.
-static XCUIElement *LNReady(XCUIApplication *app, NSString *identifier, NSString *file, NSUInteger line) {
-    XCUIElement *e = LNElement(app, identifier);
+/// The element, present, in view and enabled; nil with why not in `why`.
+static XCUIElement *LNReadyElement(XCUIApplication *app, XCUIElement *e, NSString *identifier, NSString **why) {
     // a list makes its rows only as they scroll into view: an element not there after a moment is looked for
     // by scrolling, then waited for the rest of the time
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:LNAppearTimeout];
     if (![e waitForExistenceWithTimeout:MIN(2, LNAppearTimeout)] && !LNScrollUntil(app, e, deadline) &&
         ![e waitForExistenceWithTimeout:MAX(deadline.timeIntervalSinceNow, 0)]) {
-        LNFail(file, line, [NSString stringWithFormat:@"%@ does not appear within %.0f s, nor by scrolling", identifier, LNAppearTimeout]);
+        *why = [NSString stringWithFormat:@"%@ does not appear within %.0f s, nor by scrolling", identifier, LNAppearTimeout];
         return nil;
     }
     if (!LNScrollTo(app, e)) {
-        LNFail(file, line, [NSString stringWithFormat:@"%@ cannot be scrolled into view", identifier]);
+        *why = [NSString stringWithFormat:@"%@ cannot be scrolled into view", identifier];
         return nil;
     }
     if (!LNPoll(LNEnabledTimeout, 0.2, ^BOOL{ return e.isEnabled; })) {
-        LNFail(file, line, [NSString stringWithFormat:@"%@ stays disabled for %.0f s", identifier, LNEnabledTimeout]);
+        *why = [NSString stringWithFormat:@"%@ stays disabled for %.0f s", identifier, LNEnabledTimeout];
         return nil;
     }
+    return e;
+}
+
+/// LNReadyElement for the element with this identifier, recording why not as a failure at the caller's line.
+static XCUIElement *LNReady(XCUIApplication *app, NSString *identifier, NSString *file, NSUInteger line) {
+    NSString *why = nil;
+    XCUIElement *e = LNReadyElement(app, LNElement(app, identifier), identifier, &why);
+    if (!e) LNFail(file, line, why);
     return e;
 }
 
@@ -102,20 +109,30 @@ BOOL LNWaitAt(XCUIApplication *app, NSString *identifier, NSString *file, NSUInt
     return NO;
 }
 
-BOOL LNTapAt(XCUIApplication *app, NSString *identifier, NSString *file, NSUInteger line) {
-    XCUIElement *e = LNReady(app, identifier, file, line);
-    if (!e) return NO;
+static void LNPress(XCUIElement *e) {
 #if TARGET_OS_MACCATALYST
     [e click];
 #else
     [e tap];
 #endif
+}
+
+NSString *_Nullable LNTapElement(XCUIApplication *app, XCUIElement *element, NSString *name) {
+    NSString *why = nil;
+    XCUIElement *e = LNReadyElement(app, element, name, &why);
+    if (e) LNPress(e);
+    return why;
+}
+
+BOOL LNTapAt(XCUIApplication *app, NSString *identifier, NSString *file, NSUInteger line) {
+    XCUIElement *e = LNReady(app, identifier, file, line);
+    if (!e) return NO;
+    LNPress(e);
     return YES;
 }
 
-BOOL LNTypeAt(XCUIApplication *app, NSString *identifier, NSString *text, NSString *file, NSUInteger line) {
-    XCUIElement *field = LNReady(app, identifier, file, line);
-    if (!field) return NO;
+/// Replaces the text of a field already present, in view and enabled.
+static void LNReplaceText(XCUIApplication *app, XCUIElement *field, NSString *text) {
 #if TARGET_OS_MACCATALYST
     [field click];
     // whatever is there, selected, is replaced by what is typed
@@ -135,6 +152,19 @@ BOOL LNTypeAt(XCUIApplication *app, NSString *identifier, NSString *text, NSStri
     if (done.exists && done.hittable) [done tap];
     else if (app.keyboards.count > 0 && app.keyboards.buttons[@"return"].exists) [app.keyboards.buttons[@"return"] tap];
 #endif
+}
+
+NSString *_Nullable LNTypeElement(XCUIApplication *app, XCUIElement *element, NSString *name, NSString *text) {
+    NSString *why = nil;
+    XCUIElement *field = LNReadyElement(app, element, name, &why);
+    if (field) LNReplaceText(app, field, text);
+    return why;
+}
+
+BOOL LNTypeAt(XCUIApplication *app, NSString *identifier, NSString *text, NSString *file, NSUInteger line) {
+    XCUIElement *field = LNReady(app, identifier, file, line);
+    if (!field) return NO;
+    LNReplaceText(app, field, text);
     return YES;
 }
 

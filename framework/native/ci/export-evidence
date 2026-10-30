@@ -16,6 +16,10 @@ device.json, run.json, <name>.mp4 (optional) and, when the tests write them, a s
                             recorder runs for the whole of `xcodebuild test`, so a whole one is never shorter)
   evidence.json             the manifest (schema "leannative.ui-evidence/1"), below
 
+A journeys run (ui-tests with UI_JOURNEY) has one XCTest, LNDriver/testDrive, and <run>/journeys.json, the
+journeys' own results: the manifest's "journeys" lists them (name, result, seconds, and a failed one's
+message), and a run whose test passed while a journey failed is "contradictory".
+
 What is checked, and how a run that did not pass is recorded:
 
 * Results come from the result bundle (xcresulttool) and xcodebuild.log, both required. The manifest's
@@ -374,6 +378,25 @@ def source_identity(run, given):
     return source
 
 
+def journey_results(path):
+    """[{name, result, seconds, failure?}] from LeanNative.Journey's journeys.json; None when there is none."""
+    if not path.is_file():
+        return None
+    data = read_json(path, "the journeys' results")
+    if not isinstance(data, list):
+        raise Failure("journeys.json is not a list")
+    journeys = []
+    for j in data:
+        if not (isinstance(j, dict) and isinstance(j.get("name"), str) and isinstance(j.get("passed"), bool)
+                and isinstance(j.get("seconds"), (int, float))):
+            raise Failure(f"journeys.json: malformed entry {j!r}")
+        entry = {"name": j["name"], "result": "passed" if j["passed"] else "failed", "seconds": round(float(j["seconds"]), 3)}
+        if not j["passed"]:
+            entry["failure"] = str(j.get("failure", ""))
+        journeys.append(entry)
+    return journeys
+
+
 def device_identity(chosen, bundle_device, platform=None):
     result = {"name": chosen.get("name"), "type": chosen.get("type"), "runtime": chosen.get("runtime"), "os": chosen.get("os"),
               "model": chosen.get("model"), "architecture": chosen.get("architecture")}
@@ -419,6 +442,13 @@ def export(run_dir, out, args, now=None):
         raise Failure(f"the result bundle's results are malformed: {error}")
     log = parse_log(log_path.read_text(errors="replace"))
     result, reasons = outcome(bundled["tests"], log)
+    journeys = journey_results(run_dir / "journeys.json")
+    if journeys is not None:
+        failed = [j["name"] for j in journeys if j["result"] != "passed"]
+        if not journeys:
+            result, reasons = ("incomplete" if result == "passed" else result), reasons + ["journeys.json lists no journey"]
+        elif failed and result == "passed":
+            result, reasons = "contradictory", reasons + ["the tests passed but journeys failed: " + ", ".join(failed)]
     device = device_identity(chosen, bundled["device"], run.get("platform"))
     app = read_json(args.app_metadata, "the app metadata") if args.app_metadata else None
     out.mkdir(parents=True, exist_ok=True)
@@ -432,6 +462,8 @@ def export(run_dir, out, args, now=None):
                  "run.json": digest(run_dir / "run.json"), f"{name}.xcresult": tree_digest(bundle)}
     if args.app_metadata:
         artifacts["app_metadata"] = digest(args.app_metadata)
+    if journeys is not None:
+        artifacts["journeys.json"] = digest(run_dir / "journeys.json")
     evidence = {
         "schema": SCHEMA,
         "run": {"name": name, "scheme": run.get("scheme"), "platform": run.get("platform"),
@@ -451,6 +483,8 @@ def export(run_dir, out, args, now=None):
         "exported": {"at": (now or datetime.now(timezone.utc)).replace(microsecond=0).isoformat(),
                      "by": "framework/native/ci/export-evidence"},
     }
+    if journeys is not None:
+        evidence["journeys"] = journeys
     if omitted:
         evidence["video_omitted"] = omitted
     (out / MANIFEST).write_text(json.dumps(evidence, indent=2) + "\n")

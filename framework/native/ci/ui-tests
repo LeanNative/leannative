@@ -30,6 +30,13 @@
 #   UI_AFTER        a command run as `$UI_AFTER <UI_OUT> <simulator>` when the run ends, passed or not, while
 #                   the simulator still exists: collect the app's files, stop the fixture (under Mac Catalyst
 #                   the second argument is empty)
+#   UI_JOURNEY      the app's journeys (LeanNative.Journey): an executable run on this Mac as
+#                   `$UI_JOURNEY <UI_OUT>` once UI_BEFORE has run, with test-env's KEY=VALUE lines in its
+#                   environment. It listens on 127.0.0.1 and writes the port to <UI_OUT>/driver-port; xcodebuild
+#                   then runs the kit's driver alone (-only-testing:$UI_JOURNEY_TARGET/LNDriver/testDrive, the
+#                   target defaulting to <SCHEME>UITests), which carries out the journeys' steps. Its output is
+#                   in the CI log and journey.log, its results in journeys.json; the run fails if the journeys
+#                   or the tests do. Simulator only (the Mac Catalyst test runner is sandboxed).
 #   UI_SOURCE_REVISION  the tested commit, when the app directory is not a git checkout (else it must match)
 #   UI_RECORDING    auto (default) or none: no screen recording (recording.log says so). For a Mac Catalyst run
 #                   on a Mac someone uses: its recording would be the whole screen, behind a permission prompt.
@@ -50,6 +57,7 @@ case "$PLATFORM" in
   maccatalyst) PLATFORM_NAME="Mac Catalyst" ;;
   *) echo "UI_PLATFORM: iossim or maccatalyst" >&2; exit 2 ;;
 esac
+if [ -n "${UI_JOURNEY:-}" ] && [ "$PLATFORM" = maccatalyst ]; then echo "UI_JOURNEY: simulator only" >&2; exit 2; fi
 LOCK="${OUT%/}.lock"
 mkdir -p "$(dirname "$LOCK")"
 mkdir "$LOCK" 2>/dev/null || { echo "another ui-tests run is using $OUT ($LOCK)" >&2; exit 1; }
@@ -60,6 +68,7 @@ OUT="$(cd "$OUT" && pwd)"
 UDID=""
 THROWAWAY=""
 VIDEO_PID=""
+JOURNEY_PID=""
 SIM_RECORDERS=()
 AFTER_RAN=0
 STATUS=""
@@ -188,6 +197,7 @@ if seconds is not None and seconds < max(1, 0.5 * elapsed):
 }
 cleanup() {
   local code=$?
+  if [ -n "$JOURNEY_PID" ]; then kill "$JOURNEY_PID" 2>/dev/null || true; wait "$JOURNEY_PID" 2>/dev/null || true; fi
   if [ "$PLATFORM" = maccatalyst ]; then stop_mac_recording; else stop_sim_recording; fi
   [ -f "$OUT/run.json" ] && record end "${STATUS:-$code}" || true
   if [ -n "${UI_AFTER:-}" ] && [ "$AFTER_RAN" = 0 ]; then AFTER_RAN=1; $UI_AFTER "$OUT" "$UDID" || true; fi
@@ -253,10 +263,25 @@ printf '%s\n' "$DEVICE" > "$OUT/device.json"
 
 [ -n "${UI_BEFORE:-}" ] && $UI_BEFORE "$OUT"
 RUNNER_ENV=()
+JOURNEY_ENV=()
 if [ -f "$OUT/test-env" ]; then
   while IFS='=' read -r key value; do
-    [ -n "$key" ] && RUNNER_ENV+=("TEST_RUNNER_$key=$value")
+    [ -n "$key" ] && RUNNER_ENV+=("TEST_RUNNER_$key=$value") && JOURNEY_ENV+=("$key=$value")
   done < "$OUT/test-env"
+fi
+TEST_ARGS=()
+if [ -n "${UI_JOURNEY:-}" ]; then
+  # the journeys first: they listen before the driver connects (xcodebuild builds the tests meanwhile)
+  env ${JOURNEY_ENV[@]+"${JOURNEY_ENV[@]}"} $UI_JOURNEY "$OUT" > >(tee "$OUT/journey.log") 2>&1 &
+  JOURNEY_PID=$!
+  for ((i = 0; i < 600; i++)); do
+    [ -s "$OUT/driver-port" ] && break
+    kill -0 "$JOURNEY_PID" 2>/dev/null || { wait "$JOURNEY_PID" || true; JOURNEY_PID=""; echo "UI_JOURNEY exited before listening (journey.log)" >&2; exit 1; }
+    sleep 0.1
+  done
+  [ -s "$OUT/driver-port" ] || { echo "UI_JOURNEY wrote no driver-port within 60 s" >&2; exit 1; }
+  RUNNER_ENV+=("TEST_RUNNER_LEANNATIVE_DRIVER_PORT=$(tr -d '[:space:]' < "$OUT/driver-port")")
+  TEST_ARGS+=("-only-testing:${UI_JOURNEY_TARGET:-${SCHEME}UITests}/LNDriver/testDrive")
 fi
 
 if [ "${UI_RECORDING:-auto}" = none ]; then
@@ -281,6 +306,16 @@ status=0
 env ${RUNNER_ENV[@]+"${RUNNER_ENV[@]}"} xcodebuild test \
   -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
   -derivedDataPath "${DERIVED_DATA:-$IOS_DIR/build/DerivedData}" -resultBundlePath "$OUT/$NAME.xcresult" \
-  "$@" 2>&1 | "$CI/progress" "$OUT/xcodebuild.log" '^Test Case .*(passed|failed)|: error:|^\*\* TEST' || status=$?
+  ${TEST_ARGS[@]+"${TEST_ARGS[@]}"} "$@" 2>&1 | "$CI/progress" "$OUT/xcodebuild.log" '^Test Case .*(passed|failed)|: error:|^\*\* TEST' || status=$?
+if [ -n "$JOURNEY_PID" ]; then
+  # the driver has ended or gone: the journeys finish (journeys.json) or are stopped
+  for ((i = 0; i < 300; i++)); do kill -0 "$JOURNEY_PID" 2>/dev/null || break; sleep 0.1; done
+  kill "$JOURNEY_PID" 2>/dev/null && echo "the journeys did not end within 30 s of the tests and were stopped" || true
+  journey=0
+  wait "$JOURNEY_PID" || journey=$?
+  JOURNEY_PID=""
+  echo "journeys: exit $journey"
+  [ "$status" = 0 ] && status="$journey"
+fi
 STATUS="$status"
 exit "$status"

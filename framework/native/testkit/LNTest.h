@@ -78,4 +78,9 @@ BOOL LNShotAt(XCTestCase *test, XCUIApplication *app, NSString *name, LNScreensh
 /// Records an XCTest failure at `file`:`line` (what the helpers do when a precondition fails).
 void LNFail(NSString *file, NSUInteger line, NSString *message);
 
+/// LNTap and LNType for an element found any way (a tab, an alert's button, a text), recording nothing: nil
+/// when it was done, else why not (`name` says which element). The journey driver (LNDriver.m) answers with it.
+NSString *_Nullable LNTapElement(XCUIApplication *app, XCUIElement *element, NSString *name);
+NSString *_Nullable LNTypeElement(XCUIApplication *app, XCUIElement *element, NSString *name, NSString *text);
+
 NS_ASSUME_NONNULL_END
