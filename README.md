@@ -203,6 +203,18 @@ jobs:
 
 The inputs are documented at the top of the workflow.
 
+**A self-hosted Mac.** `self-hosted: '["self-hosted", "my-mac"]'` sends every job to a Mac of your own
+with those labels, and `runs-on` becomes the fallback. A first job on `ubuntu-latest` decides where the run goes:
+- A pull request from a fork always gets `runs-on`, so outside code never runs on your Mac.
+- `runner: hosted` sends the run to `runs-on`. Pass a repository variable here (`runner: ${{ vars.CI_RUNNER }}`) to
+  switch without a commit.
+- With the `RUNNER_STATUS_TOKEN` secret (a fine-grained token with Administration: read-only on the repository), a
+  run goes to `runs-on` whenever no runner with those labels is online.
+
+On the Mac, the build moves between jobs as an APFS copy under `~/Library/Caches/leannative-ci`, keeping the six
+newest, instead of through the Actions cache, and the Mac's own `~/.elan` is used. The UI tests need the runner to
+run in a logged-in session: `./svc.sh install` makes it a LaunchAgent.
+
 **UI-test evidence.** `framework/native/ci/export-evidence <run> <out>` turns one `ui-tests` run into
 evidence an app can keep or publish: the screenshots the tests attached (each attributed to the tests
 that took it, checked byte for byte against any copy the tests wrote, hashed before and after), the
