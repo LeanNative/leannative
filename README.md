@@ -174,15 +174,13 @@ unavailable on macOS.
 ## Continuous integration for an app
 
 `.github/workflows/ios-app.yml` is a reusable workflow that builds and tests a LeanNative app on GitHub
-Actions. It builds every Lean target once, in one job, and keeps the build in the Actions cache; the test
-jobs restore it read-only and run in parallel:
+Actions in two jobs that start at once. Each builds the app's Lean itself, from the Actions cache, so
+nothing passes between them and either can be rerun alone:
 
 | Job | Runs |
 |---|---|
-| `build` | elan and the toolchain, `lake build` of the app's packages and test executables, the app's `prepare` command; the only job that saves the cache |
-| `tests` | each line of `tests`: a Lean test executable or any command, streamed |
-| `extra` | the app's own command (Winnow: its tests against a regtest Bitcoin node) |
-| `app` | the iOS app: Debug and Release for the simulator, Release for devices (unsigned), each checked for Swift (`check-no-swift`); the app's `release-check`; the UI tests on a throwaway simulator with a screen recording and a record of the tested revision, `run.json` (`ui-tests`) |
+| `lean` | elan and the toolchain, `lake build` of the app's packages and test executables, the app's `prepare` command, then every line of `tests` at the same time (`framework/native/ci/run-tests`: the longest one sets the time); the only job that saves the cache |
+| `app` | the same build and `prepare`, then the iOS app: Debug and Release for the simulator, Release for devices (unsigned), each checked for Swift (`check-no-swift`); the app's `release-check`; the UI tests on a throwaway simulator with a screen recording and a record of the tested revision, `run.json` (`ui-tests`) |
 
 Every long step prints its output as it comes, and a line at least every 30 seconds while a step is
 quiet (`framework/native/ci/progress`). An app calls it with its own paths and hooks:
@@ -202,18 +200,6 @@ jobs:
 ```
 
 The inputs are documented at the top of the workflow.
-
-**A self-hosted Mac.** `self-hosted: '["self-hosted", "my-mac"]'` sends every job to a Mac of your own
-with those labels, and `runs-on` becomes the fallback. A first job on `ubuntu-latest` decides where the run goes:
-- A pull request from a fork always gets `runs-on`, so outside code never runs on your Mac.
-- `runner: hosted` sends the run to `runs-on`. Pass a repository variable here (`runner: ${{ vars.CI_RUNNER }}`) to
-  switch without a commit.
-- With the `RUNNER_STATUS_TOKEN` secret (a fine-grained token with Administration: read-only on the repository), a
-  run goes to `runs-on` whenever no runner with those labels is online.
-
-On the Mac, the build moves between jobs as an APFS copy under `~/Library/Caches/leannative-ci`, keeping the six
-newest, instead of through the Actions cache, and the Mac's own `~/.elan` is used. The UI tests need the runner to
-run in a logged-in session: `./svc.sh install` makes it a LaunchAgent.
 
 **UI-test evidence.** `framework/native/ci/export-evidence <run> <out>` turns one `ui-tests` run into
 evidence an app can keep or publish: the screenshots the tests attached (each attributed to the tests
