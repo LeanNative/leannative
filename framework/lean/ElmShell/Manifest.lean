@@ -12,7 +12,9 @@ the C shim and Lean's C as sources, the shell's scene delegate (`ELSceneDelegate
 sandbox, Lean's headers and retargeted libraries, `-O3`, ad-hoc signing in the simulator. What the app's
 capabilities need comes from the manifest, and is checked against the capabilities it says it uses
 (`uses`): generation refuses a manifest that uses `ble.*` with no Bluetooth usage text, say, instead of
-the app crashing on its first Bluetooth call (`requirements`).
+the app crashing on its first Bluetooth call (`requirements`). And `uses` is checked against the app's
+code: build-ios hands generation the C that Lean wrote for the app, and a capability named there whose
+family `uses` does not list is refused too (`Manifest.callProblems`).
 
 The app keeps every escape hatch: `info`, `entitlements`, `settings` and `testSettings` set any Info.plist
 key, entitlement or build setting (over the generated ones), and `spec` is merged into the whole XcodeGen
@@ -85,6 +87,10 @@ structure Manifest where
   resources : List String := []
   /-- the shell capabilities the app calls: names (`auth`) or families (`ble.*`) of `ElmShell.capabilities` -/
   uses : List String := []
+  /-- capability families the app calls without listing them in `uses`, on purpose: their requirements are
+  not checked (native-demo calls `cloudkit.*` with no iCloud container, to show the shell's
+  `missingEntitlement` answer) -/
+  unlisted : List String := []
   /-- Info.plist usage texts, by key (`NSFaceIDUsageDescription`, …): what the system shows when it asks -/
   usage : List (String × String) := []
   /-- the identifiers the shell registers launch handlers for (`BGTaskSchedulerPermittedIdentifiers`), each
@@ -291,8 +297,47 @@ def Manifest.problems (m : Manifest) : List String :=
   (if ident m.name then [] else [s!"name {repr m.name}: letters, digits, _ and - only"]) ++
   (if m.bundleId.contains '.' then [] else [s!"bundleId {repr m.bundleId}: a reverse-DNS identifier"]) ++
   (m.uses.filter (!known ·) |>.map fun u => s!"uses {u}: the shell has no such capability (ElmShell.capabilities)") ++
+  (m.unlisted.filter (!known ·) |>.map fun u => s!"unlisted {u}: the shell has no such capability (ElmShell.capabilities)") ++
   (m.backgroundTasks.filter (·.1.isEmpty) |>.map fun _ => "backgroundTasks: an empty identifier") ++
   (requirements.filter (families.contains ·.1) |>.flatMap fun (_, need) => need info ent)
+
+/-! ## What the app's code calls
+
+`uses` is checked against the capabilities the app's code names. Every call to the shell names its
+capability as a string (`{ capability := "ble.connect", … }` in the typed clients, the name passed to a
+command in an app's own code), and Lean writes a string literal into the C as it is, in quotes: so the C
+that Lean generated for the app's import closure (build-ios's `build/lean-c`, the C the app is built from)
+names every capability the app can call. A capability the app imports but never calls is found too: that
+asks for one entry too many in `uses`, never one too few. -/
+
+/-- A use covers a capability: its name, or its family (`ble.*`). -/
+def covers (use cap : String) : Bool :=
+  use == cap || (use.endsWith ".*" && family use == family cap)
+
+/-- The shell's capabilities named, as string literals, in the C of `sources` (file name, text): each with
+the first file that names it. -/
+def calledIn (sources : List (String × String)) : List (String × String) :=
+  capabilities.filterMap fun c =>
+    (sources.find? (·.2.contains ("\"" ++ c.name ++ "\""))).map fun (file, _) => (c.name, file)
+
+/-- The calls that `uses` (or `unlisted`) does not cover, one problem per family, naming a capability and
+the file it is in. -/
+def Manifest.callProblems (m : Manifest) (calls : List (String × String)) : List String :=
+  let missing := calls.filter fun (c, _) => !(m.uses ++ m.unlisted).any (covers · c)
+  let fams := missing.foldl (fun acc (c, f) => if acc.any (family ·.1 == family c) then acc else acc ++ [(c, f)]) []
+  fams.map fun (c, f) =>
+    s!"the app calls {c} ({f}), but uses lists neither {c} nor {family c}.* (or unlisted, to call it on purpose without its requirements)"
+
+/-- The entries of `uses` that no call covers: warnings, as a family the code reaches only in a way the C
+does not show (a name built at run time) is still needed. -/
+def Manifest.unusedUses (m : Manifest) (calls : List (String × String)) : List String :=
+  m.uses.filter fun u => !calls.any fun (c, _) => covers u c
+
+/-- The `.c` files of a directory (build-ios's `build/lean-c`), as (file name, text). -/
+def readC (dir : System.FilePath) : IO (List (String × String)) := do
+  let entries ← dir.readDir
+  let cs := entries.toList.filter (·.path.extension == some "c") |>.map (·.path)
+  cs.mapM fun f => return ((f.fileName.getD f.toString), ← IO.FS.readFile f)
 
 /-- JSON with every object's keys in ascending order, one entry per line: XcodeGen keeps the spec's order
 (targets, so the project's target list), and Lean's own printer writes keys in descending order. -/
@@ -315,10 +360,12 @@ def Manifest.generate (m : Manifest) (p : Paths) : Except (List String) String :
   | ps => .error ps
 
 /-- An app's `ios-project` executable:
-`lake exe ios-project <spec> --native <dir> --build <dir> --lean-include <dir>` writes the spec (build-ios
-runs it), or prints the manifest's problems and fails. The file is left alone when its text is unchanged. -/
+`lake exe ios-project <spec> --native <dir> --build <dir> --lean-include <dir> [--lean-c <dir>]` writes the
+spec (build-ios runs it), or prints the manifest's problems and fails. With `--lean-c` (the app's generated C;
+build-ios passes it) it also fails on a capability the C names that `uses` does not cover, and warns about an
+entry of `uses` that nothing in the C covers. The file is left alone when its text is unchanged. -/
 def Manifest.main (m : Manifest) (args : List String) : IO UInt32 := do
-  let usage := "usage: ios-project <spec.json> --native <dir> --build <dir> --lean-include <dir>"
+  let usage := "usage: ios-project <spec.json> --native <dir> --build <dir> --lean-include <dir> [--lean-c <dir>]"
   let rec flags : List String → Except String (List (String × String))
     | [] => .ok []
     | f :: v :: rest => if f.startsWith "--" then (((f.drop 2).toString, v) :: ·) <$> flags rest else .error usage
@@ -332,6 +379,14 @@ def Manifest.main (m : Manifest) (args : List String) : IO UInt32 := do
     for p in ps do IO.eprintln s!"{m.name} manifest: {p}"
     return 1
   | .ok text =>
+    -- with the app's C (build-ios passes it), `uses` is checked against what the code calls
+    if let some dir := get "lean-c" then
+      let calls := calledIn (← readC dir)
+      let ps := m.callProblems calls
+      for p in ps do IO.eprintln s!"{m.name} manifest: {p}"
+      if !ps.isEmpty then return 1
+      for u in m.unusedUses calls do
+        IO.eprintln s!"{m.name} manifest: warning: uses lists {u}, but the app's C names no such capability"
     if let some dir := (System.FilePath.mk out).parent then IO.FS.createDirAll dir
     let old ← (try IO.FS.readFile out catch _ => pure "")
     if old != text then IO.FS.writeFile out text
