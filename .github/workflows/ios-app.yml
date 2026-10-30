@@ -12,6 +12,11 @@ name: LeanNative iOS app
 # Commands given as inputs run with bash in the repository root, the app's Lean on the PATH, CI_RESULTS set
 # to the job's evidence directory and LEANNATIVE_CI to the scripts' directory (also as ELMLEAN_CI, deprecated, until
 # v0.3.0).
+#
+# A self-hosted Mac (`self-hosted`: its labels) takes every job when it is online; `runs-on` takes them for pull
+# requests from forks, when the caller passes `runner: hosted`, and, given `RUNNER_STATUS_TOKEN`, when no runner
+# with those labels is online. On the self-hosted Mac the build moves between jobs as an APFS copy under
+# ~/Library/Caches/leannative-ci (LEANNATIVE_CI_CACHE), not through the Actions cache, and its own ~/.elan is used.
 on:
   workflow_call:
     inputs:
@@ -24,9 +29,17 @@ on:
         type: string
         required: false
       runs-on:
-        description: The macOS runner label for every job
+        description: The macOS runner label for every job (with `self-hosted`, the fallback)
         type: string
         default: macos-26
+      self-hosted:
+        description: 'A self-hosted Mac''s labels as a JSON array (`["self-hosted", "my-mac"]`); empty: always `runs-on`'
+        type: string
+        default: ''
+      runner:
+        description: '`hosted` sends the run to `runs-on` even when `self-hosted` is given (a repository variable, say)'
+        type: string
+        default: ''
       timeout-minutes:
         description: Each job's limit
         type: number
@@ -114,6 +127,10 @@ on:
       publish-retention-days:
         type: number
         default: 90
+    secrets:
+      RUNNER_STATUS_TOKEN:
+        description: Reads the repository's runners (Administration, read-only), so an offline self-hosted Mac falls back
+        required: false
 permissions:
   contents: read
 env:
@@ -126,8 +143,46 @@ env:
   LEANNATIVE_CI: ${{ github.workspace }}/${{ inputs.app-dir }}/.lake/packages/leannative/framework/native/ci
   ELMLEAN_CI: ${{ github.workspace }}/${{ inputs.app-dir }}/.lake/packages/leannative/framework/native/ci
 jobs:
+  runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      runs-on: ${{ steps.pick.outputs.runs-on }}
+      local: ${{ steps.pick.outputs.local }}
+    steps:
+      - name: The self-hosted Mac or runs-on
+        id: pick
+        env:
+          SELF_HOSTED: ${{ inputs.self-hosted }}
+          RUNNER: ${{ inputs.runner }}
+          RUNS_ON: ${{ inputs.runs-on }}
+          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+        run: |
+          set -euo pipefail
+          hosted() {
+            echo "runs-on ($1): $RUNS_ON"
+            { echo "runs-on=$(jq -cn --arg l "$RUNS_ON" '$l')"; echo local=false; } >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          [ -n "$SELF_HOSTED" ] || hosted "no self-hosted Mac given"
+          [ "$RUNNER" != hosted ] || hosted "runner: hosted"
+          # a fork's code never runs on the self-hosted Mac
+          [ "$FORK" != true ] || hosted "a pull request from a fork"
+          if [ -n "$STATUS_TOKEN" ]; then
+            online=$(curl -fsSL -H "Authorization: Bearer $STATUS_TOKEN" -H "Accept: application/vnd.github+json" \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runners?per_page=100" \
+              | jq --argjson want "$SELF_HOSTED" \
+                  '[.runners[] | select(.status == "online") | [.labels[].name] as $have | select(all($want[]; . as $w | $have | index($w)))] | length') \
+              || { echo "::warning::could not read the repository's runners"; online=0; }
+            [ "$online" -gt 0 ] || hosted "no runner labelled $SELF_HOSTED is online"
+          fi
+          echo "self-hosted: $SELF_HOSTED"
+          { echo "runs-on=$(jq -c . <<< "$SELF_HOSTED")"; echo local=true; } >> "$GITHUB_OUTPUT"
+
   build:
-    runs-on: ${{ inputs.runs-on }}
+    needs: runner
+    runs-on: ${{ fromJSON(needs.runner.outputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       key: ${{ steps.key.outputs.key }}
@@ -152,7 +207,7 @@ jobs:
       - name: The cache key
         id: key
         env:
-          RUNS_ON: ${{ inputs.runs-on }}
+          RUNS_ON: ${{ needs.runner.outputs.local == 'true' && 'self-hosted' || inputs.runs-on }}
         run: |
           set -euo pipefail
           paths="$HOME/.elan"
@@ -171,11 +226,33 @@ jobs:
             echo 'paths<<PATHS'; echo "$paths"; echo PATHS
           } >> "$GITHUB_OUTPUT"
       - name: Restore the Lean toolchain and builds
+        if: needs.runner.outputs.local != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.key.outputs.paths }}
           key: ${{ steps.key.outputs.key }}
           restore-keys: ${{ steps.key.outputs.prefix }}
+      - name: Restore the Lean builds (this Mac)
+        if: needs.runner.outputs.local == 'true'
+        env:
+          KEY: ${{ steps.key.outputs.key }}
+          PREFIX: ${{ steps.key.outputs.prefix }}
+        run: &restore-local |
+          set -euo pipefail
+          root="${LEANNATIVE_CI_CACHE:-$HOME/Library/Caches/leannative-ci}/$GITHUB_REPOSITORY"
+          src="$root/$KEY"
+          # the build job may start from an older build of the same dependencies; the others need this one
+          # shellcheck disable=SC2012 # the names are cache keys
+          if [ ! -d "$src" ] && [ -n "${PREFIX:-}" ]; then src=$(ls -td "$root/$PREFIX"* 2>/dev/null | head -1 || true); fi
+          if [ -z "$src" ] || [ ! -d "$src" ]; then
+            [ -z "${PREFIX:-}" ] || { echo "no build kept for $PREFIX: building from scratch"; exit 0; }
+            echo "::error::no build kept for $KEY on this Mac"; exit 1
+          fi
+          echo "restoring $src"
+          for p in $LEAN_PACKAGES; do
+            [ -d "$src/$p/.lake" ] || continue
+            rm -rf "$p/.lake"; cp -cRp "$src/$p/.lake" "$p/.lake"
+          done
       - name: elan and the Lean toolchain
         run: &elan |
           set -euo pipefail
@@ -184,7 +261,12 @@ jobs:
               | sh -s -- -y --default-toolchain none --no-modify-path
           fi
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          for p in $LEAN_PACKAGES; do "$HOME/.elan/bin/elan" toolchain install "$(cat "$p/lean-toolchain")"; done
+          # a newer elan (a self-hosted Mac's own) refuses to install a toolchain it already has
+          for p in $LEAN_PACKAGES; do
+            t=$(cat "$p/lean-toolchain")
+            have=$("$HOME/.elan/bin/elan" toolchain list)
+            awk '{print $1}' <<< "$have" | grep -qxF "$t" || "$HOME/.elan/bin/elan" toolchain install "$t"
+          done
           echo "CI_RESULTS=$RUNNER_TEMP/leannative-ci/$GITHUB_JOB" >> "$GITHUB_ENV"
       - name: lake build
         run: |
@@ -212,6 +294,23 @@ jobs:
           path: ${{ runner.temp }}/leannative-carry.tar
           if-no-files-found: error
           retention-days: 1
+      - name: Keep the Lean builds (this Mac)
+        if: needs.runner.outputs.local == 'true'
+        env:
+          KEY: ${{ steps.key.outputs.key }}
+        run: |
+          set -euo pipefail
+          root="${LEANNATIVE_CI_CACHE:-$HOME/Library/Caches/leannative-ci}/$GITHUB_REPOSITORY"
+          mkdir -p "$root"
+          if [ -d "$root/$KEY" ]; then echo "already kept: $KEY"; touch "$root/$KEY"; exit 0; fi
+          tmp="$root/.partial-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          rm -rf "$tmp"
+          for p in $LEAN_PACKAGES; do mkdir -p "$tmp/$p"; cp -cRp "$p/.lake" "$tmp/$p/.lake"; done
+          if [ -d "$root/$KEY" ]; then rm -rf "$tmp"; else mv "$tmp" "$root/$KEY"; fi
+          # the six newest builds stay
+          # shellcheck disable=SC2012 # the names are cache keys
+          ls -td "$root"/leannative-* | tail -n +7 | while IFS= read -r old; do rm -rf "$old"; done
+          du -sh "$root/$KEY"
       - name: Preserve build evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -223,8 +322,8 @@ jobs:
 
   tests:
     if: inputs.tests != ''
-    needs: build
-    runs-on: ${{ inputs.runs-on }}
+    needs: [runner, build]
+    runs-on: ${{ fromJSON(needs.runner.outputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -232,11 +331,17 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Restore the build
+        if: needs.runner.outputs.local != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ needs.build.outputs.paths }}
           key: ${{ needs.build.outputs.key }}
           fail-on-cache-miss: true
+      - name: Restore the build (this Mac)
+        if: needs.runner.outputs.local == 'true'
+        env:
+          KEY: ${{ needs.build.outputs.key }}
+        run: *restore-local
       - name: elan and the Lean toolchain
         run: *elan
       - name: What the build job prepared
@@ -281,8 +386,8 @@ jobs:
 
   extra:
     if: inputs.extra != ''
-    needs: build
-    runs-on: ${{ inputs.runs-on }}
+    needs: [runner, build]
+    runs-on: ${{ fromJSON(needs.runner.outputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -290,11 +395,17 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Restore the build
+        if: needs.runner.outputs.local != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ needs.build.outputs.paths }}
           key: ${{ needs.build.outputs.key }}
           fail-on-cache-miss: true
+      - name: Restore the build (this Mac)
+        if: needs.runner.outputs.local == 'true'
+        env:
+          KEY: ${{ needs.build.outputs.key }}
+        run: *restore-local
       - name: elan and the Lean toolchain
         run: *elan
       - name: What the build job prepared
@@ -325,8 +436,8 @@ jobs:
           retention-days: 14
 
   app:
-    needs: build
-    runs-on: ${{ inputs.runs-on }}
+    needs: [runner, build]
+    runs-on: ${{ fromJSON(needs.runner.outputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -334,11 +445,17 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Restore the build
+        if: needs.runner.outputs.local != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ needs.build.outputs.paths }}
           key: ${{ needs.build.outputs.key }}
           fail-on-cache-miss: true
+      - name: Restore the build (this Mac)
+        if: needs.runner.outputs.local == 'true'
+        env:
+          KEY: ${{ needs.build.outputs.key }}
+        run: *restore-local
       - name: elan and the Lean toolchain
         run: *elan
       - name: What the build job prepared
