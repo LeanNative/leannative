@@ -26,11 +26,11 @@
 //                          screenshot attached ("journey failure")
 //   end
 //
-// An element (`find`): {"id": identifier} (any type), {"tab": title} (a tab bar button, the sidebar's item under
-// Mac Catalyst), {"alert": button label}, {"button": label}, {"nav": title} (a navigation bar),
-// {"back": true} (the navigation bar's first button) or {"text": regular expression} (an element whose label,
-// without zero-width spaces, matches). With "in": identifier, an "id" or "button" is looked for only inside that
-// element (a stepper's Decrement).
+// An element (`find`): {"id": identifier} (any type), {"tab": title} (a tab bar button; with no tab bar, a
+// sidebar's item), {"alert": button label}, {"button": label}, {"nav": title} (a navigation bar), {"back": true}
+// (the navigation bar's first button, else a button BackButton or Back) or {"text": regular expression} (an
+// element whose label, without zero-width spaces, matches). With "in": identifier, an "id" or "button" is looked
+// for only inside that element.
 #import <XCTest/XCTest.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -107,7 +107,15 @@ static NSNumber *LNBool(BOOL b) { return b ? @YES : @NO; }
         *name = [NSString stringWithFormat:@"the %@ navigation bar", find[@"nav"]];
         return app.navigationBars[find[@"nav"]];
     }
-    if ([find[@"back"] isEqual:@YES]) { *name = @"the back button"; return app.navigationBars.buttons.firstMatch; }
+    if ([find[@"back"] isEqual:@YES]) {
+        // the navigation bar's first button; where a layout floats back outside any bar (iOS 27's iPhone Duo,
+        // its tabs in a sidebar), the system's back button wherever it is
+        *name = @"the back button";
+        XCUIElement *bar = app.navigationBars.buttons.firstMatch;
+        if (bar.exists) return bar;
+        NSPredicate *back = [NSPredicate predicateWithFormat:@"identifier == 'BackButton' OR label == 'Back'"];
+        return [app.buttons matchingPredicate:back].firstMatch;
+    }
     if ([find[@"text"] isKindOfClass:NSString.class]) {
         *name = [NSString stringWithFormat:@"a text matching %@", find[@"text"]];
         NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:find[@"text"] options:0 error:nil];
