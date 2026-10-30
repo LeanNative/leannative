@@ -36,7 +36,8 @@
 #                   then runs the kit's driver alone (-only-testing:$UI_JOURNEY_TARGET/LNDriver/testDrive, the
 #                   target defaulting to <SCHEME>UITests), which carries out the journeys' steps. Its output is
 #                   in the CI log and journey.log, its results in journeys.json; the run fails if the journeys
-#                   or the tests do. Simulator only (the Mac Catalyst test runner is sandboxed).
+#                   or the tests do. Simulator only (the Mac Catalyst test runner is sandboxed). Without it,
+#                   the driver is left out of the run (-skip-testing).
 #   UI_SOURCE_REVISION  the tested commit, when the app directory is not a git checkout (else it must match)
 #   UI_RECORDING    auto (default) or none: no screen recording (recording.log says so). For a Mac Catalyst run
 #                   on a Mac someone uses: its recording would be the whole screen, behind a permission prompt.
@@ -282,6 +283,9 @@ if [ -n "${UI_JOURNEY:-}" ]; then
   [ -s "$OUT/driver-port" ] || { echo "UI_JOURNEY wrote no driver-port within 60 s" >&2; exit 1; }
   RUNNER_ENV+=("TEST_RUNNER_LEANNATIVE_DRIVER_PORT=$(tr -d '[:space:]' < "$OUT/driver-port")")
   TEST_ARGS+=("-only-testing:${UI_JOURNEY_TARGET:-${SCHEME}UITests}/LNDriver/testDrive")
+else
+  # the app's own tests: not the journey driver, which would only be skipped (and a skip is not a pass)
+  TEST_ARGS+=("-skip-testing:${UI_JOURNEY_TARGET:-${SCHEME}UITests}/LNDriver")
 fi
 
 if [ "${UI_RECORDING:-auto}" = none ]; then
