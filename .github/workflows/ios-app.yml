@@ -28,6 +28,10 @@ on:
         description: The macOS runner label for both jobs
         type: string
         default: macos-26
+      app-runs-on:
+        description: "Another label for `app` (a smaller runner, say: the UI tests drive one simulator); default `runs-on`"
+        type: string
+        default: ''
       timeout-minutes:
         description: Each job's limit
         type: number
@@ -207,7 +211,7 @@ jobs:
           retention-days: 14
 
   app:
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ inputs.app-runs-on || inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
