@@ -1,5 +1,5 @@
 #!/opt/homebrew/bin/python3
-"""Protocol-conformant test double for `elmlean` (see PROTOCOL.md) with a toy todo model.
+"""Protocol-conformant test double for `leannative` (see PROTOCOL.md) with a toy todo model.
 
 Same node grammar, same error codes and precedence (bad-json > stale > bad-path > no-handler),
 `{"reset":true}`, exactly one reply per input line, flushed, exit 0 at EOF. Stdlib only.

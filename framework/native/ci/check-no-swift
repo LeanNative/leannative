@@ -1,5 +1,5 @@
 #!/bin/bash
-# An ElmLean app has no Swift: none in its repository, none compiled, none linked or bundled.
+# A LeanNative app has no Swift: none in its repository, none compiled, none linked or bundled.
 #
 #   framework/native/ci/check-no-swift <xcodebuild log> <App.app>
 #

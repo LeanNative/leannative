@@ -1,24 +1,24 @@
 import Std.Async.TCP
-import ElmLean.Native
-import ElmLean.Native.BackgroundRun
-import ElmLean.Native.EffectScope
-import ElmLean.Native.Client.Keychain
-import ElmLean.Native.Client.Http
-import ElmLean.Native.Client.CloudKit
-import ElmLean.Native.Client.Bluetooth
+import LeanNative.Native
+import LeanNative.Native.BackgroundRun
+import LeanNative.Native.EffectScope
+import LeanNative.Native.Client.Keychain
+import LeanNative.Native.Client.Http
+import LeanNative.Native.Client.CloudKit
+import LeanNative.Native.Client.Bluetooth
 
 /-! # A native-mode demo: the pieces Winnow needs, in one screen
 
-* `update`/`view`/`cmds` as in any ElmLean app;
+* `update`/`view`/`cmds` as in any LeanNative app;
 * a command run by a Lean task that answers every second (`tick`);
 * a command that asks the shell for an iOS capability (`auth`: Face ID or the passcode);
 * a command that talks TCP through Lean's own libuv sockets (an echo server and client in-process);
 * a Probes tab that asks the shell for capabilities (background tasks, CloudKit, iCloud Keychain, HTTP
   through a SOCKS5 proxy at 127.0.0.1:1080) and logs their answers and the system events;
-* a background task iOS launches runs as a `BackgroundRun` (`ElmLean.Native.BackgroundRun`): a short
+* a background task iOS launches runs as a `BackgroundRun` (`LeanNative.Native.BackgroundRun`): a short
   job that stops when expired, answered with `bgtask.complete` when it is over;
 * the selftest (`NATIVEDEMO_SELFTEST=1` at launch) runs two `BackgroundRun`s, a scoped task an
-  invalidation drains, and the typed clients (`ElmLean.Native.Client.*`) against the real shell; its lines
+  invalidation drains, and the typed clients (`LeanNative.Native.Client.*`) against the real shell; its lines
   are printed and shown on the Demo tab (`selftest-<n>`), so UI tests read them on iOS and Mac Catalyst alike;
 * Face ID runs in an `EffectScope` the app's going to the background ends: an answer that comes back
   after that is dropped;
@@ -28,7 +28,7 @@ import ElmLean.Native.Client.Bluetooth
   Bluetooth, so no run that does not set it is asked for the permission. -/
 
 namespace NativeDemo
-open ElmLean ElmLean.Native Lean
+open LeanNative LeanNative.Native Lean
 
 structure Model where
   count : Nat
@@ -112,9 +112,9 @@ inductive Cmd where
 /-- The Probes tab: a label, a capability and its arguments. The background task identifiers are the
 demo's Info.plist `BGTaskSchedulerPermittedIdentifiers`. -/
 def probes : List (String × String × Json) :=
-  let refresh := "art.fralex.elmlean.nativedemo.refresh"
-  let processing := "art.fralex.elmlean.nativedemo.processing"
-  let probeService := "art.fralex.elmlean.nativedemo.probe"
+  let refresh := "art.fralex.leannative.nativedemo.refresh"
+  let processing := "art.fralex.leannative.nativedemo.processing"
+  let probeService := "art.fralex.leannative.nativedemo.probe"
   [ ("Refresh status", "bgtask.refreshStatus", Json.mkObj []),
     ("Schedule refresh", "bgtask.schedule", Json.mkObj [("id", refresh), ("after", (900 : Nat))]),
     ("Schedule processing", "bgtask.schedule",
@@ -280,7 +280,7 @@ def shown (r : Client.Result α) (render : α → String) : String :=
 /-- The typed clients against the real shell: an atomic create-only Keychain item, read and deleted; an
 HTTP request the shell refuses; the CloudKit account (an ad-hoc build has no entitlement). -/
 def typedSelftest (fx : Effects Host) (say : String → IO Unit) : IO Unit := do
-  let item : Client.Keychain.Item := { key := "typed", service := some "art.fralex.elmlean.nativedemo.probe" }
+  let item : Client.Keychain.Item := { key := "typed", service := some "art.fralex.leannative.nativedemo.probe" }
   let bytes := ByteArray.mk #[1, 2, 3]
   let hex := fun (b : Option ByteArray) => (b.map Client.hexOf).getD "none"
   let added := fun (a : Client.Keychain.Added) => match a with | .added => "added" | .alreadyExists => "alreadyExists"

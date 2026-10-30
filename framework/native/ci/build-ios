@@ -1,12 +1,12 @@
 #!/bin/bash
-# An ElmLean app for iOS, one configuration and platform:
+# A LeanNative app for iOS, one configuration and platform:
 #
 #   APP_DIR=<app package> APP_ROOT=<root module> SCHEME=<scheme> \
 #     framework/native/ci/build-ios Debug|Release iossim|ios|maccatalyst [xcodebuild arguments]
 #
 # `lake build <APP_ROOT>`, then ios_lean_sources.sh (the C, the retargeted libraries, the printed shell) into
 # $OUT, then the Xcode project, then xcodebuild. The project comes from the app's manifest: `lake exe
-# ios-project` (an executable of the app package whose main is ElmShell.Manifest.main) writes its XcodeGen
+# ios-project` (an executable of the app package whose main is LeanNativeShell.Manifest.main) writes its XcodeGen
 # spec to $OUT/project.json, and XcodeGen generates the project into $IOS_DIR with $IOS_DIR as its root;
 # given $OUT/lean-c, it also refuses a capability the app's C names that the manifest's `uses` does not list. An
 # app with a hand-kept $IOS_DIR/project.yml instead gets XcodeGen on that file, as it is. A device build

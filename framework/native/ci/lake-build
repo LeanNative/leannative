@@ -5,13 +5,13 @@
 #
 #   LEAN_PACKAGES   the app's Lake packages, space-separated, in build order
 #   BUILD_TARGETS   lines `<package> <targets…>`: more targets to build in that package
-#   CI_RESULTS      where the whole build output goes (default $RUNNER_TEMP/elmlean-ci, else build/elmlean-ci)
+#   CI_RESULTS      where the whole build output goes (default $RUNNER_TEMP/leannative-ci, else build/leannative-ci)
 #
 # The CI log gets each module Lake builds (not those it replays: their warnings stay in the log file), every
 # error, and a line every 30 s while a long file is being checked.
 set -euo pipefail
 CI="$(cd "$(dirname "$0")" && pwd)"
-R="${CI_RESULTS:-${RUNNER_TEMP:-build}/elmlean-ci}"
+R="${CI_RESULTS:-${RUNNER_TEMP:-build}/leannative-ci}"
 mkdir -p "$R"
 SHOW='Built |error|✖|Build completed|^uncaught'
 for p in ${LEAN_PACKAGES:?set LEAN_PACKAGES to the app Lake packages}; do

@@ -1,41 +1,41 @@
-# The ElmLean framework. An app is its own Lake package that requires this one:
+# The LeanNative framework. An app is its own Lake package that requires this one:
 #
 #   [[require]]
-#   name = "elmlean"
+#   name = "leannative"
 #   path = "../../framework/lean"      # or a git source
 #
 # and builds into an iOS app with framework/native (see framework/native/README.md).
-name = "elmlean"
-defaultTargets = ["ElmLean", "ElmShell", "elmshell"]
+name = "leannative"
+defaultTargets = ["LeanNative", "LeanNativeShell", "leannative-shell"]
 
 [[lean_lib]]
-name = "ElmLean"
+name = "LeanNative"
 
-# The native shell: `lake exe elmshell <dir>` prints its Objective-C (framework/native/README.md).
+# The native shell: `lake exe leannative-shell <dir>` prints its Objective-C (framework/native/README.md).
 [[lean_lib]]
-name = "ElmShell"
+name = "LeanNativeShell"
 
 [[lean_exe]]
-name = "elmshell"
-root = "ElmShell.Main"
+name = "leannative-shell"
+root = "LeanNativeShell.Main"
 
 # BackgroundRun's lifecycle tests (`make check` runs them; not a default target, apps never build it).
 [[lean_exe]]
 name = "background-run-test"
-root = "ElmLeanTest.BackgroundRun"
+root = "LeanNativeTest.BackgroundRun"
 
 # The typed capability clients against wire fixtures and a fake shell (`make check`; not a default target).
 [[lean_exe]]
 name = "clients-test"
-root = "ElmLeanTest.Clients"
+root = "LeanNativeTest.Clients"
 
 # EffectScope: invalidation at every point its module documents (`make check`; not a default target).
 [[lean_exe]]
 name = "effect-scope-test"
-root = "ElmLeanTest.EffectScope"
+root = "LeanNativeTest.EffectScope"
 
 # The app manifest: what generation refuses for each capability family, and the spec it writes (`make check`;
 # not a default target).
 [[lean_exe]]
 name = "manifest-test"
-root = "ElmLeanTest.Manifest"
+root = "LeanNativeTest.Manifest"

@@ -1,6 +1,6 @@
 # Native iOS and macOS apps: Lean compiled to C
 
-A LeanNative app (package `elmlean`, see the README's names section) runs on iOS and macOS with the same Lean definitions: any Lean 4 (recursion, `do`, `IO`,
+A LeanNative app (package `leannative`, see the README's names section) runs on iOS and macOS with the same Lean definitions: any Lean 4 (recursion, `do`, `IO`,
 tasks, `ByteArray`, hash maps…) compiled by Lean's compiler to C and linked with Lean's runtime. A shared
 Objective-C renderer draws the view tree with UIKit on iOS and Mac Catalyst on macOS. The app runs its
 commands in Lean (`perform`: TCP, files, timers, tasks) and requests platform services through
@@ -11,13 +11,13 @@ platform effects remain trusted and tested separately.
 ## How an app is built
 
 ```
-app (Lean package)      lake build ──► .lake/build/ir/*.c   (the app and ElmLean, as C)
+app (Lean package)      lake build ──► .lake/build/ir/*.c   (the app and LeanNative, as C)
                                          │
 scripts/ios_lean_sources.sh ─────────────┤ copies the C of the root's import closure,
-                                         │ writes elm_app_initialize.c (calls the root initializer),
+                                         │ writes leannative_app_initialize.c (calls the root initializer),
                                          │ retargets Lean's runtime and stdlib (.a) to iOS / Mac Catalyst
                                          ▼
-                                         │ runs `lake exe elmshell build/native-shell`: the shell's
+                                         │ runs `lake exe leannative-shell build/native-shell`: the shell's
                                          │ Objective-C (renderer, store, capabilities), printed from Lean
                                          ▼
                                          │ runs `lake exe ios-project build/project.json`: the XcodeGen
@@ -28,28 +28,28 @@ Xcode project (XcodeGen):     build/native-shell  +  c/ (shim)  +  build/lean-c
 ```
 
 **The shell is generated, and it is not Swift.** An app in native mode compiles no Swift at all: the
-shell is Objective-C on UIKit, held as Lean data in `framework/lean/ElmShell` and printed by `elmshell`,
+shell is Objective-C on UIKit, held as Lean data in `framework/lean/LeanNativeShell` and printed by `leannative-shell`,
 so it exists only under an app's `build/` (gitignored), rewritten by every `ios_lean_sources.sh` run
-(`ElmLeanShell.h`, `ELApp.m`, `ELStore.m`, `ELNode.m`, `ELRender.m`, `ELCapabilities.m`). What follows the
-node grammar comes from one table (`ElmShell/Grammar.lean`): a node's decoding (`ELDecode`, every field
-present with its default), the renderer's dispatch with one arm per kind (`ELBuild`), which kinds take no
-room in a layout (`ELIsOverlay`), the `role`/`style`/`kind` values (from the Lean enums' printers) and
-the event functions. `ElmShell/Check.lean` holds the table to the Lean side: the kernel checks that every
+(`LeanNativeShell.h`, `LNApp.m`, `LNStore.m`, `LNNode.m`, `LNRender.m`, `LNCapabilities.m`). What follows the
+node grammar comes from one table (`LeanNativeShell/Grammar.lean`): a node's decoding (`LNDecode`, every field
+present with its default), the renderer's dispatch with one arm per kind (`LNBuild`), which kinds take no
+room in a layout (`LNIsOverlay`), the `role`/`style`/`kind` values (from the Lean enums' printers) and
+the event functions. `LeanNativeShell/Check.lean` holds the table to the Lean side: the kernel checks that every
 `Wire` constructor, enum constructor and `Event` constructor has its row, and the build evaluates that
 each row's sample prints through `Wire.toJson` with exactly the row's keys and JSON kinds, and that the
-JSON the shell sends for each event parses back (`Event.fromJson?`) to that event; `elmshell` refuses to
-write if any of that fails. The capabilities are a table too (`ElmShell/Capabilities.lean`): the doc table
+JSON the shell sends for each event parses back (`Event.fromJson?`) to that event; `leannative-shell` refuses to
+write if any of that fails. The capabilities are a table too (`LeanNativeShell/Capabilities.lean`): the doc table
 in the header and the dispatch on the name are printed from the same rows. The rest (layout around
 screens and tabs, the store's calls into C, the app and scene delegates) is Objective-C written as a tree
-of lines and blocks (`ElmShell/ObjC.lean`).
+of lines and blocks (`LeanNativeShell/ObjC.lean`).
 
-**The renderer** keeps UIKit views in step with each new tree: the view of a node (an `ELBox`) is reused
+**The renderer** keeps UIKit views in step with each new tree: the view of a node (an `LNBox`) is reused
 at the same place for a node of the same kind and updated in place where it can be (containers, text
 inputs, switches, sheets), rebuilt otherwise, and left alone when its node did not change, so typing keeps
 the caret and a sync in progress does not reset scrolling. A screen whose only content is a `list` is a
 grouped list of cards; `sheet` and `alert` present themselves while their node exists (a sheet swiped
 away sends `dismiss`); `tabs` use the platform's tab bar and only the selected tab is built. The app is
-scene-based (`UIApplicationSceneManifest` names `ELSceneDelegate`); a scene saved by an earlier SwiftUI
+scene-based (`UIApplicationSceneManifest` names `LNSceneDelegate`); a scene saved by an earlier SwiftUI
 build of an app comes back with SwiftUI's own scene delegate, which draws nothing, and is adopted, so an update does not open on an empty
 window. Text is not selectable (SwiftUI's `textSelection`); the apps have explicit Copy buttons.
 
@@ -57,8 +57,8 @@ The C is compiled at `-O3` in every configuration (`GCC_OPTIMIZATION_LEVEL: 3`, 
 Lean builds its own C that way, and at Xcode's Debug `-O0` heavy Lean code (key derivation, hashing)
 runs about ten times slower.
 
-The app's root module registers it: `initialize ElmLean.Native.register app`
-(`ElmLean/Native.lean`). See `examples/native-demo` for a complete app with no Swift. Its Probes tab asks
+The app's root module registers it: `initialize LeanNative.Native.register app`
+(`LeanNative/Native.lean`). See `examples/native-demo` for a complete app with no Swift. Its Probes tab asks
 for the background-task, CloudKit, iCloud Keychain and SOCKS capabilities and logs the answers and the
 system events; `examples/native-demo/socks_probe.py` is the SOCKS5 proxy its HTTP probe expects at
 127.0.0.1:1080 (it logs whether the hostname arrived unresolved, ATYP 3).
@@ -113,12 +113,12 @@ whenever another app is in front, and the Mac takes no app-switcher snapshots.
 | view nodes | UIKit as on iPad: `share` and action-sheet `alert`s present as popovers from their control; `tabs` are UITabs in the sidebar-adaptable mode, a sidebar in the window; lists keep to a 720 pt column and other content to the readable width |
 
 **Headless runs.** A Debug build of any native app draws its window into the PNG named by
-`ELMLEAN_SNAPSHOT` (launch environment) half a second after each render, for runs that cannot capture the
+`LEANNATIVE_SNAPSHOT` (launch environment) half a second after each render, for runs that cannot capture the
 screen; native-demo with `NATIVEDEMO_SELFTEST=1` runs the TCP echo, two background runs and every probe at launch and prints
 each answer to stdout:
 
 ```
-open -n --arch x86_64 --env NATIVEDEMO_SELFTEST=1 --env ELMLEAN_SNAPSHOT=/tmp/demo.png \
+open -n --arch x86_64 --env NATIVEDEMO_SELFTEST=1 --env LEANNATIVE_SNAPSHOT=/tmp/demo.png \
   --stdout /tmp/demo.out ios/build/dd-catalyst/Build/Products/Debug-maccatalyst/NativeDemo.app
 ```
 
@@ -131,31 +131,31 @@ the app never touches Bluetooth, so CI and the UI tests are never asked for the 
 person runs it, since macOS or iOS asks them to allow Bluetooth the first time:
 
 ```
-open -n --env NATIVEDEMO_BLE_SERVICE=13d63400-2c97-0004-0000-4c6564676572 --env ELMLEAN_SNAPSHOT=/tmp/ble.png \
+open -n --env NATIVEDEMO_BLE_SERVICE=13d63400-2c97-0004-0000-4c6564676572 --env LEANNATIVE_SNAPSHOT=/tmp/ble.png \
   --stdout /tmp/ble.out …/Debug-maccatalyst/NativeDemo.app     # a Ledger Nano X's advertised service
 ```
 
-### The Xcode project, from a Lean manifest (`lean/ElmShell/Manifest.lean`)
+### The Xcode project, from a Lean manifest (`lean/LeanNativeShell/Manifest.lean`)
 
 An app describes its Xcode project once, in Lean, and never writes `project.yml`. Its package has a module
-outside the app's import closure (so none of it reaches the app) holding an `ElmShell.Manifest`, and an
+outside the app's import closure (so none of it reaches the app) holding an `LeanNativeShell.Manifest`, and an
 executable named `ios-project` running it:
 
 ```lean
 -- NativeDemo/Project.lean
-import ElmShell.Manifest
-open ElmShell
+import LeanNativeShell.Manifest
+open LeanNativeShell
 
 def manifest : Manifest where
   name := "NativeDemo"                       -- project, target, scheme, product
   displayName := "Native Demo"
-  bundleId := "art.fralex.elmlean.nativedemo"
+  bundleId := "art.fralex.leannative.nativedemo"
   mac := .catalyst                           -- or .designedForiPad, or .none (the default)
   uses := ["auth", "keychain.*", "http.get", "ble.*", "bgtask.*"]
   usage := [("NSFaceIDUsageDescription", "Shows that a Lean app can ask for Face ID."),
             ("NSBluetoothAlwaysUsageDescription", "Shows that a Lean app can connect to a Bluetooth LE peripheral.")]
-  backgroundTasks := [("art.fralex.elmlean.nativedemo.refresh", .refresh),
-                      ("art.fralex.elmlean.nativedemo.processing", .processing)]
+  backgroundTasks := [("art.fralex.leannative.nativedemo.refresh", .refresh),
+                      ("art.fralex.leannative.nativedemo.processing", .processing)]
   uiTests := some {}                         -- sources: ["UITests"], bundle id + ".uitests"
 
 def main := manifest.main
@@ -178,8 +178,8 @@ its UI-test fixture, `ui-before`, and the entitlements of a team-signed run). An
 
 Where each key comes from:
 
-- **The framework, always**: the sources (`build/native-shell` as `ElmLeanShell`, `framework/native/c` as
-  `ElmLeanShim`, `build/lean-c` as `LeanC` at `-w`); `ELSceneDelegate` in `UIApplicationSceneManifest`,
+- **The framework, always**: the sources (`build/native-shell` as `LeanNativeShell`, `framework/native/c` as
+  `LeanNativeShim`, `build/lean-c` as `LeanC` at `-w`); `LNSceneDelegate` in `UIApplicationSceneManifest`,
   one scene; `UILaunchScreen`; `CLANG_ENABLE_OBJC_ARC` and `ENABLE_USER_SCRIPT_SANDBOXING`; Lean's headers
   (the app's toolchain's `include`, written under `$(HOME)` when it is there) and the shim's; the retargeted
   libraries (`LIBRARY_SEARCH_PATHS`, `OTHER_LDFLAGS`); `GCC_OPTIMIZATION_LEVEL` 3 and dead-code stripping;
@@ -221,23 +221,23 @@ Where each key comes from:
   `spec` is merged into the whole XcodeGen spec last (objects key by key, anything else replaced), so any
   XcodeGen option, target or scheme setting is still the app's to set.
 
-`make check` runs the manifest's tests (`lean/ElmLeanTest/Manifest.lean`): each family refused without its
+`make check` runs the manifest's tests (`lean/LeanNativeTest/Manifest.lean`): each family refused without its
 key and accepted with it, unknown capabilities, and the generated spec, escape hatches included.
 
-**`lean_initialize`.** Modules that import anything under `Lean` (ElmLean's JSON uses
+**`lean_initialize`.** Modules that import anything under `Lean` (LeanNative's JSON uses
 `Lean.Data.Json`) call `lean_initialize()` first. The toolchain's version starts the whole
 compiler, which an app neither needs nor links; the shim defines it as runtime start-up only.
 
-## The C interface (`c/elmlean_native.h`)
+## The C interface (`c/leannative.h`)
 
-`elmlean_boot` (once), `elmlean_start`, `elmlean_event(json)`, `elmlean_drain`,
-`elmlean_cap_result(json)`, `elmlean_wait`, `elmlean_system(json)`. Every reply is `{"seq","view","caps"}`: the view in the
+`leannative_boot` (once), `leannative_start`, `leannative_event(json)`, `leannative_drain`,
+`leannative_cap_result(json)`, `leannative_wait`, `leannative_system(json)`. Every reply is `{"seq","view","caps"}`: the view in the
 wire grammar of PROTOCOL.md and the capability requests queued since the last reply. Lean tasks post
-host answers into a mutex-guarded inbox; a shell thread blocks in `elmlean_wait` and the main actor
+host answers into a mutex-guarded inbox; a shell thread blocks in `leannative_wait` and the main actor
 drains. Threads Lean did not create are registered (`lean_initialize_thread`) on first use.
 
 **System events.** The shell reports what happens to the app, not to a control, through
-`elmlean_system`: `{"scene":"active"|"inactive"|"background"}` on every scene-phase change and
+`leannative_system`: `{"scene":"active"|"inactive"|"background"}` on every scene-phase change and
 `{"captured":true|false}` when screen recording or mirroring starts or stops,
 `{"bgtask":{"id":…,"kind":"refresh"|"processing"}}` when iOS launches one of the app's background tasks
 and `{"bgtaskExpired":{"id":…,"kind":…}}` when it expires one. The app's `App.system` turns each into a
@@ -260,7 +260,7 @@ before the store has started (a task launched early) starts it. The simulator re
 where Xcode's debugger launches a scheduled task with
 `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"…"]`.
 
-**Running the work: `ElmLean.Native.BackgroundRun`** (optional; import it). A `BackgroundRun` is one job
+**Running the work: `LeanNative.Native.BackgroundRun`** (optional; import it). A `BackgroundRun` is one job
 that may be expired at any moment: it linearizes start, expiry and the work's end under one lock,
 delivers its completion at most once (exactly once when started or expired), and, when expiry wins
 while the work runs, cancels the work (`IO.cancel` plus the app's `cancel` hook) and completes only after
@@ -270,12 +270,12 @@ running, and so does the wait for it. `BackgroundTasks` keeps the runs by identi
 on `{"bgtask":…}`, `expire fx id` on `{"bgtaskExpired":…}` (an expiry with no run is answered
 `bgtask.complete false` at once), each run answering `bgtask.complete` with its outcome;
 `BackgroundTasks.systemEvent?` reads both events. The module documentation states every race and
-failure case, and `ElmLeanTest/BackgroundRun.lean` (`make check`) tests each one with gates. native-demo
+failure case, and `LeanNativeTest/BackgroundRun.lean` (`make check`) tests each one with gates. native-demo
 runs iOS-launched tasks through it, and its headless selftest runs one run to completion and one past
 its deadline (verified on the iOS 27 simulator and under Mac Catalyst on arm64 and x86_64). These are
 tests, not proofs.
 
-## Capabilities (`lean/ElmShell/Capabilities.lean`)
+## Capabilities (`lean/LeanNativeShell/Capabilities.lean`)
 
 What only iOS can do, by name, for any app: `auth` (Face ID / passcode; a failure answers the `LAError` as
 `name` and `code` beside the system's text, so a cancellation is told from a denial), `build` (`{"debug":…}`: test hooks read their launch environment only in a Debug build, `#if DEBUG`), `keychain.get/set/add/delete/clear` (`clear` empties a service: a test namespace's reset; `add` creates an
@@ -334,7 +334,7 @@ entitlements blob of the code signature — and when they lack CloudKit or the c
 simulator, native-demo answers `missingEntitlement`; built with the entitlement it answers
 `{"status":"noAccount","user":null}` and a query `notAuthenticated`.)
 
-**Typed clients: `ElmLean.Native.Client.*`** (optional; import them). `Client.Auth`, `Client.Keychain`,
+**Typed clients: `LeanNative.Native.Client.*`** (optional; import them). `Client.Auth`, `Client.Keychain`,
 `Client.Http`, `Client.CloudKit` and `Client.Bluetooth` build each capability's arguments from a typed
 request and read its answer into a typed result or a `Client.Error`: `denied`, `cancelled`,
 `unsupported` (an unknown capability, the platform, a missing entitlement), `malformed` (never read as
@@ -342,14 +342,14 @@ a successful default) or `failed`, keeping the shell's error name, code, domain,
 `Keychain.add` is the only create-only operation, and it is the atomic `keychain.add`, never a read
 then a write. The raw `Effects.ask`/`cap` stay for everything else. The `name`/`code` of `auth`, the
 `status` of `keychain.get`, `keychain.add`, and the `code`/`domain` of `http.get` are additions to the
-answers above that leave every existing field as it was. `ElmLeanTest/Clients.lean` (`make check`) reads
-`ElmLeanTest/fixtures/clients.json`, written from this section and the capability table rather than from
+answers above that leave every existing field as it was. `LeanNativeTest/Clients.lean` (`make check`) reads
+`LeanNativeTest/fixtures/clients.json`, written from this section and the capability table rather than from
 the decoders, and checks that every capability it names is one the shell offers; native-demo's selftest
 calls them against the shell (iOS 27 simulator: `add` then `alreadyExists`, read, delete; Mac Catalyst
 ad-hoc: Keychain writes `unsupported`, -34018). The clients check what the shell answers, not what the
 platform did: the native side stays trusted.
 
-**Scoped effects: `ElmLean.Native.EffectScope`** (optional; import it). A scope is a part of the app's
+**Scoped effects: `LeanNative.Native.EffectScope`** (optional; import it). A scope is a part of the app's
 life whose effects end together (an open document, an account, a screen): the app `capture`s a token
 when work starts and `invalidate`s the scope when that part ends. Invalidation is monotonic; `spawn`
 checks the token and registers the task in one step, so a task either never starts or is cancelled and
@@ -358,7 +358,7 @@ drained by the invalidation that makes its token stale (`invalidateWithoutWaitin
 through `spawn`, answering `done`, `failed`, `denied`, `cancelled`, `error` or `stale` with the stage. A
 validity check does not make later I/O atomic with invalidation, and invalidation cannot undo an
 external effect that has started: the module documentation names the linearization points.
-`ElmLeanTest/EffectScope.lean` (`make check`) tests invalidation before a spawn, during registration (300
+`LeanNativeTest/EffectScope.lean` (`make check`) tests invalidation before a spawn, during registration (300
 racing rounds), while awaiting authentication, after the answer, during the work, repeatedly, late
 replies, failures and cancel-and-drain; `EffectScope.Model` proves only that the pure epoch rule leaves
 earlier tokens stale. native-demo's Face ID button runs in a scope that its going to the background ends.
@@ -388,23 +388,23 @@ permission (`recording.log` says why there is none). `export-evidence` refuses a
 platform and result bundle disagree, so a Catalyst run is never recorded as a simulator run or the
 reverse.
 
-`testkit/ELTest.{h,m}` are Objective-C helpers for any app's UI-test target, and only for it (a manifest
+`testkit/LNTest.{h,m}` are Objective-C helpers for any app's UI-test target, and only for it (a manifest
 with `uiTests` adds the directory to that target's sources, and to no other): the app
-never links XCTest. `ELElement` finds a node by the identifier the app gives it (`Html.identified`);
-`ELTap`, `ELType` (replaces a field's text), `ELWait`, `ELExpectDisabled` and `ELExpectMissing` check
-their preconditions first (the element appears, within `ELAppearTimeout`, scrolling for it if a list has
-not made it yet; it can be brought into view; it is enabled within `ELEnabledTimeout`) and, when one
-fails, record an XCTest failure at the caller's line and return NO without acting; `ELShot` attaches a
-screenshot and writes it only where an explicit `ELScreenshots` says (`inDirectory:`, `fromEnvironment:`,
-`attachmentsOnly`). `ELText` reads a label without the shell's zero-width wrap points; `ELPoll` and
-`ELScrollTo` are the building blocks.
+never links XCTest. `LNElement` finds a node by the identifier the app gives it (`Html.identified`);
+`LNTap`, `LNType` (replaces a field's text), `LNWait`, `LNExpectDisabled` and `LNExpectMissing` check
+their preconditions first (the element appears, within `LNAppearTimeout`, scrolling for it if a list has
+not made it yet; it can be brought into view; it is enabled within `LNEnabledTimeout`) and, when one
+fails, record an XCTest failure at the caller's line and return NO without acting; `LNShot` attaches a
+screenshot and writes it only where an explicit `LNScreenshots` says (`inDirectory:`, `fromEnvironment:`,
+`attachmentsOnly`). `LNText` reads a label without the shell's zero-width wrap points; `LNPoll` and
+`LNScrollTo` are the building blocks.
 
 | helper | iOS (device, simulator) | Mac Catalyst |
 |---|---|---|
-| `ELTap` | tap | click |
-| `ELScrollTo` (and the scrolling in the actions) | a drag in the middle of the screen | the scroll wheel over the window |
-| `ELType` | tap, delete the old text, type, then the shell's Done bar or return | click, Command-A, type (the field keeps focus) |
-| `ELElement`, `ELWait`, `ELExpect*`, `ELShot`, `ELText`, `ELPoll` | the same | the same |
+| `LNTap` | tap | click |
+| `LNScrollTo` (and the scrolling in the actions) | a drag in the middle of the screen | the scroll wheel over the window |
+| `LNType` | tap, delete the old text, type, then the shell's Done bar or return | click, Command-A, type (the field keeps focus) |
+| `LNElement`, `LNWait`, `LNExpect*`, `LNShot`, `LNText`, `LNPoll` | the same | the same |
 
 native-demo's `UITests/NativeDemoUITests.m` drives them against its real controls: a counter, text
 replacement and clearing, a control the view disables, missing and disabled controls (the failures are
@@ -465,7 +465,7 @@ A screen whose title changes is a new screen to the renderer: it starts scrolled
 
 ## What is trusted
 
-The shell (renderer, store, capabilities, C shim) — its Objective-C is printed by `elmshell`, and only
+The shell (renderer, store, capabilities, C shim) — its Objective-C is printed by `leannative-shell`, and only
 its agreement with the grammar is checked — Lean's compiler and runtime, the retargeted libraries, UIKit
 and the iOS and macOS platforms. The renderer's `path` of each control must match the tree's `children`
 order; that correspondence is tested by driving apps in the simulator, not proven.

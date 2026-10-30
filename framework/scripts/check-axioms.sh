@@ -1,8 +1,8 @@
 #!/bin/bash
-# Build an ElmLean Lake package (the framework or an app), then run its axiom gate and check the output:
+# Build a LeanNative Lake package (the framework or an app), then run its axiom gate and check the output:
 #
 #   framework/scripts/check-axioms.sh <package dir> <gate file, relative to the package>
-#   e.g.  framework/scripts/check-axioms.sh framework/lean ElmLean/Proofs.lean
+#   e.g.  framework/scripts/check-axioms.sh framework/lean LeanNative/Proofs.lean
 #         ../../framework/scripts/check-axioms.sh . MyApp/Gate.lean       (from an app's directory)
 #
 #   * the build log carries no "declaration uses `sorry`" warning (quote-agnostic pattern: Lean 4.35

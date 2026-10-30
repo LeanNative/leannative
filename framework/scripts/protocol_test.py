@@ -1,5 +1,5 @@
 #!/opt/homebrew/bin/python3
-"""Drive an ElmLean app's CLI over stdin/stdout and check it against PROTOCOL.md.
+"""Drive a LeanNative app's CLI over stdin/stdout and check it against PROTOCOL.md.
 
     protocol_test.py [--shape list] "<cli command>"
         e.g.  protocol_test.py --shape list path/to/app/.lake/build/bin/app-cli

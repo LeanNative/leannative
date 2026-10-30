@@ -1,9 +1,9 @@
-# ElmLean wire protocol (v1)
+# LeanNative wire protocol (v1)
 
-The backend is an app's CLI, a Lean 4 program built on `ElmLean.Cli.main` (or `ElmLean.CmdCli.main`)
+The backend is an app's CLI, a Lean 4 program built on `LeanNative.Cli.main` (or `LeanNative.CmdCli.main`)
 that owns the Elm architecture (`Model`, `Msg`, `update`, `view`). It speaks **newline-delimited
 JSON** over stdin/stdout, for the app's self-test and `framework/scripts/protocol_test.py`. The native
-shell on iOS speaks the same JSON through the C entry points of `ElmLean/Native.lean` (one event or
+shell on iOS speaks the same JSON through the C entry points of `LeanNative/Native.lean` (one event or
 answer per call), and its replies are the same: a view at `seq + 1`, or an error.
 
 ## Transport rules
@@ -42,7 +42,7 @@ answer per call), and its replies are the same: a view at `seq + 1`, or an error
   integer**. The rule is about the value, not the spelling: `1`, `1.0`, `1e0` and `10e-1` all
   denote 1 and are accepted; `1.5`, `-1`, `"1"`, `true` and `null` are `bad-json`. The CLI
   normalises by value deliberately: Lean's parser keeps `1` and `1.0` apart (mantissa/exponent
-  `⟨1,0⟩` vs `⟨10,1⟩`) and `ElmLean.Json.getNatValue?` accepts a spelling iff `10^exponent`
+  `⟨1,0⟩` vs `⟨10,1⟩`) and `LeanNative.Json.getNatValue?` accepts a spelling iff `10^exponent`
   divides the mantissa.
 * **Shell limits**: Lean's standard JSON parser materialises `10^N` for a literal
   with exponent `N` before the CLI ever sees the value, so a literal with an astronomically large
@@ -136,15 +136,15 @@ A control is *advertised* when the node at `path` accepts the event kind:
 | `toggle` | `toggle` |
 | anything else | none |
 
-**Guarantee (machine-checked in Lean, `ElmLean.Html.advertises_iff`):** for the
+**Guarantee (machine-checked in Lean, `LeanNative.Html.advertises_iff`):** for the
 view the CLI emitted, a `(path, event)` pair is advertised **iff** dispatching it
 yields a message. So a client that only fires advertised controls with the right
 `seq` never receives `bad-path` or `no-handler`.
 
 ## Commands (apps with commands)
 
-An app built as a `CmdApp` (`framework/lean/ElmLean/Cmd.lean`; the Send example) asks its host to do
-things. Its CLI (`ElmLean.CmdCli.main`) speaks everything above, plus:
+An app built as a `CmdApp` (`framework/lean/LeanNative/Cmd.lean`; the Send example) asks its host to do
+things. Its CLI (`LeanNative.CmdCli.main`) speaks everything above, plus:
 
 * **Every view reply carries `"cmds"`**, the commands that step asked for (possibly `[]`), in the JSON of
   Lean's derived `ToJson` for the app's `Cmd` type: `{"seq":n+1,"view":<node>,"cmds":[…]}`. The initial
