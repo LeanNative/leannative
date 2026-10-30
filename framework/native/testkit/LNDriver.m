@@ -13,7 +13,8 @@
 //   terminate
 //   exists {find, timeout} {"exists": bool}: whether it appears within the timeout (0: now)
 //   gone {find, timeout}   {"gone": bool}: whether it is absent, or disappears within the timeout
-//   tap {find}             the kit's checks first (appears, scrolled into view, enabled), then a tap (a click on the Mac)
+//   tap {find, times?}     the kit's checks first (appears, scrolled into view, enabled), then a tap (a click on the
+//                          Mac); `times` more than 1: then that many taps in all, without checking again
 //   type {find, text}      the same checks, then the field's text replaced
 //   text {find, timeout}   {"text": …}: its label or value, without zero-width spaces; an error if it never appears
 //   state {find}           {"exists", "enabled", "hittable"}, now
@@ -21,7 +22,8 @@
 //   shot {name, directory?} a screenshot attached to the test as `name`, and written to <directory>/<name>.png
 //   home, activate         (iOS) the Home button; the app brought back
 //   log {message}          into the test's log
-//   fail {message}         an XCTest failure with the host's message (the journey failed there)
+//   fail {message}         an XCTest failure with the host's message (the journey failed there), and a
+//                          screenshot attached ("journey failure")
 //   end
 //
 // An element (`find`): {"id": identifier} (any type), {"tab": title} (a tab bar button, the sidebar's item under
@@ -84,11 +86,13 @@ static NSNumber *LNBool(BOOL b) { return b ? @YES : @NO; }
 #if TARGET_OS_MACCATALYST
         return anywhere;
 #else
-        // the tab bar's button (a screen may also have a button with the tab's title); an app whose tabs are
-        // not a UITabBar (a sidebar, a custom bar) has none, so after a wait for either, the one anywhere
+        // the tab bar's button (a screen may also have a button with the tab's title, and a screen over the
+        // tabs hides the bar for a while); only an app with no tab bar at all (a sidebar, a custom bar) gets
+        // the one anywhere
         XCUIElement *bar = [app.tabBars.buttons matchingPredicate:named].firstMatch;
-        LNPoll(LNAppearTimeout, 0.25, ^BOOL{ return bar.exists || anywhere.exists; });
-        return bar.exists ? bar : anywhere;
+        XCUIElement *anyBar = app.tabBars.firstMatch;
+        LNPoll(LNAppearTimeout, 0.25, ^BOOL{ return bar.exists || (anywhere.exists && !anyBar.exists); });
+        return bar.exists || anyBar.exists ? bar : anywhere;
 #endif
     }
     if ([find[@"alert"] isKindOfClass:NSString.class]) {
@@ -133,6 +137,11 @@ static NSNumber *LNBool(BOOL b) { return b ? @YES : @NO; }
     if ([op isEqualToString:@"terminate"]) { [self.app terminate]; return @{@"ok": @YES}; }
     if ([op isEqualToString:@"log"]) { NSLog(@"journey: %@", command[@"message"]); return @{@"ok": @YES}; }
     if ([op isEqualToString:@"fail"]) {
+        // the screen as the journey failed, beside the failure
+        XCTAttachment *screen = [XCTAttachment attachmentWithScreenshot:XCUIScreen.mainScreen.screenshot];
+        screen.name = @"journey failure";
+        screen.lifetime = XCTAttachmentLifetimeKeepAlways;
+        [self addAttachment:screen];
         XCTFail(@"%@", command[@"message"]);
         return @{@"ok": @YES};
     }
@@ -160,7 +169,17 @@ static NSNumber *LNBool(BOOL b) { return b ? @YES : @NO; }
     }
     if ([op isEqualToString:@"tap"]) {
         NSString *why = LNTapElement(self.app, e, name);
-        return why ? @{@"ok": @NO, @"error": why} : @{@"ok": @YES};
+        if (why) return @{@"ok": @NO, @"error": why};
+        // `times`: the checks once, then plain taps (a stepper's many steps)
+        NSInteger times = [command[@"times"] respondsToSelector:@selector(integerValue)] ? [command[@"times"] integerValue] : 1;
+        for (NSInteger i = 1; i < times; i++) {
+#if TARGET_OS_MACCATALYST
+            [e click];
+#else
+            [e tap];
+#endif
+        }
+        return @{@"ok": @YES};
     }
     if ([op isEqualToString:@"type"]) {
         NSString *text = [command[@"text"] isKindOfClass:NSString.class] ? command[@"text"] : @"";

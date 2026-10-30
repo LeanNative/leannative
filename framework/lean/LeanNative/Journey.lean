@@ -149,8 +149,10 @@ def expectGone (f : Find) (within : Float := 1) : UI Unit := do
   unless ← gone? f within do failure s!"{f.describe} is still there after {within} s"
 
 /-- Taps (clicks, on the Mac) the element once it appears, is scrolled into view and is enabled; the journey fails
-if it never is (the test kit's checks: LNTest.h). -/
-def tap (f : Find) : UI Unit := discard <| request "tap" [("find", f.toJson)]
+if it never is (the test kit's checks: LNTest.h). `times`: that many taps, the checks made before the first (a
+stepper's steps). -/
+def tap (f : Find) (times : Nat := 1) : UI Unit :=
+  discard <| request "tap" ([("find", f.toJson)] ++ if times > 1 then [("times", toJson times)] else [])
 
 /-- Replaces the text of this field (the same checks as `tap`), then closes the keyboard. -/
 def type (f : Find) (text : String) : UI Unit := discard <| request "type" [("find", f.toJson), ("text", Json.str text)]
