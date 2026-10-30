@@ -7,7 +7,7 @@ set -euo pipefail
 
 VERSION="2.46.0"
 ARCHIVE_SHA256="4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
-ROOT="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/elmlean-xcodegen-$VERSION"
+ROOT="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/leannative-xcodegen-$VERSION"
 ARCHIVE="$ROOT/xcodegen.zip"
 BIN="$ROOT/xcodegen/bin/xcodegen"
 

@@ -1,9 +1,9 @@
-# A native-mode ElmLean app: full Lean, compiled to C and run inside the iOS app (see framework/native).
+# A native-mode LeanNative app: full Lean, compiled to C and run inside the iOS app (see framework/native).
 name = "nativedemo"
 defaultTargets = ["NativeDemo"]
 
 [[require]]
-name = "elmlean"
+name = "leannative"
 path = "../../framework/lean"
 
 [[lean_lib]]

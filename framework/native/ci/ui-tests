@@ -1,5 +1,5 @@
 #!/bin/bash
-# An ElmLean app's UI tests on a throwaway simulator, or as a Mac Catalyst app on this Mac, with a screen
+# A LeanNative app's UI tests on a throwaway simulator, or as a Mac Catalyst app on this Mac, with a screen
 # recording:
 #
 #   APP_DIR=… APP_ROOT=… SCHEME=… framework/native/ci/ui-tests [xcodebuild test arguments, e.g. -only-testing:…]

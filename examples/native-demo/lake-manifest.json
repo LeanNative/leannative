@@ -3,7 +3,7 @@
  "packages":
  [{"type": "path",
    "scope": "",
-   "name": "elmlean",
+   "name": "leannative",
    "manifestFile": "lake-manifest.json",
    "inherited": false,
    "dir": "../../framework/lean",

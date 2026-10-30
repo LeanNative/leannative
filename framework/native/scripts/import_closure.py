@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Print the modules (with their package dir) in the import closure of a root module, restricted to the
-given package source dirs (the app's and ElmLean's); toolchain modules (Init, Std, Lean) are skipped.
+given package source dirs (the app's and LeanNative's); toolchain modules (Init, Std, Lean) are skipped.
 usage: import_closure.py <Root.Module> <package dir>...   → lines "<package dir>\t<Module.Name>" """
 import os, re, sys
 root, pkgs = sys.argv[1], list(dict.fromkeys(sys.argv[2:]))

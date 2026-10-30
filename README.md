@@ -42,24 +42,39 @@ exercises the framework's controls and capabilities.
   remaining device and platform limitations. The reusable app workflow currently covers iOS builds
   and simulator tests; Mac Catalyst validation is documented separately.
 
-## Names: LeanNative and the ElmLean identifiers
+## Names, and migrating from the ElmLean names
 
 The project was called ElmLean until 2026-10-29, at [posix4e/elmlean](https://github.com/posix4e/elmlean);
 its home is now [LeanNative/leannative](https://github.com/LeanNative/leannative), with the same history
-and tags (`v0.1.0` is `ccbb1b4`). The code keeps its names, so existing apps build unchanged:
+and tags (`v0.1.0` is `ccbb1b4`). Its git source and the workflow's `uses:` must name `LeanNative/leannative`
+explicitly, because GitHub Actions does not follow repository redirects for reusable workflows. Issues moved
+from the old tracker are listed in [docs/ISSUES.md](docs/ISSUES.md).
 
-| Identifier | Stays |
-|---|---|
-| Lake package | `elmlean` (`[[require]] name = "elmlean"`, subDir `framework/lean`) |
-| Libraries and namespaces | `ElmLean`, `ElmLean.*`, `ElmShell` |
-| Executable | `lake exe elmshell` |
-| Shell symbols | `elmlean_*` C entry points, `EL*` Objective-C classes |
-| Reusable workflow input | `elmlean: <commit>` |
+Until v0.2.0 the code kept the old names. v0.2.0 renames them:
 
-Only the repository path changes for an app: its git source and the workflow's `uses:` must name
-`LeanNative/leannative` explicitly, because GitHub Actions does not follow repository redirects for
-reusable workflows. Renaming the identifiers would be a separate, versioned migration. Issues moved from
-the old tracker are listed in [docs/ISSUES.md](docs/ISSUES.md).
+| Identifier | Before v0.2.0 | From v0.2.0 | Old name still works |
+|---|---|---|---|
+| Lake package | `elmlean` | `leannative` | no: Lake matches a `require` by the package's name |
+| Libraries, modules, namespaces | `ElmLean`, `ElmLean.*`, `ElmShell` | `LeanNative`, `LeanNative.*`, `LeanNativeShell` | no: Lean has no namespace aliases |
+| Shell printer | `lake exe elmshell` | `lake exe leannative-shell` | no |
+| Reusable workflow input | `elmlean: <commit>` | `leannative: <commit>` | until v0.3.0 |
+| Scripts' directory in CI | `$ELMLEAN_CI` | `$LEANNATIVE_CI` | until v0.3.0 (both are set) |
+| UI-test kit | `ELTest.h`, `EL*` | `LNTest.h`, `LN*` | until v0.3.0 (`ELTest.h` defines the old names) |
+| Debug snapshot hook | `ELMLEAN_SNAPSHOT` | `LEANNATIVE_SNAPSHOT` | until v0.3.0 (read when the new one is unset) |
+| Generated shell | `ElmLeanShell.h`, `EL*` classes, `elmlean_native.h`, `elmlean_*`, `elm_app_initialize` | `LeanNativeShell.h`, `LN*` classes, `leannative.h`, `leannative_*`, `leannative_app_initialize` | generated with the app, so nothing to change unless the app's own code names them |
+| Xcode groups (from a manifest) | `ElmLeanShell`, `ElmLeanShim`, `ElmLeanTestKit` | `LeanNativeShell`, `LeanNativeShim`, `LeanNativeTestKit` | generated |
+
+An app moves to v0.2.0 in one change:
+
+1. `lakefile.toml`: `[[require]] name = "leannative"` (the git source, `rev` and `subDir` stay), then
+   `lake update leannative`, or in `lake-manifest.json` rename the package to `leannative` and set its `rev`
+   and `inputRev`. The old checkout under `.lake/packages/elmlean` can be deleted.
+2. Lean sources: `perl -pi -e 's/ElmLean/LeanNative/g; s/ElmShell/LeanNativeShell/g' $(git ls-files '*.lean')`
+   (imports, `open`s and qualified names).
+3. Scripts and docs: `.lake/packages/elmlean` becomes `.lake/packages/leannative`, `lake exe elmshell`
+   becomes `lake exe leannative-shell`.
+4. CI: `leannative: <commit>` in the workflow's `with:`, and `$LEANNATIVE_CI` in commands.
+5. UI tests: `#import "LNTest.h"` and the `LN*` names (`ELTest.h` keeps the old ones compiling until v0.3.0).
 
 ## From Lean to a native app
 
@@ -69,38 +84,38 @@ app and framework; the native build links it with Lean's runtime and the shared 
 ```
         your app: Model · Msg · update · view : Model → Html Msg · cmds · perform · theorems
                                     │
-                     lake build ──► the app and ElmLean as C (.lake/build/ir)
+                     lake build ──► the app and LeanNative as C (.lake/build/ir)
                                     │
      framework/native/scripts/ios_lean_sources.sh: the C of the app's import closure, Lean's runtime
                                     │  retargeted to iOS / Mac Catalyst, and the shell printed from Lean
-                                    ▼                  (`lake exe elmshell`, checked against the grammar)
+                                    ▼                  (`lake exe leannative-shell`, checked against the grammar)
       Xcode (XcodeGen, from the app's Lean manifest): one iOS / Mac Catalyst app, no Swift
 ```
 
 ## What an app is
 
-**The UI language.** `Html msg` (`framework/lean/ElmLean/Html.lean`): text, rows and columns, buttons,
+**The UI language.** `Html msg` (`framework/lean/LeanNative/Html.lean`): text, rows and columns, buttons,
 fields and inputs, toggles, lists and sections, screens with toolbars, tabs, sheets, alerts, pickers,
 steppers, QR codes, share sheets, bundled pages and more. Because `view : Model → Html Msg` is typed, a
 view can only emit messages `update` handles: Elm's core guarantee, from the type checker.
 
 **Commands.** `cmds : Msg → Model → List Cmd` are the commands a message asks for, in the same pre-state
-`update` sees; `host : Host → Msg` is the only way an answer enters the app (`ElmLean/Cmd.lean`). In
+`update` sees; `host : Host → Msg` is the only way an answer enters the app (`LeanNative/Cmd.lean`). In
 native mode the app runs its own commands: `perform : Cmd → Effects Host → IO Unit`
-(`ElmLean/Native.lean`) may start Lean tasks (TCP over Lean's libuv, files, timers) that answer with
+(`LeanNative/Native.lean`) may start Lean tasks (TCP over Lean's libuv, files, timers) that answer with
 `post` from any thread, or ask the shell for a capability with `cap`. The app registers itself in its
-root module: `initialize ElmLean.Native.register app`.
+root module: `initialize LeanNative.Native.register app`.
 
 **Capabilities.** What only the platform can do, by name, for any app: device authentication, the
 Keychain (device-only and iCloud), clipboard, paths and file protection, HTTPS (with SOCKS5), opening
 URLs, background tasks, CloudKit, and Bluetooth LE ([framework/native/README.md](framework/native/README.md)).
 
-**The proofs.** A `Spec app` (`ElmLean/Spec.lean`) is three obligations: `init_inv` (your invariant holds
+**The proofs.** A `Spec app` (`LeanNative/Spec.lean`) is three obligations: `init_inv` (your invariant holds
 initially), `update_inv` (every message preserves it) and `view_sat` (every handler in the view of a
 model with the invariant yields a message satisfying your `Target`). `CmdSpec` is the same for an app with
 commands. The framework turns those into guarantees about every session:
 
-| Theorem (namespace `ElmLean`) | Guarantee, for any app |
+| Theorem (namespace `LeanNative`) | Guarantee, for any app |
 |---|---|
 | `Html.advertises_iff` | A `(path, event)` pair is advertised by the wire tree **iff** dispatching it on the real view yields a message. Nothing un-advertised can trigger anything. |
 | `Html.Sat.dispatch`, `Html.Sat.of_forall` | If every handler satisfies a predicate, so does every dispatched message. |
@@ -116,17 +131,17 @@ and testing requirements, described below.
 **The gate.** A gate file lists the theorems an app advertises and scans the rest:
 
 ```lean
-import ElmLean.Gate
+import LeanNative.Gate
 import Notes.Proofs
 #assert_axioms Notes.update_inv
-#assert_all_axioms ElmLean Notes
+#assert_all_axioms LeanNative Notes
 ```
 
 `#assert_axioms` fails the build if a theorem depends on anything beyond `propext`, `Quot.sound` and
 `Classical.choice`, so a `sorry` cannot hide; `framework/scripts/check-axioms.sh` also greps the build log
 for `sorry` warnings in definitions.
 
-**The CLI.** `ElmLean.Cli.main app` / `ElmLean.CmdCli.main app` make an app a command-line program that
+**The CLI.** `LeanNative.Cli.main app` / `LeanNative.CmdCli.main app` make an app a command-line program that
 speaks the wire protocol ([PROTOCOL.md](PROTOCOL.md)) on stdin/stdout: `selftest` explores the app from its
 initial model and re-checks at run time what the theorems state, and `framework/scripts/protocol_test.py`
 drives it. It is the same `update`/`view`, run without the phone.
@@ -134,17 +149,17 @@ drives it. It is the same `update`/`view`, run without the phone.
 ## Building an app for iOS and macOS
 
 ```bash
-APP_DIR=my-app APP_ROOT=MyApp SCHEME=MyApp .lake/packages/elmlean/framework/native/ci/build-ios Debug iossim
+APP_DIR=my-app APP_ROOT=MyApp SCHEME=MyApp .lake/packages/leannative/framework/native/ci/build-ios Debug iossim
 ```
 
 `build-ios` takes `iossim`, `ios` or `maccatalyst`. It builds the app with Lake, gathers its C and Lean's
 retargeted libraries (`ios_lean_sources.sh`), and generates the Xcode project from the app's manifest: a
-Lean `ElmShell.Manifest` (name, bundle id, team, version, the capabilities the app uses with their usage
+Lean `LeanNativeShell.Manifest` (name, bundle id, team, version, the capabilities the app uses with their usage
 texts, background tasks, iCloud containers, the UI tests), printed as an XcodeGen spec by the app's
 `lake exe ios-project` (see `examples/native-demo/NativeDemo/Project.lean`). The framework supplies the
 shell's sources, Lean's headers and libraries and the scene delegate; generation refuses a manifest that
 uses a capability without the Info.plist key or entitlement it needs. The app's `ios/` holds only its icon
-and UI tests. [The native guide](framework/native/README.md#the-xcode-project-from-a-lean-manifest-leanelmshellmanifestlean)
+and UI tests. [The native guide](framework/native/README.md#the-xcode-project-from-a-lean-manifest-leannativeshellmanifestlean)
 lists which keys come from where.
 
 Prerequisites on a Mac with Xcode: `elan` (the toolchain is pinned per package by `lean-toolchain`) and
@@ -177,7 +192,7 @@ jobs:
   app:
     uses: LeanNative/leannative/.github/workflows/ios-app.yml@<commit>
     with:
-      elmlean: <commit>            # the same commit; checked against the app's lake-manifest.json
+      leannative: <commit>            # the same commit; checked against the app's lake-manifest.json
       lean-packages: Lean LeanApp
       app-dir: LeanApp
       app-root: MyApp
@@ -207,8 +222,8 @@ Publishing the output is the app's: an `after-ui` hook can call the exporter and
 |---|---|---|
 | Framework properties of `Html`, `Wire`, `toWire`, `dispatch`, `Session`, `Spec`, and `CmdSpec` | **Proven** | the framework's proof gate |
 | An app's `update`/`view`/`cmds` | Application-specific | the app's supplied invariants, proofs, and proof gate; using the framework alone does not prove them |
-| JSON codecs, the CLI loop, `ElmLean.Native` (the C entry points), the native support modules (`ElmLean.Native.*`) | Trusted, tested | `selftest`; `protocol_test.py`, itself validated against `framework/scripts/fake_cli.py`, an independent implementation of the protocol |
-| The shell's agreement with the UI grammar (node decoding, dispatch, enums, events) | Checked as it builds | `ElmShell/Check.lean`: the kernel and the build evaluate every row against `Wire.toJson` and `Event.fromJson?` |
+| JSON codecs, the CLI loop, `LeanNative.Native` (the C entry points), the native support modules (`LeanNative.Native.*`) | Trusted, tested | `selftest`; `protocol_test.py`, itself validated against `framework/scripts/fake_cli.py`, an independent implementation of the protocol |
+| The shell's agreement with the UI grammar (node decoding, dispatch, enums, events) | Checked as it builds | `LeanNativeShell/Check.lean`: the kernel and the build evaluate every row against `Wire.toJson` and `Event.fromJson?` |
 | The shell itself (renderer, store, capabilities, C shim) and the retargeted libraries | Trusted, driven in the simulator and under Mac Catalyst | the apps' UI tests |
 | An app's `perform` | the app's | that app's own tests |
 | Lean's compiler and runtime, UIKit, iOS, and macOS | Trusted | — |
@@ -223,12 +238,12 @@ docs/ISSUES.md              issues moved from posix4e/elmlean
   ios-app.yml               the reusable CI workflow for an app
   check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst, its UI tests on both)
 framework/
-  lean/                     Lake package `elmlean`
-    ElmLean/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,
+  lean/                     Lake package `leannative`
+    LeanNative/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,
                             Native (trusted shell); Gate; Proofs/ and Proofs.lean (the framework's gate);
                             Native/ (optional native support: BackgroundRun, the typed capability clients, EffectScope)
-    ElmLeanTest/            the native support modules' tests and fixtures (`make check`)
-    ElmShell/               the native shell as Lean data; `lake exe elmshell <dir>` prints its Objective-C
+    LeanNativeTest/            the native support modules' tests and fixtures (`make check`)
+    LeanNativeShell/               the native shell as Lean data; `lake exe leannative-shell <dir>` prints its Objective-C
   native/                   README (the shell, capabilities, Mac Catalyst, UI tests), c/ (the C shim), scripts/
                             (ios_lean_sources.sh, retarget_ar.py, …), ci/ (the workflow's scripts),
                             testkit/ (Objective-C XCTest helpers for an app's UI-test target only)

@@ -1,6 +1,6 @@
 {"version": "1.3.0",
  "packagesDir": ".lake/packages",
  "packages": [],
- "name": "elmlean",
+ "name": "leannative",
  "lakeDir": ".lake",
  "fixedToolchain": false}

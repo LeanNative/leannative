@@ -1,4 +1,4 @@
-# The ElmLean framework's own checks; the root Makefile runs them.
+# The LeanNative framework's own checks; the root Makefile runs them.
 #   make check         build · axiom gate · protocol harness against the fake CLI · native support tests (the
 #                      manifest's too) ·
 #                      the CI scripts' tests (export-evidence)
@@ -11,13 +11,13 @@ build:
 	cd lean && lake build
 
 axioms:
-	scripts/check-axioms.sh lean ElmLean/Proofs.lean
+	scripts/check-axioms.sh lean LeanNative/Proofs.lean
 
 # The harness itself is validated against an independent stdlib implementation of the protocol.
 protocol-fake:
 	$(PY) -I scripts/protocol_test.py --shape list "$(FAKE)"
 
-# The optional native support modules (ElmLean/Native/*), headless: BackgroundRun's lifecycle, the typed
+# The optional native support modules (LeanNative/Native/*), headless: BackgroundRun's lifecycle, the typed
 # clients against wire fixtures, EffectScope's invalidation, and the app manifest's checks and spec.
 native-support:
 	cd lean && lake build background-run-test clients-test effect-scope-test manifest-test && .lake/build/bin/background-run-test \
