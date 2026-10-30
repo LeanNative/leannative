@@ -46,6 +46,7 @@ def Request.args (r : Request) : Json :=
        ("socks", r.socks.map fun (h, p) => Json.mkObj [("host", Json.str h), ("port", toJson p)])]
 
 def named : List String := ["bad-url", "bad-proxy", "tooLarge", "response"]
+  ++ ["bad-method", "bad-headers", "bad-body", "bad-size"]
 
 def decode (j : Json) : Result Response := do
   match ← optString j "error" with

@@ -1,6 +1,7 @@
 import LeanNative.Native.Client.Auth
 import LeanNative.Native.Client.Keychain
 import LeanNative.Native.Client.Http
+import LeanNative.Native.Client.HttpRequest
 import LeanNative.Native.Client.CloudKit
 import LeanNative.Native.Client.Bluetooth
 import LeanNativeShell.Capabilities
@@ -64,6 +65,8 @@ def cases : List (String × Case) := [
                                socks := some ("127.0.0.1", 9050) })
     fun r => Json.mkObj [("status", toJson r.status), ("body", Json.str (hexOf r.body))]),
   ("http.get.plain", .of (Http.get { url := "https://example.com/" })
+    fun r => Json.mkObj [("status", toJson r.status), ("body", Json.str (hexOf r.body))]),
+  ("http.request", .of (Http.send ({ url := "https://example.com/api/login", httpMethod := "POST", headers := [("Content-Type", "application/json")], body := some "{}".toUTF8 } : Http.SendRequest))
     fun r => Json.mkObj [("status", toJson r.status), ("body", Json.str (hexOf r.body))]),
   ("cloudkit.account", .of (CloudKit.account (some "iCloud.org.example.app")) fun a =>
     let status := match a.status with

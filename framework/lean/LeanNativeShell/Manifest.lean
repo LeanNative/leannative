@@ -85,6 +85,9 @@ structure Manifest where
   icon : Option String := none
   /-- files bundled as resources, relative to `ios/` -/
   resources : List String := []
+  /-- App-owned native source files, relative to `ios/`. Useful for a staged port of an existing
+  library; the generated Lean C and shared shell remain in the target. -/
+  nativeSources : List String := []
   /-- the shell capabilities the app calls: names (`auth`) or families (`ble.*`) of `LeanNativeShell.capabilities` -/
   uses : List String := []
   /-- capability families the app calls without listing them in `uses`, on purpose: their requirements are
@@ -217,6 +220,7 @@ def Manifest.project (m : Manifest) (p : Paths) : Json :=
     [Json.mkObj [("path", Json.str s!"{p.build}/native-shell"), ("name", "LeanNativeShell")],
      Json.mkObj [("path", Json.str s!"{p.native}/c"), ("name", "LeanNativeShim")],
      Json.mkObj [("path", Json.str s!"{p.build}/lean-c"), ("name", "LeanC"), ("compilerFlags", strs ["-w"])]] ++
+    m.nativeSources.map (fun s => Json.mkObj [("path", Json.str s)]) ++
     m.resources.map (fun r => Json.mkObj [("path", Json.str r), ("buildPhase", "resources")]) ++
     m.icon.toList.map (fun i => Json.mkObj [("path", Json.str i)])
   let entitlements := m.entitlementsPlist

@@ -349,6 +349,16 @@ calls them against the shell (iOS 27 simulator: `add` then `alreadyExists`, read
 ad-hoc: Keychain writes `unsupported`, -34018). The clients check what the shell answers, not what the
 platform did: the native side stays trusted.
 
+`http.request` uses the same ephemeral session and redirect policy as `http.get`. It accepts GET, POST,
+PUT, PATCH and DELETE, string headers, and an optional hex-encoded body of at most 1 MiB. The typed
+client is `LeanNative.Native.Client.Http.send`, in its own module
+(`LeanNative.Native.Client.HttpRequest`, so an app importing `Http` for `get` alone need not list
+`http.request` in `uses`); applications supply their own authentication headers. `app.invoke` calls an
+optional app-owned Objective-C class named `LeanNativeAppCapabilities` with the class method
+`run:answer:`. It is useful for a staged port of an existing native library: the app declares the
+capability in `uses`, adds its bridge through `Manifest.nativeSources`, and can keep the model and views
+in Lean while moving the library a module at a time. Without the class, the shell answers `unsupported`.
+
 **Scoped effects: `LeanNative.Native.EffectScope`** (optional; import it). A scope is a part of the app's
 life whose effects end together (an open document, an account, a screen): the app `capture`s a token
 when work starts and `invalidate`s the scope when that part ends. Invalidation is monotonic; `spawn`
