@@ -7,7 +7,8 @@
 # `lake build <APP_ROOT>`, then ios_lean_sources.sh (the C, the retargeted libraries, the printed shell) into
 # $OUT, then the Xcode project, then xcodebuild. The project comes from the app's manifest: `lake exe
 # ios-project` (an executable of the app package whose main is ElmShell.Manifest.main) writes its XcodeGen
-# spec to $OUT/project.json, and XcodeGen generates the project into $IOS_DIR with $IOS_DIR as its root. An
+# spec to $OUT/project.json, and XcodeGen generates the project into $IOS_DIR with $IOS_DIR as its root;
+# given $OUT/lean-c, it also refuses a capability the app's C names that the manifest's `uses` does not list. An
 # app with a hand-kept $IOS_DIR/project.yml instead gets XcodeGen on that file, as it is. A device build
 # without xcodebuild arguments is unsigned (CODE_SIGNING_ALLOWED=NO); pass signing settings to sign it.
 #
@@ -54,7 +55,7 @@ else
   case "$LEAN_INCLUDE" in "$HOME"/*) LEAN_INCLUDE="\$(HOME)/${LEAN_INCLUDE#"$HOME"/}" ;; esac
   OUT_ABS="$(cd "$OUT" && pwd)"
   (cd "$APP_DIR" && lake exe ios-project "$OUT_ABS/project.json" --native "$(rel "$NATIVE")" --build "$(rel "$OUT_ABS")" \
-    --lean-include "$LEAN_INCLUDE")
+    --lean-include "$LEAN_INCLUDE" --lean-c "$OUT_ABS/lean-c")
   "$XCODEGEN" generate --quiet --spec "$OUT_ABS/project.json" --project-root "$IOS_DIR" --project "$IOS_DIR"
 fi
 [ "${PREPARE_ONLY:-0}" = 1 ] && exit 0

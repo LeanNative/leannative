@@ -200,9 +200,18 @@ Where each key comes from:
   | `cloudkit.*` | the `com.apple.developer.icloud-services` entitlement holding `CloudKit`, and an `icloud-container-identifiers` one |
   | anything else (`keychain.*`, `http.get`, `clipboard.*`, …) | nothing |
 
-  The check reads the generated plists, so a key set through `info` or `entitlements` counts. It checks what
-  the manifest says the app uses, not the app's code: an app that calls a capability it does not list is not
-  caught (native-demo leaves `cloudkit.*` out on purpose, to show the shell's `missingEntitlement` answer).
+  The check reads the generated plists, so a key set through `info` or `entitlements` counts.
+
+  `uses` is checked against the app's code too. build-ios hands generation the C Lean wrote for the app's
+  import closure (`build/lean-c`, `--lean-c`), and every capability the shell has is looked for there as a
+  string literal: a call names its capability as a string (`{ capability := "ble.connect", … }` in the typed
+  clients, or the name an app passes itself), and Lean writes it into the C as it is. A capability the C
+  names whose family `uses` does not cover is refused, naming the capability and its file. An entry of
+  `uses` that nothing in the C covers is a warning only. A module the app imports but never calls still
+  counts, so the check can ask for one entry too many, never one too few; a name built at run time
+  (`"ble." ++ op`) is not seen. `unlisted` names families the app calls on purpose without their
+  requirements: native-demo calls `cloudkit.*` with no iCloud container, to show the shell's
+  `missingEntitlement` answer.
 - **The app**: `name`, `displayName`, `bundleId`, `team` (`DEVELOPMENT_TEAM`, signed automatically),
   `version` (`.fixed short build` into Info.plist, or `.settings marketing current`: `MARKETING_VERSION` and
   `CURRENT_PROJECT_VERSION`, which a release overrides with xcodebuild arguments), `deploymentTarget`

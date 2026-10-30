@@ -69,6 +69,29 @@ def main : IO UInt32 := do
   refused "a name with a space" { base with name := "My App" } "name"
   refused "every problem at once" { base with uses := ["auth", "ble.*"] } "NSBluetoothAlwaysUsageDescription"
 
+  -- what the app's code calls (#24): Lean's C names a capability as a string literal, in quotes
+  let c (file text : String) : String × String := (file, text)
+  let demo := [c "App_Probes.c" "x = lean_mk_string_unchecked(\"ble.connect\", 11, 11);",
+               c "App_Main.c" "static const char l_k[] = \"keychain.get\"; y = \"authenticationFailure\";",
+               c "App_Cloud.c" "z = lean_mk_string_unchecked(\"cloudkit.account\", 16, 16);"]
+  let calls := calledIn demo
+  check "calls: each name the C quotes, with its file" (calls == [("keychain.get", "App_Main.c"),
+    ("ble.connect", "App_Probes.c"), ("cloudkit.account", "App_Cloud.c")]) s!"{calls}"
+  check "calls: a longer literal is not a call" (!(calls.any (·.1 == "auth")))
+  check "calls: a name outside quotes is not a call" ((calledIn [c "A.c" "// ble.close keychain.get"]).isEmpty)
+  let ok : Manifest := { base with uses := ["keychain.*", "ble.connect"], unlisted := ["cloudkit.*"] }
+  check "calls: covered by a family, a name and unlisted" (ok.callProblems calls).isEmpty s!"{ok.callProblems calls}"
+  let missing := { ok with unlisted := [] }.callProblems calls
+  check "calls: a family the app calls but does not list is refused, naming the capability and file"
+    (missing.length == 1 && missing.any (fun p => p.contains "cloudkit.account" && p.contains "App_Cloud.c"))
+    s!"{missing}"
+  let twoBle := calledIn [c "A.c" "\"ble.connect\" \"ble.close\""]
+  check "calls: one problem per family" (({ base with uses := [] }.callProblems twoBle).length == 1)
+  check "calls: a name does not cover its family" (({ base with uses := ["ble.connect"] }.callProblems twoBle).any (·.contains "ble.close"))
+  check "unused: an entry no call covers" ({ ok with uses := ok.uses ++ ["clipboard.*", "auth"] }.unusedUses calls == ["clipboard.*", "auth"])
+  check "unused: none when every entry is called" (ok.unusedUses calls).isEmpty
+  refused "an unknown unlisted capability" { base with unlisted := ["nfc.*"] } "nfc.*"
+
   -- the spec
   let m : Manifest := { base with
     mac := .catalyst, uses := ["bgtask.*"], team := some "TEAM123", version := .settings "1.2.3" "45",

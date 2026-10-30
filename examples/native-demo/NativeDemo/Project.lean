@@ -10,9 +10,10 @@ def manifest : Manifest where
   displayName := "Native Demo"
   bundleId := "art.fralex.elmlean.nativedemo"
   mac := .catalyst
-  -- not cloudkit.*: the Probes tab calls it without an iCloud container on purpose, to show the shell's
-  -- missingEntitlement answer (listing it would rightly ask for iCloudContainers)
   uses := ["auth", "keychain.*", "http.get", "ble.*", "bgtask.*"]
+  -- the Probes tab calls cloudkit.* without an iCloud container on purpose, to show the shell's
+  -- missingEntitlement answer (listing it in uses would rightly ask for iCloudContainers)
+  unlisted := ["cloudkit.*"]
   usage := [
     ("NSFaceIDUsageDescription", "Shows that a Lean app can ask for Face ID."),
     -- asked only when NATIVEDEMO_BLE_SERVICE is set at launch (the Probes tab's Bluetooth section)
