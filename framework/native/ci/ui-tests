@@ -30,8 +30,8 @@
 #   UI_AFTER        a command run as `$UI_AFTER <UI_OUT> <simulator>` when the run ends, passed or not, while
 #                   the simulator still exists: collect the app's files, stop the fixture (under Mac Catalyst
 #                   the second argument is empty)
-#   UI_JOURNEY      the app's journeys (LeanNative.Journey): an executable run on this Mac as
-#                   `$UI_JOURNEY <UI_OUT>` once UI_BEFORE has run, with test-env's KEY=VALUE lines in its
+#   UI_JOURNEY      the app's journeys (LeanNative.Journey): an executable (and journey names, to run only
+#                   those) run on this Mac as `$UI_JOURNEY <UI_OUT>` once UI_BEFORE has run, with test-env's KEY=VALUE lines in its
 #                   environment. It listens on 127.0.0.1 and writes the port to <UI_OUT>/driver-port; xcodebuild
 #                   then runs the kit's driver alone (-only-testing:$UI_JOURNEY_TARGET/LNDriver/testDrive, the
 #                   target defaulting to <SCHEME>UITests), which carries out the journeys' steps. Its output is

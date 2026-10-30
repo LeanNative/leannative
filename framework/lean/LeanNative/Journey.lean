@@ -242,15 +242,17 @@ private def accept (server : TCP.Socket.Server) (waitMs : Nat) : IO TCP.Socket.C
   failure "unreachable"
 
 /-- An app's journey executable: `main := Journey.main [j₁, j₂, …]`, run by framework/native/ci/ui-tests as
-`<exe> <evidence dir> [journey names…]` (all of them when no name is given). It listens on 127.0.0.1, writes the
+`<exe> [journey names…] <evidence dir>` (all of them when no name is given; UI_JOURNEY="<exe> <name>" runs one). It listens on 127.0.0.1, writes the
 port to `<dir>/driver-port`, waits for the driver (LEANNATIVE_DRIVER_WAIT seconds, default 3600: xcodebuild
 builds the tests first), runs the journeys in order (one that fails is reported to the driver as a test failure,
 and the next still runs), and writes `<dir>/journeys.json`. 1 if any failed. -/
 def main (journeys : List Journey) (args : List String) : IO UInt32 := do
-  let (dir :: names) := args
-    | IO.eprintln "usage: <journeys> <evidence directory> [journey names…]"; return 2
+  let some dir := args.getLast?
+    | IO.eprintln "usage: <journeys> [journey names…] <evidence directory>"; return 2
+  let names := args.dropLast
   let chosen := if names.isEmpty then journeys else journeys.filter (names.contains ·.name)
-  if chosen.isEmpty then IO.eprintln s!"no journey named {names}"; return 2
+  if let some unknown := names.find? (fun n => !journeys.any (·.name == n)) then
+    IO.eprintln s!"no journey named {unknown}: {journeys.map (·.name)}"; return 2
   let dir : System.FilePath := dir
   IO.FS.createDirAll dir
   let shots := dir / "screenshots"
@@ -264,7 +266,8 @@ def main (journeys : List Journey) (args : List String) : IO UInt32 := do
   IO.FS.rename (dir / "driver-port.tmp") (dir / "driver-port")
   say s!"journeys: listening on 127.0.0.1:{port}"
   let waitSecs := ((← IO.getEnv "LEANNATIVE_DRIVER_WAIT").bind String.toNat?).getD 3600
-  let socket ← accept server (waitSecs * 1000)
+  let .ok socket ← (accept server (waitSecs * 1000)).toBaseIO
+    | say s!"journeys: the driver did not connect within {waitSecs} s (did xcodebuild run LNDriver/testDrive? xcodebuild.log)"; return 1
   let d : Driver := { socket, pending := ← IO.mkRef .empty, screenshots := some shots.toString }
   let mut results : Array Json := #[]
   let mut failed := 0
