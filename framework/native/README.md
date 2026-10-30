@@ -20,7 +20,10 @@ scripts/ios_lean_sources.sh ─────────────┤ copies th
                                          │ runs `lake exe elmshell build/native-shell`: the shell's
                                          │ Objective-C (renderer, store, capabilities), printed from Lean
                                          ▼
-Xcode project (project.yml):  build/native-shell  +  c/ (shim)  +  build/lean-c
+                                         │ runs `lake exe ios-project build/project.json`: the XcodeGen
+                                         │ spec, from the app's Lean manifest (below)
+                                         ▼
+Xcode project (XcodeGen):     build/native-shell  +  c/ (shim)  +  build/lean-c
                               linked with -lLean -lStd -lInit -lleanrt -luv -lgmp -lc++ (build/lib)
 ```
 
@@ -50,7 +53,7 @@ scene-based (`UIApplicationSceneManifest` names `ELSceneDelegate`); a scene save
 build of an app comes back with SwiftUI's own scene delegate, which draws nothing, and is adopted, so an update does not open on an empty
 window. Text is not selectable (SwiftUI's `textSelection`); the apps have explicit Copy buttons.
 
-The C is compiled at `-O3` in every configuration (`GCC_OPTIMIZATION_LEVEL: 3` in project.yml):
+The C is compiled at `-O3` in every configuration (`GCC_OPTIMIZATION_LEVEL: 3`, from the manifest):
 Lean builds its own C that way, and at Xcode's Debug `-O0` heavy Lean code (key derivation, hashing)
 runs about ten times slower.
 
@@ -82,7 +85,8 @@ framework/native/scripts/ios_lean_sources.sh <app> <Root> <app>/ios/build maccat
 SHA-256 `0b43be5c7ecfb36016566a41005ab62bdb04743e6bfd5837e45f796ef4750b4e`, GitHub's published digest; a
 new toolchain needs its checksum added to the script.) The script refuses a prefix whose `version.h`
 differs from the toolchain's in anything but the platform, retargets both architectures to platform 6 and
-`lipo`s them, so `-lLean … -lgmp` and `LIBRARY_SEARCH_PATHS` stay as they are. The app's project.yml adds
+`lipo`s them, so `-lLean … -lgmp` and `LIBRARY_SEARCH_PATHS` stay as they are. The app's manifest says
+`mac := .catalyst`, which sets
 
 ```yaml
 SUPPORTS_MACCATALYST: YES
@@ -91,7 +95,7 @@ SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
 "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"             # ad-hoc, to run locally; a team identity to ship
 ```
 
-and builds with `-destination 'generic/platform=macOS,variant=Mac Catalyst'` (both architectures; the app
+(the UI-test target gets the same, but for the bundle id), and builds with `-destination 'generic/platform=macOS,variant=Mac Catalyst'` (both architectures; the app
 is at `…/Debug-maccatalyst/<App>.app`, its executable under `Contents/MacOS`). The generated C and the shim
 have no architecture assumptions. Under Catalyst the window is resizable down to 390×640 points
 (`sizeRestrictions`), and the privacy cover goes up only in the background: a Mac window is inactive
@@ -130,6 +134,86 @@ person runs it, since macOS or iOS asks them to allow Bluetooth the first time:
 open -n --env NATIVEDEMO_BLE_SERVICE=13d63400-2c97-0004-0000-4c6564676572 --env ELMLEAN_SNAPSHOT=/tmp/ble.png \
   --stdout /tmp/ble.out …/Debug-maccatalyst/NativeDemo.app     # a Ledger Nano X's advertised service
 ```
+
+### The Xcode project, from a Lean manifest (`lean/ElmShell/Manifest.lean`)
+
+An app describes its Xcode project once, in Lean, and never writes `project.yml`. Its package has a module
+outside the app's import closure (so none of it reaches the app) holding an `ElmShell.Manifest`, and an
+executable named `ios-project` running it:
+
+```lean
+-- NativeDemo/Project.lean
+import ElmShell.Manifest
+open ElmShell
+
+def manifest : Manifest where
+  name := "NativeDemo"                       -- project, target, scheme, product
+  displayName := "Native Demo"
+  bundleId := "art.fralex.elmlean.nativedemo"
+  mac := .catalyst                           -- or .designedForiPad, or .none (the default)
+  uses := ["auth", "keychain.*", "http.get", "ble.*", "bgtask.*"]
+  usage := [("NSFaceIDUsageDescription", "Shows that a Lean app can ask for Face ID."),
+            ("NSBluetoothAlwaysUsageDescription", "Shows that a Lean app can connect to a Bluetooth LE peripheral.")]
+  backgroundTasks := [("art.fralex.elmlean.nativedemo.refresh", .refresh),
+                      ("art.fralex.elmlean.nativedemo.processing", .processing)]
+  uiTests := some {}                         -- sources: ["UITests"], bundle id + ".uitests"
+
+def main := manifest.main
+```
+
+```toml
+# lakefile.toml
+[[lean_exe]]
+name = "ios-project"
+root = "NativeDemo.Project"
+```
+
+`framework/native/ci/build-ios` (and so `ui-tests` and `ios-app.yml`) runs `lake exe ios-project` after
+`ios_lean_sources.sh`: it writes the XcodeGen spec to `ios/build/project.json`, and XcodeGen generates
+`ios/<name>.xcodeproj` with `ios/` as its root, writing `build/Info.plist` and, when there are any,
+`build/<name>.entitlements`. The app's `ios/` keeps only what cannot be generated: its icon (an asset
+catalog, `icon`), its UI tests (Objective-C XCTest) and whatever else it chooses to keep there (native-demo:
+its UI-test fixture, `ui-before`, and the entitlements of a team-signed run). An app that still has an
+`ios/project.yml` gets XcodeGen on that file, as before, and no manifest is run.
+
+Where each key comes from:
+
+- **The framework, always**: the sources (`build/native-shell` as `ElmLeanShell`, `framework/native/c` as
+  `ElmLeanShim`, `build/lean-c` as `LeanC` at `-w`); `ELSceneDelegate` in `UIApplicationSceneManifest`,
+  one scene; `UILaunchScreen`; `CLANG_ENABLE_OBJC_ARC` and `ENABLE_USER_SCRIPT_SANDBOXING`; Lean's headers
+  (the app's toolchain's `include`, written under `$(HOME)` when it is there) and the shim's; the retargeted
+  libraries (`LIBRARY_SEARCH_PATHS`, `OTHER_LDFLAGS`); `GCC_OPTIMIZATION_LEVEL` 3 and dead-code stripping;
+  ad-hoc signing and arm64 only in the simulator; `GENERATE_INFOPLIST_FILE: NO`; the UI-test target's test
+  kit, `TEST_TARGET_NAME` and the scheme that tests it.
+- **The capabilities the app uses** (`uses`, names or families of the shell's capability table, checked
+  against it): `usage` texts, `backgroundTasks` (`BGTaskSchedulerPermittedIdentifiers`, and
+  `UIBackgroundModes` from their kinds: `fetch` for refresh, `processing` for processing),
+  `iCloudContainers` (`com.apple.developer.icloud-container-identifiers` and `icloud-services` CloudKit),
+  `keychainGroups` (`keychain-access-groups`). Generation refuses a manifest whose Info.plist or
+  entitlements lack what a family it uses needs, and names the key:
+
+  | uses | needs |
+  |---|---|
+  | `auth` | `NSFaceIDUsageDescription` |
+  | `ble.*` | `NSBluetoothAlwaysUsageDescription` |
+  | `bgtask.*` | `BGTaskSchedulerPermittedIdentifiers`, and `UIBackgroundModes` with `fetch` or `processing` |
+  | `cloudkit.*` | the `com.apple.developer.icloud-services` entitlement holding `CloudKit`, and an `icloud-container-identifiers` one |
+  | anything else (`keychain.*`, `http.get`, `clipboard.*`, …) | nothing |
+
+  The check reads the generated plists, so a key set through `info` or `entitlements` counts. It checks what
+  the manifest says the app uses, not the app's code: an app that calls a capability it does not list is not
+  caught (native-demo leaves `cloudkit.*` out on purpose, to show the shell's `missingEntitlement` answer).
+- **The app**: `name`, `displayName`, `bundleId`, `team` (`DEVELOPMENT_TEAM`, signed automatically),
+  `version` (`.fixed short build` into Info.plist, or `.settings marketing current`: `MARKETING_VERSION` and
+  `CURRENT_PROJECT_VERSION`, which a release overrides with xcodebuild arguments), `deploymentTarget`
+  (17.0), `xcodeVersion`, `mac`, `orientations` (iPhone, then iPad), `icon`, `resources`, `uiTests`.
+- **Anything the manifest does not model**: `info` (Info.plist keys), `entitlements`, `settings` (the app
+  target's build settings) and `testSettings` (the UI-test target's) go over the generated values, and
+  `spec` is merged into the whole XcodeGen spec last (objects key by key, anything else replaced), so any
+  XcodeGen option, target or scheme setting is still the app's to set.
+
+`make check` runs the manifest's tests (`lean/ElmLeanTest/Manifest.lean`): each family refused without its
+key and accepted with it, unknown capabilities, and the generated spec, escape hatches included.
 
 **`lean_initialize`.** Modules that import anything under `Lean` (ElmLean's JSON uses
 `Lean.Data.Json`) call `lean_initialize()` first. The toolchain's version starts the whole
@@ -295,8 +379,8 @@ permission (`recording.log` says why there is none). `export-evidence` refuses a
 platform and result bundle disagree, so a Catalyst run is never recorded as a simulator run or the
 reverse.
 
-`testkit/ELTest.{h,m}` are Objective-C helpers for any app's UI-test target, and only for it (add the
-directory to the `bundle.ui-testing` target's sources; native-demo's `project.yml` shows how): the app
+`testkit/ELTest.{h,m}` are Objective-C helpers for any app's UI-test target, and only for it (a manifest
+with `uiTests` adds the directory to that target's sources, and to no other): the app
 never links XCTest. `ELElement` finds a node by the identifier the app gives it (`Html.identified`);
 `ELTap`, `ELType` (replaces a field's text), `ELWait`, `ELExpectDisabled` and `ELExpectMissing` check
 their preconditions first (the element appears, within `ELAppearTimeout`, scrolling for it if a list has

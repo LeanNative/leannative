@@ -74,7 +74,7 @@ app and framework; the native build links it with Lean's runtime and the shared 
      framework/native/scripts/ios_lean_sources.sh: the C of the app's import closure, Lean's runtime
                                     │  retargeted to iOS / Mac Catalyst, and the shell printed from Lean
                                     ▼                  (`lake exe elmshell`, checked against the grammar)
-                    Xcode (project.yml): one iOS / Mac Catalyst app, no Swift
+      Xcode (XcodeGen, from the app's Lean manifest): one iOS / Mac Catalyst app, no Swift
 ```
 
 ## What an app is
@@ -134,15 +134,18 @@ drives it. It is the same `update`/`view`, run without the phone.
 ## Building an app for iOS and macOS
 
 ```bash
-cd my-app && lake build
-.lake/packages/elmlean/framework/native/scripts/ios_lean_sources.sh . MyApp ios/build iossim
-cd ios && xcodegen generate && xcodebuild -scheme MyApp -destination 'generic/platform=iOS Simulator' build
+APP_DIR=my-app APP_ROOT=MyApp SCHEME=MyApp .lake/packages/elmlean/framework/native/ci/build-ios Debug iossim
 ```
 
-`ios_lean_sources.sh` takes `iossim`, `ios` or `maccatalyst`. The app's `ios/project.yml` compiles
-`build/native-shell`, `framework/native/c` and `build/lean-c`, and links Lean's libraries from
-`build/lib` (see `examples/native-demo/ios/project.yml`). `framework/native/ci/build-ios` does all of the
-above for one configuration and platform.
+`build-ios` takes `iossim`, `ios` or `maccatalyst`. It builds the app with Lake, gathers its C and Lean's
+retargeted libraries (`ios_lean_sources.sh`), and generates the Xcode project from the app's manifest: a
+Lean `ElmShell.Manifest` (name, bundle id, team, version, the capabilities the app uses with their usage
+texts, background tasks, iCloud containers, the UI tests), printed as an XcodeGen spec by the app's
+`lake exe ios-project` (see `examples/native-demo/NativeDemo/Project.lean`). The framework supplies the
+shell's sources, Lean's headers and libraries and the scene delegate; generation refuses a manifest that
+uses a capability without the Info.plist key or entitlement it needs. The app's `ios/` holds only its icon
+and UI tests. [The native guide](framework/native/README.md#the-xcode-project-from-a-lean-manifest-leanelmshellmanifestlean)
+lists which keys come from where.
 
 Prerequisites on a Mac with Xcode: `elan` (the toolchain is pinned per package by `lean-toolchain`) and
 XcodeGen (`framework/native/ci/install-xcodegen` installs the audited release).

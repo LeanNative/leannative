@@ -1,8 +1,9 @@
 // ELTest: XCUITest helpers for any ElmLean native app (test-only Objective-C; never part of an app target).
 //
-// Add this directory to the app's UI-test target only (project.yml: `sources: [UITests, <framework>/native/testkit]`
-// on the `bundle.ui-testing` target). Nothing here knows the app: elements are found by the accessibility
-// identifiers the app gives its nodes (`Html.identified`), and screenshots go where the test says.
+// Add this directory to the app's UI-test target only (a manifest's `uiTests` does: ElmShell/Manifest.lean;
+// in a hand-kept project.yml, `sources: [UITests, <framework>/native/testkit]` on the `bundle.ui-testing`
+// target). Nothing here knows the app: elements are found by the accessibility identifiers the app gives its
+// nodes (`Html.identified`), and screenshots go where the test says.
 //
 // Every action checks its preconditions first (the element appears, can be brought into view, is enabled)
 // and, when one fails, records an XCTest failure at the caller's line and returns NO without acting: no
