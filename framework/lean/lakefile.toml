@@ -33,3 +33,9 @@ root = "ElmLeanTest.Clients"
 [[lean_exe]]
 name = "effect-scope-test"
 root = "ElmLeanTest.EffectScope"
+
+# The app manifest: what generation refuses for each capability family, and the spec it writes (`make check`;
+# not a default target).
+[[lean_exe]]
+name = "manifest-test"
+root = "ElmLeanTest.Manifest"

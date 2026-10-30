@@ -47,7 +47,7 @@ on:
         type: string
         required: true
       ios-dir:
-        description: The directory of the app's project.yml (default <app-dir>/ios)
+        description: The app's ios directory, where its project is generated (default <app-dir>/ios)
         type: string
         default: ''
       prepare:

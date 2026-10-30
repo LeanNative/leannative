@@ -8,3 +8,8 @@ path = "../../framework/lean"
 
 [[lean_lib]]
 name = "NativeDemo"
+
+# The Xcode project's spec, from NativeDemo/Project.lean (framework/native/ci/build-ios runs it)
+[[lean_exe]]
+name = "ios-project"
+root = "NativeDemo.Project"
