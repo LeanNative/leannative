@@ -214,12 +214,12 @@ class ExportTests(unittest.TestCase):
         (self.run_dir / "journeys.json").write_text(json.dumps(journeys))
 
     def test_journeys_are_listed(self):
-        self.write_journeys([{"name": "counting", "passed": True, "seconds": 13.8441},
+        self.write_journeys([{"name": "counting", "passed": True, "seconds": 13.8441, "screenshots": ["demo"]},
                              {"name": "typing", "passed": True, "seconds": 27.2}])
         evidence = self.export()
         self.assertEqual(evidence["result"], "passed")
-        self.assertEqual(evidence["journeys"], [{"name": "counting", "result": "passed", "seconds": 13.844},
-                                                {"name": "typing", "result": "passed", "seconds": 27.2}])
+        self.assertEqual(evidence["journeys"], [{"name": "counting", "result": "passed", "seconds": 13.844, "screenshots": ["demo"]},
+                                                {"name": "typing", "result": "passed", "seconds": 27.2, "screenshots": []}])
         self.assertIn("journeys.json", evidence["artifacts_sha256"])
 
     def test_no_journeys_file_no_journeys(self):
@@ -239,6 +239,8 @@ class ExportTests(unittest.TestCase):
     def test_a_malformed_journeys_file(self):
         self.write_journeys([{"name": "counting", "passed": "yes", "seconds": 1}])
         self.assertFails("journeys.json: malformed")
+        self.write_journeys([{"name": "counting", "passed": True, "seconds": 1, "screenshots": "demo"}])
+        self.assertFails("screenshots are not a list")
         (self.run_dir / "journeys.json").write_text("{}")
         self.assertFails("journeys.json is not a list")
 

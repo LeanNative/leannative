@@ -17,8 +17,8 @@ device.json, run.json, <name>.mp4 (optional) and, when the tests write them, a s
   evidence.json             the manifest (schema "leannative.ui-evidence/1"), below
 
 A journeys run (ui-tests with UI_JOURNEY) has one XCTest, LNDriver/testDrive, and <run>/journeys.json, the
-journeys' own results: the manifest's "journeys" lists them (name, result, seconds, and a failed one's
-message), and a run whose test passed while a journey failed is "contradictory".
+journeys' own results: the manifest's "journeys" lists them (name, result, seconds, the screenshots each took,
+and a failed one's message), and a run whose test passed while a journey failed is "contradictory".
 
 What is checked, and how a run that did not pass is recorded:
 
@@ -391,6 +391,10 @@ def journey_results(path):
                 and isinstance(j.get("seconds"), (int, float))):
             raise Failure(f"journeys.json: malformed entry {j!r}")
         entry = {"name": j["name"], "result": "passed" if j["passed"] else "failed", "seconds": round(float(j["seconds"]), 3)}
+        shots = j.get("screenshots", [])
+        if not (isinstance(shots, list) and all(isinstance(s, str) for s in shots)):
+            raise Failure(f"journeys.json: {j['name']}'s screenshots are not a list of names")
+        entry["screenshots"] = shots
         if not j["passed"]:
             entry["failure"] = str(j.get("failure", ""))
         journeys.append(entry)

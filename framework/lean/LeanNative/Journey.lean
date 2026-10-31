@@ -77,6 +77,8 @@ structure Driver where
   pending : IO.Ref ByteArray
   /-- where `shot` writes its PNGs (the driver also attaches them to the test) -/
   screenshots : Option String
+  /-- the screenshots the running journey has taken, for journeys.json -/
+  taken : IO.Ref (Array String)
 
 /-- What a journey runs in: IO, with the driver. -/
 abbrev UI := ReaderT Driver IO
@@ -182,6 +184,7 @@ def scrollTo (f : Find) : UI Bool := do
 def shot (name : String) : UI Unit := do
   let dir := (← read).screenshots
   discard <| request "shot" ([("name", Json.str name)] ++ dir.toList.map fun d => ("directory", Json.str d))
+  (← read).taken.modify (·.push name)
 
 /-- (iOS) The Home button: the app goes to the background. -/
 def home : UI Unit := discard <| request "home"
@@ -247,7 +250,7 @@ private def accept (server : TCP.Socket.Server) (waitMs : Nat) : IO TCP.Socket.C
 `<exe> [journey names…] <evidence dir>` (all of them when no name is given; UI_JOURNEY="<exe> <name>" runs one). It listens on 127.0.0.1, writes the
 port to `<dir>/driver-port`, waits for the driver (LEANNATIVE_DRIVER_WAIT seconds, default 3600: xcodebuild
 builds the tests first), runs the journeys in order (one that fails is reported to the driver as a test failure,
-and the next still runs), and writes `<dir>/journeys.json`. 1 if any failed. -/
+and the next still runs), and writes `<dir>/journeys.json` (each journey's result, time and screenshots). 1 if any failed. -/
 def main (journeys : List Journey) (args : List String) : IO UInt32 := do
   let some dir := args.getLast?
     | IO.eprintln "usage: <journeys> [journey names…] <evidence directory>"; return 2
@@ -270,23 +273,25 @@ def main (journeys : List Journey) (args : List String) : IO UInt32 := do
   let waitSecs := ((← IO.getEnv "LEANNATIVE_DRIVER_WAIT").bind String.toNat?).getD 3600
   let .ok socket ← (accept server (waitSecs * 1000)).toBaseIO
     | say s!"journeys: the driver did not connect within {waitSecs} s (did xcodebuild run LNDriver/testDrive? xcodebuild.log)"; return 1
-  let d : Driver := { socket, pending := ← IO.mkRef .empty, screenshots := some shots.toString }
+  let d : Driver := { socket, pending := ← IO.mkRef .empty, screenshots := some shots.toString, taken := ← IO.mkRef #[] }
   let mut results : Array Json := #[]
   let mut failed := 0
   for j in chosen do
     say s!"journey {j.name}"
+    d.taken.set #[]
     let start ← IO.monoMsNow
     let outcome ← (j.run.run d).toBaseIO
     let secs := (Float.ofNat ((← IO.monoMsNow) - start)) / 1000
     match outcome with
     | .ok () =>
       say s!"journey {j.name}: passed ({secs} s)"
-      results := results.push (Json.mkObj [("name", Json.str j.name), ("passed", true), ("seconds", toJson secs)])
+      results := results.push (Json.mkObj [("name", Json.str j.name), ("passed", true), ("seconds", toJson secs),
+                                           ("screenshots", toJson (← d.taken.get))])
     | .error e =>
       failed := failed + 1
       say s!"journey {j.name}: FAILED ({secs} s): {e}"
       results := results.push (Json.mkObj [("name", Json.str j.name), ("passed", false), ("seconds", toJson secs),
-                                           ("failure", Json.str (toString e))])
+                                           ("failure", Json.str (toString e)), ("screenshots", toJson (← d.taken.get))])
       -- the failure into the result bundle, and the app stopped for the next journey; the connection may be gone
       try
         discard <| (request "fail" [("message", Json.str s!"journey {j.name}: {e}")]).run d
