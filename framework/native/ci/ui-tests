@@ -7,7 +7,7 @@
 # The app's sources and project are prepared as build-ios does (its variables apply), then `xcodebuild test`
 # runs on a simulator this script creates and deletes, never one that may hold a real install of the app.
 # Evidence goes to $UI_OUT: <name>.xcresult, <name>.mp4 (the recording; recording.json says which screen it
-# is and how long), xcodebuild.log, device.json, and
+# is and how long), xcodebuild.log (build-for-testing.log: the tests' build, run beforehand), device.json, and
 # run.json: what was tested, recorded as the run starts (schema 1: the platform, the app repository's commit
 # and whether its tree was clean, the framework commit, the CI run when there is one, the runner's start and
 # end times and exit status). framework/native/ci/export-evidence reads it; nothing else is the tested revision.
@@ -70,6 +70,8 @@ UDID=""
 THROWAWAY=""
 VIDEO_PID=""
 JOURNEY_PID=""
+BOOT_PID=""
+BUILD_PID=""
 SIM_RECORDERS=()
 AFTER_RAN=0
 STATUS=""
@@ -199,6 +201,7 @@ if seconds is not None and seconds < max(1, 0.5 * elapsed):
 cleanup() {
   local code=$?
   if [ -n "$JOURNEY_PID" ]; then kill "$JOURNEY_PID" 2>/dev/null || true; wait "$JOURNEY_PID" 2>/dev/null || true; fi
+  for pid in $BUILD_PID $BOOT_PID; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
   if [ "$PLATFORM" = maccatalyst ]; then stop_mac_recording; else stop_sim_recording; fi
   [ -f "$OUT/run.json" ] && record end "${STATUS:-$code}" || true
   if [ -n "${UI_AFTER:-}" ] && [ "$AFTER_RAN" = 0 ]; then AFTER_RAN=1; $UI_AFTER "$OUT" "$UDID" || true; fi
@@ -211,7 +214,6 @@ cleanup() {
 trap cleanup EXIT
 
 record start "$APP_DIR" "$CI/../.." "$NAME" "$SCHEME" "$PLATFORM_NAME"
-PREPARE_ONLY=1 "$CI/build-ios" Debug "$PLATFORM"
 
 if [ "$PLATFORM" = maccatalyst ]; then
   # this Mac: no name here (the result bundle names it), the platform the app ran as, the host it ran on
@@ -262,6 +264,17 @@ fi
 echo "$PLATFORM_NAME: $DEVICE"
 printf '%s\n' "$DEVICE" > "$OUT/device.json"
 
+# The simulator boots while the sources are prepared, the tests are built (build-for-testing.log) and UI_BEFORE
+# runs: one after another, these took about two and a half minutes of a CI run. `xcodebuild test` then has
+# nothing left to build.
+if [ "$PLATFORM" = iossim ]; then
+  { xcrun simctl boot "$UDID" 2>/dev/null || true; xcrun simctl bootstatus "$UDID" -b >/dev/null; } &
+  BOOT_PID=$!
+fi
+PREPARE_ONLY=1 "$CI/build-ios" Debug "$PLATFORM"
+xcodebuild build-for-testing -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
+  -derivedDataPath "${DERIVED_DATA:-$IOS_DIR/build/DerivedData}" > "$OUT/build-for-testing.log" 2>&1 &
+BUILD_PID=$!
 [ -n "${UI_BEFORE:-}" ] && $UI_BEFORE "$OUT"
 RUNNER_ENV=()
 JOURNEY_ENV=()
@@ -272,7 +285,7 @@ if [ -f "$OUT/test-env" ]; then
 fi
 TEST_ARGS=()
 if [ -n "${UI_JOURNEY:-}" ]; then
-  # the journeys first: they listen before the driver connects (xcodebuild builds the tests meanwhile)
+  # the journeys first: they listen before the driver connects
   env ${JOURNEY_ENV[@]+"${JOURNEY_ENV[@]}"} $UI_JOURNEY "$OUT" > >(tee "$OUT/journey.log") 2>&1 &
   JOURNEY_PID=$!
   for ((i = 0; i < 600; i++)); do
@@ -288,12 +301,22 @@ else
   TEST_ARGS+=("-skip-testing:${UI_JOURNEY_TARGET:-${SCHEME}UITests}/LNDriver")
 fi
 
+build=0
+wait "$BUILD_PID" || build=$?
+BUILD_PID=""
+if [ "$build" != 0 ]; then
+  tail -n 30 "$OUT/build-for-testing.log" >&2
+  echo "xcodebuild build-for-testing failed ($build): build-for-testing.log" >&2
+  exit "$build"
+fi
+if [ -n "$BOOT_PID" ]; then
+  boot=0
+  wait "$BOOT_PID" || boot=$?
+  BOOT_PID=""
+  [ "$boot" = 0 ] || { echo "the simulator $UDID did not boot ($boot)" >&2; exit 1; }
+fi
 if [ "${UI_RECORDING:-auto}" = none ]; then
   echo "not recorded: UI_RECORDING=none" > "$OUT/recording.log"
-  if [ "$PLATFORM" = iossim ]; then
-    xcrun simctl boot "$UDID" 2>/dev/null || true
-    xcrun simctl bootstatus "$UDID" -b >/dev/null
-  fi
 elif [ "$PLATFORM" = maccatalyst ]; then
   # -v records until a key on its input: a FIFO this script holds open (fd 7) and writes to at the end
   mkfifo "$OUT/.screencapture-input"
@@ -301,8 +324,6 @@ elif [ "$PLATFORM" = maccatalyst ]; then
   screencapture -v -C -k "$OUT/$NAME.mov" < "$OUT/.screencapture-input" >> "$OUT/recording.log" 2>&1 &
   VIDEO_PID=$!
 else
-  xcrun simctl boot "$UDID" 2>/dev/null || true
-  xcrun simctl bootstatus "$UDID" -b >/dev/null
   start_sim_recording
 fi
 
