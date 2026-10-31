@@ -40,11 +40,17 @@ XCUIElement *LNElement(XCUIApplication *app, NSString *identifier);
 /// Polls `condition` every `interval` seconds until it holds or `timeout` passes; the last check is after the timeout.
 BOOL LNPoll(NSTimeInterval timeout, NSTimeInterval interval, BOOL (^condition)(void));
 
+/// Whether the element exists now or appears within `timeout` (0: now): `exists` polled every 0.1 s. Never
+/// XCTest's waitForExistenceWithTimeout:, which spends about a second before its first look and, when it times
+/// out, a few more collecting debug information.
+BOOL LNAppears(XCUIElement *element, NSTimeInterval timeout);
+
 /// A label's (or value's) text without the zero-width spaces the shell puts into long words so they can wrap.
 NSString *LNText(XCUIElement *element);
 
-/// Scrolls (down, then up past where it started) until the element is hittable; NO if it never is. Records
-/// nothing: the actions below turn a NO into a failure.
+/// Scrolls until the element is hittable; NO if it never is. An element already in the hierarchy is scrolled
+/// towards, by its frame against its scroll view's; one not there yet is looked for down, then up past where it
+/// started. Records nothing: the actions below turn a NO into a failure.
 BOOL LNScrollTo(XCUIApplication *app, XCUIElement *element);
 
 /// How long the actions wait for an element to appear and to become enabled (20 s and 15 s by default).

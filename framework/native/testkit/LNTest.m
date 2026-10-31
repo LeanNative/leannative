@@ -42,6 +42,11 @@ BOOL LNPoll(NSTimeInterval timeout, NSTimeInterval interval, BOOL (^condition)(v
     return condition();
 }
 
+BOOL LNAppears(XCUIElement *element, NSTimeInterval timeout) {
+    if (timeout <= 0) return element.exists;
+    return LNPoll(timeout, 0.1, ^BOOL{ return element.exists; });
+}
+
 NSString *LNText(XCUIElement *element) {
     NSString *text = element.label.length ? element.label : ([element.value isKindOfClass:NSString.class] ? element.value : @"");
     return [text stringByReplacingOccurrencesOfString:@"​" withString:@""];
@@ -60,12 +65,43 @@ static void LNScrollStep(XCUIApplication *app, BOOL down) {
 #endif
 }
 
-/// Scrolls (8 steps down, then up past where it started) until the element is hittable or `deadline` passes.
+/// Under `node`, the snapshot with this type, identifier and frame: YES, and in `found` the frame of the
+/// nearest scroll view, table, collection view or window around it (`around`, the one around `node`).
+static BOOL LNFindScroller(id<XCUIElementSnapshot> node, XCUIElementType type, NSString *identifier, CGRect frame,
+                           CGRect around, CGRect *found) {
+    if (node.elementType == type && [node.identifier isEqualToString:identifier] && CGRectEqualToRect(node.frame, frame)) {
+        *found = around;
+        return YES;
+    }
+    XCUIElementType t = node.elementType;
+    BOOL scrolls = t == XCUIElementTypeScrollView || t == XCUIElementTypeTable || t == XCUIElementTypeCollectionView ||
+                   t == XCUIElementTypeWindow;
+    for (id<XCUIElementSnapshot> child in node.children)
+        if (LNFindScroller(child, type, identifier, frame, scrolls ? node.frame : around, found)) return YES;
+    return NO;
+}
+
+/// The frame of the scroll view the element is in (from one snapshot of the app); CGRectNull if it is not found.
+static CGRect LNScrollerFrame(XCUIApplication *app, XCUIElement *element) {
+    id<XCUIElementSnapshot> target = [element snapshotWithError:nil];
+    id<XCUIElementSnapshot> root = target ? [app snapshotWithError:nil] : nil;
+    CGRect found = CGRectNull;
+    if (root) LNFindScroller(root, target.elementType, target.identifier, target.frame, CGRectNull, &found);
+    return found;
+}
+
+/// Scrolls until the element is hittable or `deadline` passes. An element in the hierarchy but out of view (or
+/// covered) is scrolled towards: down while its middle is below its scroll view's, else up. One not there (a
+/// list makes its rows only as they come into view) is looked for 8 steps down, then up past where it started.
 static BOOL LNScrollUntil(XCUIApplication *app, XCUIElement *element, NSDate *_Nullable deadline) {
+    CGRect scroller = CGRectNull;
+    int searched = 0;
     for (int step = 0; step < 24; step++) {
-        if (element.exists && element.hittable) return YES;
+        BOOL exists = element.exists;
+        if (exists && element.hittable) return YES;
         if (deadline && deadline.timeIntervalSinceNow <= 0) return NO;
-        LNScrollStep(app, step < 8);
+        if (exists && CGRectIsNull(scroller)) scroller = LNScrollerFrame(app, element);
+        LNScrollStep(app, exists && !CGRectIsNull(scroller) ? CGRectGetMidY(element.frame) > CGRectGetMidY(scroller) : searched++ < 8);
     }
     return element.exists && element.hittable;
 }
@@ -79,8 +115,8 @@ static XCUIElement *LNReadyElement(XCUIApplication *app, XCUIElement *e, NSStrin
     // a list makes its rows only as they scroll into view: an element not there after a moment is looked for
     // by scrolling, then waited for the rest of the time
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:LNAppearTimeout];
-    if (![e waitForExistenceWithTimeout:MIN(2, LNAppearTimeout)] && !LNScrollUntil(app, e, deadline) &&
-        ![e waitForExistenceWithTimeout:MAX(deadline.timeIntervalSinceNow, 0)]) {
+    if (!LNAppears(e, MIN(2, LNAppearTimeout)) && !LNScrollUntil(app, e, deadline) &&
+        !LNAppears(e, deadline.timeIntervalSinceNow)) {
         *why = [NSString stringWithFormat:@"%@ does not appear within %.0f s, nor by scrolling", identifier, LNAppearTimeout];
         return nil;
     }
@@ -104,7 +140,7 @@ static XCUIElement *LNReady(XCUIApplication *app, NSString *identifier, NSString
 }
 
 BOOL LNWaitAt(XCUIApplication *app, NSString *identifier, NSString *file, NSUInteger line) {
-    if ([LNElement(app, identifier) waitForExistenceWithTimeout:LNAppearTimeout]) return YES;
+    if (LNAppears(LNElement(app, identifier), LNAppearTimeout)) return YES;
     LNFail(file, line, [NSString stringWithFormat:@"%@ does not appear within %.0f s", identifier, LNAppearTimeout]);
     return NO;
 }
@@ -181,7 +217,7 @@ BOOL LNTypeAt(XCUIApplication *app, NSString *identifier, NSString *text, NSStri
 
 BOOL LNExpectDisabledAt(XCUIApplication *app, NSString *identifier, NSString *file, NSUInteger line) {
     XCUIElement *e = LNElement(app, identifier);
-    if (![e waitForExistenceWithTimeout:LNAppearTimeout]) {
+    if (!LNAppears(e, LNAppearTimeout)) {
         LNFail(file, line, [NSString stringWithFormat:@"%@ does not appear within %.0f s", identifier, LNAppearTimeout]);
         return NO;
     }
@@ -193,7 +229,7 @@ BOOL LNExpectDisabledAt(XCUIApplication *app, NSString *identifier, NSString *fi
 }
 
 BOOL LNExpectMissingAt(XCUIApplication *app, NSString *identifier, NSTimeInterval seconds, NSString *file, NSUInteger line) {
-    if (![LNElement(app, identifier) waitForExistenceWithTimeout:seconds]) return YES;
+    if (!LNAppears(LNElement(app, identifier), seconds)) return YES;
     LNFail(file, line, [NSString stringWithFormat:@"%@ exists", identifier]);
     return NO;
 }
