@@ -170,7 +170,7 @@ static NSNumber *LNBool(BOOL b) { return b ? @YES : @NO; }
     NSString *name = nil;
     XCUIElement *e = [command[@"find"] isKindOfClass:NSDictionary.class] ? [self element:command[@"find"] name:&name] : nil;
     if (!e) return @{@"ok": @NO, @"error": [NSString stringWithFormat:@"%@: no such element (%@)", op, name ?: command[@"find"]]};
-    if ([op isEqualToString:@"exists"]) return @{@"ok": @YES, @"exists": LNBool(timeout > 0 ? [e waitForExistenceWithTimeout:timeout] : e.exists)};
+    if ([op isEqualToString:@"exists"]) return @{@"ok": @YES, @"exists": LNBool(LNAppears(e, timeout))};
     if ([op isEqualToString:@"gone"]) {
         BOOL gone = LNPoll(timeout, 0.25, ^BOOL{ return !e.exists; });
         return @{@"ok": @YES, @"gone": LNBool(gone)};
@@ -201,7 +201,7 @@ static NSNumber *LNBool(BOOL b) { return b ? @YES : @NO; }
         return why ? @{@"ok": @NO, @"error": why} : @{@"ok": @YES};
     }
     if ([op isEqualToString:@"text"]) {
-        if (![e waitForExistenceWithTimeout:timeout])
+        if (!LNAppears(e, timeout))
             return @{@"ok": @NO, @"error": [NSString stringWithFormat:@"%@ does not appear within %.0f s", name, timeout]};
         return @{@"ok": @YES, @"text": LNText(e)};
     }
