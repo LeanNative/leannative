@@ -1,0 +1,63 @@
+#!/bin/bash
+# The app's test commands, all at once, each into its own log; fails if any fails:
+#
+#   TESTS=$'Lean .lake/build/bin/my-test\n. scripts/other-tests' framework/native/ci/run-tests
+#
+#   TESTS       lines `<directory> <command>`; the command runs with bash in that directory, stdin empty
+#   CI_RESULTS  where each command's log goes (default $RUNNER_TEMP/leannative-ci, else build/leannative-ci)
+#
+# Every command starts at once, so the longest one sets the time. Each is named when it ends, with its
+# time; a line every 30 s names those still running. Then each log is printed: a passing one in a collapsed
+# group, a failing one in full. (bash 3.2, macOS's own: no associative arrays.)
+set -uo pipefail
+R="${CI_RESULTS:-${RUNNER_TEMP:-build}/leannative-ci}"
+mkdir -p "$R"
+names=(); cmds=(); pids=(); starts=(); status=()
+i=0
+while IFS= read -r line; do
+  [ -n "${line// }" ] || continue
+  i=$((i + 1)); dir=${line%% *}; cmd=${line#* }
+  # the log's name: the command's first word that is not an assignment, in characters an artifact allows
+  first=$cmd
+  while [[ $first == *=* && $first == *" "* && ${first%% *} == *=* ]]; do first=${first#* }; done
+  base=$(basename -- "${first%% *}")
+  name="$i-${base//[^A-Za-z0-9._-]/_}"
+  echo "▶ $cmd ($dir)"
+  (cd "$dir" && exec bash -c "$cmd") < /dev/null > "$R/$name.log" 2>&1 &
+  pids+=("$!"); names+=("$name"); cmds+=("$cmd ($dir)"); starts+=("$SECONDS"); status+=("")
+done <<< "${TESTS:-}"
+[ "$i" -gt 0 ] || { echo "run-tests: no tests"; exit 0; }
+
+left=$i; last=$SECONDS
+while [ "$left" -gt 0 ]; do
+  for k in "${!pids[@]}"; do
+    [ -z "${status[$k]}" ] || continue
+    kill -0 "${pids[$k]}" 2>/dev/null && continue
+    wait "${pids[$k]}"; s=$?
+    status[k]=$s; left=$((left - 1)); t=$((SECONDS - starts[k]))
+    if [ "$s" -eq 0 ]; then echo "✔ ${cmds[$k]}: ${t} s"; else echo "✖ ${cmds[$k]}: exit $s after ${t} s"; fi
+  done
+  if [ "$left" -gt 0 ] && [ $((SECONDS - last)) -ge 30 ]; then
+    running=()
+    for k in "${!pids[@]}"; do [ -n "${status[$k]}" ] || running+=("${names[$k]}"); done
+    echo "… ${SECONDS} s: ${running[*]}"
+    last=$SECONDS
+  fi
+  [ "$left" -eq 0 ] || sleep 2
+done
+
+failed=()
+for k in "${!pids[@]}"; do
+  if [ "${status[$k]}" -eq 0 ]; then
+    [ -z "${GITHUB_ACTIONS:-}" ] || echo "::group::✔ ${cmds[$k]}"
+    [ -z "${GITHUB_ACTIONS:-}" ] || cat "$R/${names[$k]}.log"
+    [ -z "${GITHUB_ACTIONS:-}" ] || echo "::endgroup::"
+  else
+    failed+=("${names[$k]}")
+    echo "──── ✖ ${cmds[$k]} ($R/${names[$k]}.log)"
+    cat "$R/${names[$k]}.log"
+    [ -z "${GITHUB_ACTIONS:-}" ] || echo "::error::${cmds[$k]} failed"
+  fi
+done
+[ ${#failed[@]} -eq 0 ] || { echo "failed: ${failed[*]}"; exit 1; }
+echo "$i passed"
