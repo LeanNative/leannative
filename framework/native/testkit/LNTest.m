@@ -81,27 +81,43 @@ static BOOL LNFindScroller(id<XCUIElementSnapshot> node, XCUIElementType type, N
     return NO;
 }
 
-/// The frame of the scroll view the element is in (from one snapshot of the app); CGRectNull if it is not found.
+/// The part of the window the element's scroll view shows (from one snapshot of the app); CGRectNull if it is not
+/// found. A scroll view's frame can be its content's, far taller than the screen, so it is cut to the window.
 static CGRect LNScrollerFrame(XCUIApplication *app, XCUIElement *element) {
     id<XCUIElementSnapshot> target = [element snapshotWithError:nil];
     id<XCUIElementSnapshot> root = target ? [app snapshotWithError:nil] : nil;
     CGRect found = CGRectNull;
     if (root) LNFindScroller(root, target.elementType, target.identifier, target.frame, CGRectNull, &found);
-    return found;
+    if (CGRectIsNull(found)) return found;
+    CGRect window = app.windows.firstMatch.frame;
+    return CGRectIsEmpty(window) ? found : CGRectIntersection(found, window);
 }
 
 /// Scrolls until the element is hittable or `deadline` passes. An element in the hierarchy but out of view (or
-/// covered) is scrolled towards: down while its middle is below its scroll view's, else up. One not there (a
-/// list makes its rows only as they come into view) is looked for 8 steps down, then up past where it started.
+/// covered) is scrolled towards: down while its middle is below the middle of what its scroll view shows, else
+/// up, and the other way once a step leaves it where it was (the content's end, or something over it). One not
+/// there (a list makes its rows only as they come into view) is looked for 8 steps down, then up past where it
+/// started.
 static BOOL LNScrollUntil(XCUIApplication *app, XCUIElement *element, NSDate *_Nullable deadline) {
     CGRect scroller = CGRectNull;
     int searched = 0;
+    BOOL turned = NO;
+    CGFloat last = NAN;
     for (int step = 0; step < 24; step++) {
         BOOL exists = element.exists;
         if (exists && element.hittable) return YES;
         if (deadline && deadline.timeIntervalSinceNow <= 0) return NO;
         if (exists && CGRectIsNull(scroller)) scroller = LNScrollerFrame(app, element);
-        LNScrollStep(app, exists && !CGRectIsNull(scroller) ? CGRectGetMidY(element.frame) > CGRectGetMidY(scroller) : searched++ < 8);
+        BOOL down;
+        if (exists && !CGRectIsNull(scroller)) {
+            CGFloat y = CGRectGetMidY(element.frame);
+            if (y == last) turned = !turned;
+            last = y;
+            down = (y > CGRectGetMidY(scroller)) != turned;
+        } else {
+            down = searched++ < 8;
+        }
+        LNScrollStep(app, down);
     }
     return element.exists && element.hittable;
 }
