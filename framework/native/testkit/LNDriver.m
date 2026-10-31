@@ -189,6 +189,12 @@ static NSNumber *LNBool(BOOL b) { return b ? @YES : @NO; }
         }
         return @{@"ok": @YES};
     }
+    if ([op isEqualToString:@"press"]) {
+        // held down for `seconds` (a stepper's autorepeat), with tap's checks first
+        NSTimeInterval seconds = [command[@"seconds"] respondsToSelector:@selector(doubleValue)] ? [command[@"seconds"] doubleValue] : 1;
+        NSString *why = LNPressElement(self.app, e, name, seconds);
+        return why ? @{@"ok": @NO, @"error": why} : @{@"ok": @YES};
+    }
     if ([op isEqualToString:@"type"]) {
         NSString *text = [command[@"text"] isKindOfClass:NSString.class] ? command[@"text"] : @"";
         NSString *why = LNTypeElement(self.app, e, name, text);

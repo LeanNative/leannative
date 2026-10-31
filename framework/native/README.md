@@ -417,7 +417,7 @@ screenshots written and refused.
 ### Journeys: UI tests as Lean programs on the host
 
 An app can write its UI tests in Lean instead (`LeanNative.Journey`, framework/lean/LeanNative/Journey.lean):
-a journey executable runs on the Mac and sends each step (`launch`, `tap`, `type`, `text`, `waitFor`,
+a journey executable runs on the Mac and sends each step (`launch`, `tap`, `press`, `type`, `text`, `waitFor`,
 `shot`, …) to `testkit/LNDriver.m`, one XCUITest the same for every app, which carries it out with the kit's
 checks and answers. The checks are the journey's, in Lean, against whatever the host has: the app's own
 `update`, a node, a file. `ui-tests` runs it when given `UI_JOURNEY` (the executable): it starts it once

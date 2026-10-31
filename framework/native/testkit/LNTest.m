@@ -124,6 +124,17 @@ NSString *_Nullable LNTapElement(XCUIApplication *app, XCUIElement *element, NSS
     return why;
 }
 
+NSString *_Nullable LNPressElement(XCUIApplication *app, XCUIElement *element, NSString *name, NSTimeInterval seconds) {
+    NSString *why = nil;
+    XCUIElement *e = LNReadyElement(app, element, name, &why);
+#if TARGET_OS_MACCATALYST
+    if (e) [e clickForDuration:seconds thenDragToElement:e];
+#else
+    if (e) [e pressForDuration:seconds];
+#endif
+    return why;
+}
+
 BOOL LNTapAt(XCUIApplication *app, NSString *identifier, NSString *file, NSUInteger line) {
     XCUIElement *e = LNReady(app, identifier, file, line);
     if (!e) return NO;

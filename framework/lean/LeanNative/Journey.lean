@@ -156,6 +156,11 @@ stepper's steps). -/
 def tap (f : Find) (times : Nat := 1) : UI Unit :=
   discard <| request "tap" ([("find", f.toJson)] ++ if times > 1 then [("times", toJson times)] else [])
 
+/-- Holds the element down for `seconds` (the same checks as `tap`): a stepper's button repeats while held, which
+reaches a far value in seconds rather than one tap per step. -/
+def press (f : Find) (seconds : Float) : UI Unit :=
+  discard <| request "press" [("find", f.toJson), ("seconds", toJson seconds)]
+
 /-- Replaces the text of this field (the same checks as `tap`), then closes the keyboard. -/
 def type (f : Find) (text : String) : UI Unit := discard <| request "type" [("find", f.toJson), ("text", Json.str text)]
 
