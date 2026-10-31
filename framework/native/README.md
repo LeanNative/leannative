@@ -435,7 +435,7 @@ APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo \
   UI_JOURNEY="$PWD/examples/native-demo/.lake/build/bin/journeys" framework/native/ci/ui-tests
 ```
 
-`ios-app.yml` takes `ui-journey:`, the name of the app package's executable: built, then run as `UI_JOURNEY`.
+`ios-app.yml` takes `ui-journey:`, the name of the app package's executable, then any journey names: built, then run as `UI_JOURNEY` (`ui-journey: journeys counting` runs only `counting`).
 
 CI runs them on both platforms (check.yml): `ui` on an iOS simulator, `ui-catalyst` under Mac Catalyst on
 the same GitHub-hosted macOS runner (an arm64 virtual Mac), each with its evidence exported. Under

@@ -180,7 +180,7 @@ nothing passes between them and either can be rerun alone:
 | Job | Runs |
 |---|---|
 | `lean` | elan and the toolchain, `lake build` of the app's packages and test executables, the app's `prepare` command, then every line of `tests` at the same time (`framework/native/ci/run-tests`: the longest one sets the time); the only job that saves the cache |
-| `app` | the same build and `prepare`, then the iOS app: Debug and Release for the simulator, Release for devices (unsigned), each checked for Swift (`check-no-swift`); the app's `release-check`; the UI tests on a throwaway simulator with a screen recording and a record of the tested revision, `run.json` (`ui-tests`) |
+| `app` | the same build and `prepare`, then the iOS app: Debug and Release for the simulator, Release for devices (unsigned), each checked for Swift (`check-no-swift`); the app's `release-check` (with `release-builds: false`, Debug for the simulator only, which a pull request may want); the UI tests on a throwaway simulator with a screen recording and a record of the tested revision, `run.json` (`ui-tests`) |
 
 Every long step prints its output as it comes, and a line at least every 30 seconds while a step is
 quiet (`framework/native/ci/progress`). An app calls it with its own paths and hooks:
