@@ -120,9 +120,18 @@ jobs:
         run: |
           UI_OUT="$RUNNER_TEMP/ui" UI_BEFORE="$PWD/examples/native-demo/ios/ui-before" DERIVED_DATA="$RUNNER_TEMP/dd" \
             framework/native/ci/ui-tests
+      - name: native-demo journeys (Lean on the host, the kit's driver in the app)
+        run: |
+          set -euo pipefail
+          (cd examples/native-demo && lake build journeys)
+          UI_OUT="$RUNNER_TEMP/journeys" UI_NAME=journeys DERIVED_DATA="$RUNNER_TEMP/dd" \
+            UI_JOURNEY="$PWD/examples/native-demo/.lake/build/bin/journeys" framework/native/ci/ui-tests
+          test -s "$RUNNER_TEMP/journeys/screenshots/journey-widgets.png"
       - name: Their evidence
         if: always()
-        run: python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/ui" "$RUNNER_TEMP/evidence" --require-passed
+        run: |
+          python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/ui" "$RUNNER_TEMP/evidence" --require-passed
+          python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/journeys" "$RUNNER_TEMP/evidence-journeys" --require-passed
       - name: Preserve the run and its evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -131,7 +140,10 @@ jobs:
           path: |
             ${{ runner.temp }}/ui/
             ${{ runner.temp }}/evidence/
+            ${{ runner.temp }}/journeys/
+            ${{ runner.temp }}/evidence-journeys/
             !${{ runner.temp }}/ui/*.xcresult/**/private/
+            !${{ runner.temp }}/journeys/*.xcresult/**/private/
           if-no-files-found: warn
           retention-days: 14
   # the same UI tests under Mac Catalyst, on the runner's own logged-in session: the kit's click, scroll wheel

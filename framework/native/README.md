@@ -414,6 +414,29 @@ session's EffectScope ended by going to the background (the system's dismissal o
 the selftest through the shell (two BackgroundRuns, an EffectScope drain, the typed clients), and
 screenshots written and refused.
 
+### Journeys: UI tests as Lean programs on the host
+
+An app can write its UI tests in Lean instead (`LeanNative.Journey`, framework/lean/LeanNative/Journey.lean):
+a journey executable runs on the Mac and sends each step (`launch`, `tap`, `press`, `type`, `text`, `waitFor`,
+`shot`, …) to `testkit/LNDriver.m`, one XCUITest the same for every app, which carries it out with the kit's
+checks and answers. The checks are the journey's, in Lean, against whatever the host has: the app's own
+`update`, a node, a file. `ui-tests` runs it when given `UI_JOURNEY` (the executable): it starts it once
+`UI_BEFORE` has run (test-env's lines are in its environment), waits for `<UI_OUT>/driver-port`, and runs
+`xcodebuild test -only-testing:<SCHEME>UITests/LNDriver/testDrive` with the port. A failed journey is an
+XCTest failure with its message, the next journey still runs, and `journeys.json` has each one's result and
+time; `shot` writes `<UI_OUT>/screenshots/<name>.png` and attaches it. Without the port the driver skips, so
+an app's Objective-C tests run as before. Simulator only for now: the Mac Catalyst test runner is sandboxed.
+native-demo's are `NativeDemo/Journeys.lean` (the same counter, typing, refusals, scrolling and screenshots
+as its Objective-C tests):
+
+```
+(cd examples/native-demo && lake build journeys)
+APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo \
+  UI_JOURNEY="$PWD/examples/native-demo/.lake/build/bin/journeys" framework/native/ci/ui-tests
+```
+
+`ios-app.yml` takes `ui-journey:`, the name of the app package's executable, then any journey names: built, then run as `UI_JOURNEY` (`ui-journey: journeys counting` runs only `counting`).
+
 CI runs them on both platforms (check.yml): `ui` on an iOS simulator, `ui-catalyst` under Mac Catalyst on
 the same GitHub-hosted macOS runner (an arm64 virtual Mac), each with its evidence exported. Under
 Catalyst every test runs but Face ID: the click, scroll-wheel and Command-A paths, the selftest (BackgroundRun

@@ -96,6 +96,19 @@ on:
         description: The UI tests' UI_AFTER hook
         type: string
         default: ''
+      ui-journey:
+        description: >-
+          A Lake executable of the app's package holding its journeys (LeanNative.Journey), built and run as the
+          UI tests' UI_JOURNEY: xcodebuild then runs only the test kit's driver. Journey names may follow it
+          (`journeys counting typing`) to run only those
+        type: string
+        default: ''
+      release-builds:
+        description: >-
+          Build Release too: the Release simulator build (and release-check) and the unsigned Release device
+          build. Off, `app` builds Debug for the simulator only
+        type: boolean
+        default: true
       after-ui:
         description: A command run once the UI tests have passed (media from their evidence, say)
         type: string
@@ -242,19 +255,20 @@ jobs:
         env:
           COMMAND: ${{ inputs.prepare }}
         run: *prepare
-      - name: The simulator builds, Debug and Release
+      - name: The simulator builds
         env:
           RELEASE_CHECK: ${{ inputs.release-check }}
+          CONFIGS: ${{ inputs.release-builds && 'Debug Release' || 'Debug' }}
         run: |
           set -euo pipefail
           export DERIVED_DATA="$CI_RESULTS/DerivedData"
           P="$DERIVED_DATA/Build/Products"
           mkdir -p "$CI_RESULTS"
-          for config in Debug Release; do
+          for config in $CONFIGS; do
             BUILD_LOG="$CI_RESULTS/$config-iossim.log" "$LEANNATIVE_CI/build-ios" "$config" iossim
             "$LEANNATIVE_CI/check-no-swift" "$CI_RESULTS/$config-iossim.log" "$P/$config-iphonesimulator/$SCHEME.app"
           done
-          if [ -n "$RELEASE_CHECK" ]; then
+          if [ -n "$RELEASE_CHECK" ] && [ "$CONFIGS" != Debug ]; then
             $RELEASE_CHECK "$P/Release-iphonesimulator/$SCHEME.app" "$P/Debug-iphonesimulator/$SCHEME.app"
           fi
       - name: UI tests
@@ -265,7 +279,15 @@ jobs:
           UI_BEFORE: ${{ inputs.ui-before }}
           UI_AFTER: ${{ inputs.ui-after }}
           UI_ARGS: ${{ inputs.ui-args }}
+          JOURNEY_EXE: ${{ inputs.ui-journey }}
         run: |
+          set -euo pipefail
+          if [ -n "$JOURNEY_EXE" ]; then
+            exe=${JOURNEY_EXE%% *}; names=${JOURNEY_EXE#"$exe"}
+            (cd "$APP_DIR" && lake build "$exe")
+            UI_JOURNEY="$(cd "$APP_DIR" && pwd)/.lake/build/bin/$exe$names"
+            export UI_JOURNEY
+          fi
           # shellcheck disable=SC2086 # UI_ARGS are words
           DERIVED_DATA="$CI_RESULTS/DerivedData" UI_OUT="$CI_RESULTS/$UI_NAME" "$LEANNATIVE_CI/ui-tests" $UI_ARGS
       - name: After the UI tests
@@ -274,6 +296,7 @@ jobs:
           COMMAND: ${{ inputs.after-ui }}
         run: bash -c "$COMMAND" 2>&1 | "$LEANNATIVE_CI/progress" "$CI_RESULTS/after-ui.log" .
       - name: The device build, Release (unsigned)
+        if: inputs.release-builds
         run: |
           set -euo pipefail
           export DERIVED_DATA="$CI_RESULTS/DerivedData"

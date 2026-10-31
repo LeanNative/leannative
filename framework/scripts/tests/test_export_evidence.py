@@ -209,6 +209,41 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(evidence["run"]["started_at"], "2026-10-29T10:00:00+00:00")
         self.assertEqual(evidence["run"]["finished_at"], "2026-10-29T10:05:00+00:00")
 
+    # -- a journeys run (LeanNative.Journey's journeys.json) ---------------------------------------------
+    def write_journeys(self, journeys):
+        (self.run_dir / "journeys.json").write_text(json.dumps(journeys))
+
+    def test_journeys_are_listed(self):
+        self.write_journeys([{"name": "counting", "passed": True, "seconds": 13.8441, "screenshots": ["demo"]},
+                             {"name": "typing", "passed": True, "seconds": 27.2}])
+        evidence = self.export()
+        self.assertEqual(evidence["result"], "passed")
+        self.assertEqual(evidence["journeys"], [{"name": "counting", "result": "passed", "seconds": 13.844, "screenshots": ["demo"]},
+                                                {"name": "typing", "result": "passed", "seconds": 27.2, "screenshots": []}])
+        self.assertIn("journeys.json", evidence["artifacts_sha256"])
+
+    def test_no_journeys_file_no_journeys(self):
+        self.assertNotIn("journeys", self.export())
+
+    def test_a_failed_journey_under_passing_tests_is_contradictory(self):
+        self.write_journeys([{"name": "counting", "passed": False, "seconds": 2, "failure": "count stuck"}])
+        evidence = self.export()
+        self.assertEqual(evidence["result"], "contradictory")
+        self.assertIn("counting", evidence["result_reasons"][-1])
+        self.assertEqual(evidence["journeys"][0]["failure"], "count stuck")
+
+    def test_an_empty_journeys_file_is_incomplete(self):
+        self.write_journeys([])
+        self.assertEqual(self.export()["result"], "incomplete")
+
+    def test_a_malformed_journeys_file(self):
+        self.write_journeys([{"name": "counting", "passed": "yes", "seconds": 1}])
+        self.assertFails("journeys.json: malformed")
+        self.write_journeys([{"name": "counting", "passed": True, "seconds": 1, "screenshots": "demo"}])
+        self.assertFails("screenshots are not a list")
+        (self.run_dir / "journeys.json").write_text("{}")
+        self.assertFails("journeys.json is not a list")
+
     # -- runs that did not pass -------------------------------------------------------------------------
     def test_a_failed_test_is_failed(self):
         self.bundle_tests = [("testOne", "passed"), ("testTwo", "failed")]
