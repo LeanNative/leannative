@@ -1,7 +1,10 @@
 name: check
-# This repository's own checks on GitHub-hosted macOS (free for a public repository): `make check` (the
-# framework's build, proof and axiom gate, protocol harness), then native-demo built for the iOS simulator
-# and for Mac Catalyst, each checked for Swift. Apps use ios-app.yml instead.
+# This repository's own checks: `make check` (the framework's build, proof and axiom gate, protocol harness),
+# then native-demo built for the iOS simulator and for Mac Catalyst, each checked for Swift. Apps use
+# ios-app.yml instead. Like ios-app.yml, `check` and `ui` run on the self-hosted Mac labelled `leannative-ci`
+# when it is online, and on GitHub-hosted macos-26 for pull requests from forks, while the CI_RUNNER variable
+# is `hosted`, and (given RUNNER_STATUS_TOKEN) when that Mac is offline. On the Mac the Actions cache holds
+# only the .lake builds; the Mac's own ~/.elan is used. `ui-catalyst` always runs on macos-26.
 on:
   pull_request:
   push:
@@ -17,8 +20,48 @@ env:
   APP_ROOT: NativeDemo
   SCHEME: NativeDemo
 jobs:
+  runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      runs-on: ${{ steps.pick.outputs.runs-on }}
+      cache: ${{ steps.pick.outputs.cache }}
+    steps:
+      - name: The self-hosted Mac or macos-26
+        id: pick
+        env:
+          SELF_HOSTED: '["self-hosted", "leannative-ci"]'
+          RUNS_ON: macos-26
+          RUNNER: ${{ vars.CI_RUNNER }}
+          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+        run: |
+          set -euo pipefail
+          lake=$'framework/lean/.lake\nexamples/native-demo/.lake'
+          pick() {
+            echo "runs-on ($2): $1"
+            { echo "runs-on=$1"; echo "cache<<EOF"; echo "$3"; echo EOF; } >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          # the cache action expands the tilde on the hosted Mac
+          # shellcheck disable=SC2088
+          hosted() { pick "$(jq -cn --arg l "$RUNS_ON" '$l')" "$1" '~/.elan'$'\n'"$lake"; }
+          [ "$RUNNER" != hosted ] || hosted "CI_RUNNER is hosted"
+          # a fork's code never runs on the self-hosted Mac
+          [ "$FORK" != true ] || hosted "a pull request from a fork"
+          if [ -n "$STATUS_TOKEN" ]; then
+            online=$(curl -fsSL -H "Authorization: Bearer $STATUS_TOKEN" -H "Accept: application/vnd.github+json" \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runners?per_page=100" \
+              | jq --argjson want "$SELF_HOSTED" \
+                  '[.runners[] | select(.status == "online") | [.labels[].name] as $have | select(all($want[]; . as $w | $have | index($w)))] | length') \
+              || { echo "::warning::could not read the repository's runners"; online=0; }
+            [ "$online" -gt 0 ] || hosted "no runner labelled $SELF_HOSTED is online"
+          fi
+          # the Mac keeps its own ~/.elan: the cache would overwrite it
+          pick "$(jq -c . <<< "$SELF_HOSTED")" "self-hosted" "$lake"
   check:
-    runs-on: macos-26
+    needs: runner
+    runs-on: ${{ fromJSON(needs.runner.outputs.runs-on) }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,10 +75,7 @@ jobs:
       - name: Restore the Lean toolchain and builds
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/.elan
-            framework/lean/.lake
-            examples/native-demo/.lake
+          path: ${{ needs.runner.outputs.cache }}
           key: check-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-${{ hashFiles('framework/lean/**/*.lean', 'examples/native-demo/**/*.lean') }}
           restore-keys: check-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-
       - name: elan and the Lean toolchain
@@ -46,7 +86,9 @@ jobs:
               | sh -s -- -y --default-toolchain none --no-modify-path
           fi
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          "$HOME/.elan/bin/elan" toolchain install "$(cat framework/lean/lean-toolchain)"
+          # a newer elan (a self-hosted Mac's own) refuses to install a toolchain it already has
+          t=$(cat framework/lean/lean-toolchain)
+          "$HOME/.elan/bin/elan" toolchain list | awk '{print $1}' | grep -qxF "$t" || "$HOME/.elan/bin/elan" toolchain install "$t"
       - name: make check
         run: make check
       - name: native-demo for the iOS simulator
@@ -88,7 +130,8 @@ jobs:
   # native-demo's UI tests (the framework's XCTest kit against real controls) on a throwaway simulator,
   # then their evidence (framework/native/ci/export-evidence), both kept as artifacts
   ui:
-    runs-on: macos-26
+    needs: runner
+    runs-on: ${{ fromJSON(needs.runner.outputs.runs-on) }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,10 +144,7 @@ jobs:
       - name: Restore the Lean toolchain and builds
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/.elan
-            framework/lean/.lake
-            examples/native-demo/.lake
+          path: ${{ needs.runner.outputs.cache }}
           key: ui-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-${{ hashFiles('framework/lean/**/*.lean', 'examples/native-demo/**/*.lean') }}
           restore-keys: ui-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-
       - name: elan and the Lean toolchain
@@ -115,7 +155,9 @@ jobs:
               | sh -s -- -y --default-toolchain none --no-modify-path
           fi
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          "$HOME/.elan/bin/elan" toolchain install "$(cat framework/lean/lean-toolchain)"
+          # a newer elan (a self-hosted Mac's own) refuses to install a toolchain it already has
+          t=$(cat framework/lean/lean-toolchain)
+          "$HOME/.elan/bin/elan" toolchain list | awk '{print $1}' | grep -qxF "$t" || "$HOME/.elan/bin/elan" toolchain install "$t"
       - name: native-demo UI tests
         run: |
           UI_OUT="$RUNNER_TEMP/ui" UI_BEFORE="$PWD/examples/native-demo/ios/ui-before" DERIVED_DATA="$RUNNER_TEMP/dd" \
@@ -137,6 +179,8 @@ jobs:
   # the same UI tests under Mac Catalyst, on the runner's own logged-in session: the kit's click, scroll wheel
   # and Command-A paths, and the selftest through the Mac shell; recorded as a Mac Catalyst run (run.json,
   # device.json), which export-evidence checks against the result bundle
+  # Always GitHub-hosted: on the self-hosted Mac (macOS 27) the unsigned UI test bundle fails library validation
+  # ("different Team IDs"), which needs a signing identity there or library validation turned off
   ui-catalyst:
     runs-on: macos-26
     timeout-minutes: 90
@@ -167,7 +211,9 @@ jobs:
               | sh -s -- -y --default-toolchain none --no-modify-path
           fi
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          "$HOME/.elan/bin/elan" toolchain install "$(cat framework/lean/lean-toolchain)"
+          # a newer elan (a self-hosted Mac's own) refuses to install a toolchain it already has
+          t=$(cat framework/lean/lean-toolchain)
+          "$HOME/.elan/bin/elan" toolchain list | awk '{print $1}' | grep -qxF "$t" || "$HOME/.elan/bin/elan" toolchain install "$t"
       - name: native-demo UI tests under Mac Catalyst
         run: |
           set -euo pipefail
