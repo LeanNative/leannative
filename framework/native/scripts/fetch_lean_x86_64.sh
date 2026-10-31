@@ -27,9 +27,13 @@ fi
 GOT="$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)"
 [ "$GOT" = "$SHA256" ] || { echo "checksum mismatch for $URL: got $GOT, want $SHA256" >&2; exit 1; }
 rm -rf "${DEST:?}/$NAME"
+# tar stops reading after the last requested member and zstd then gets SIGPIPE. The archive's
+# checksum was verified above, so tar's exit status is the extraction result that matters.
+set +o pipefail
 zstd -dc "$ARCHIVE" | tar -x -C "$DEST" -f - \
   "$NAME/lib/lean/libLean.a" "$NAME/lib/lean/libStd.a" "$NAME/lib/lean/libInit.a" "$NAME/lib/lean/libleanrt.a" \
   "$NAME/lib/libuv.a" "$NAME/lib/libgmp.a" "$NAME/include"
+set -o pipefail
 for l in lean/libLean.a lean/libStd.a lean/libInit.a lean/libleanrt.a libuv.a libgmp.a; do
   lipo -info "$DEST/$NAME/lib/$l" | grep -q 'architecture: x86_64' || { echo "$l is not x86_64" >&2; exit 1; }
 done

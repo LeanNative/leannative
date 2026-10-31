@@ -30,17 +30,21 @@ OUT_ABS="$(cd "$OUT" && pwd)"
 (cd "$APP" && lake exe leannative-shell "$OUT_ABS/native-shell")
 rm -f "$OUT/lean-c/"*.c
 # the C of every module in the root's import closure (app and LeanNative only; Init/Std/Lean are the libraries)
-# every package the app depends on by path (from its lake-manifest.json), plus LeanNative itself
+# every package the app depends on by path or git (from its lake-manifest.json), plus LeanNative itself
 PKGS=$(/usr/bin/python3 -c '
 import json, os, sys
 app = sys.argv[1]
 m = json.load(open(os.path.join(app, "lake-manifest.json")))
 for p in m.get("packages", []):
-    d = p.get("dir") or p.get("path")
-    if d and p.get("type", "path") == "path":
+    if p.get("type", "path") == "path":
+        d = p.get("dir") or p.get("path")
+        if d: print(os.path.realpath(os.path.join(app, d)))
+    elif p.get("type") == "git":
+        d = os.path.join(m.get("packagesDir", ".lake/packages"), p["name"], p.get("subDir", ""))
         print(os.path.realpath(os.path.join(app, d)))
 ' "$APP")
-IFS=$'\n' read -r -d '' -a PKG_DIRS <<< "$PKGS" || true
+PKG_DIRS=("$FW_LEAN")
+while IFS= read -r d; do [ -n "$d" ] && PKG_DIRS+=("$d"); done <<< "$PKGS"
 /usr/bin/python3 "$HERE/import_closure.py" "$ROOT" "$APP" "$FW_LEAN" "${PKG_DIRS[@]}" | while IFS=$'\t' read -r pkgdir mod; do
   f="$pkgdir/.lake/build/ir/$(echo "$mod" | tr '.' '/').c"
   [ -f "$f" ] || { echo "missing C for $mod ($f)" >&2; exit 1; }

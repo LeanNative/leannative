@@ -157,6 +157,52 @@ def capabilities : List Capability :=
                       .l "result = @{@\"status\": @(((NSHTTPURLResponse *)response).statusCode), @\"body\": hex};"])] "}"]), ("} else {", [
                 .l "result = @{@\"error\": @\"response\"};"])] "}",
           .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}] resume];"] },
+  { name := "http.request", args := "`url`, `method` (GET, POST, PUT, PATCH, DELETE), `headers`? (string values), `body`? (hex, at most 1 MiB), `maxBytes`?, `timeout`? (s), `socks`?",
+    result := "`{\"status\":…,\"body\":hex}` or `{\"error\":…}`; ephemeral session, no cookies or cache, redirects only within the same host and never from https to http",
+    body := [
+      .l "NSURL *url = [NSURL URLWithString:LNArgString(args, @\"url\") ?: @\"\"];",
+      .l "NSString *scheme = url.scheme.lowercaseString ?: @\"\";",
+      .l "if (!url || !([scheme isEqualToString:@\"http\"] || [scheme isEqualToString:@\"https\"])) { answer(@{@\"error\": @\"bad-url\"}); return; }",
+      .l "NSString *method = [LNArgString(args, @\"method\") uppercaseString] ?: @\"\";",
+      .l "if (![@[@\"GET\", @\"POST\", @\"PUT\", @\"PATCH\", @\"DELETE\"] containsObject:method]) { answer(@{@\"error\": @\"bad-method\"}); return; }",
+      .l "NSURLSession *session = [LNHTTPFetch session:args[@\"socks\"]];",
+      .l "if (!session) { answer(@{@\"error\": @\"bad-proxy\"}); return; }",
+      .l "NSInteger maxBytes = LNArgNumber(args, @\"maxBytes\") ? [LNArgNumber(args, @\"maxBytes\") integerValue] : 1000000;",
+      .l "if (maxBytes < 0) { answer(@{@\"error\": @\"bad-size\"}); return; }",
+      .l "NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];",
+      .l "request.HTTPMethod = method;",
+      .l "BOOL proxied = args[@\"socks\"] && args[@\"socks\"] != NSNull.null;",
+      .l "request.timeoutInterval = LNArgNumber(args, @\"timeout\") ? [LNArgNumber(args, @\"timeout\") doubleValue] : (proxied ? 90 : 30);",
+      .l "id headers = args[@\"headers\"];",
+      .l "if (headers && ![headers isKindOfClass:NSDictionary.class]) { answer(@{@\"error\": @\"bad-headers\"}); return; }",
+      b "for (id key in (NSDictionary *)(headers ?: @{})) {" [
+          .l "id value = headers[key];",
+          .l "if (![key isKindOfClass:NSString.class] || ![value isKindOfClass:NSString.class] || [key rangeOfCharacterFromSet:NSCharacterSet.newlineCharacterSet].location != NSNotFound || [value rangeOfCharacterFromSet:NSCharacterSet.newlineCharacterSet].location != NSNotFound) { answer(@{@\"error\": @\"bad-headers\"}); return; }",
+          .l "[request setValue:value forHTTPHeaderField:key];"],
+      .l "id bodyHex = args[@\"body\"];",
+      .l "if (bodyHex && bodyHex != NSNull.null) {",
+      .l "    if (![bodyHex isKindOfClass:NSString.class] || [bodyHex length] > 2097152) { answer(@{@\"error\": @\"bad-body\"}); return; }",
+      .l "    NSData *body = LNDataOf(bodyHex);",
+      .l "    if (!body) { answer(@{@\"error\": @\"bad-body\"}); return; }",
+      .l "    request.HTTPBody = body;",
+      .l "}",
+      b "[[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {" [
+          .l "NSDictionary *result;",
+          .blk [("if (error) {", [
+                .l "result = @{@\"error\": error.localizedDescription ?: @\"\", @\"code\": @(error.code), @\"domain\": error.domain ?: @\"\"};"]), ("} else if ([response isKindOfClass:NSHTTPURLResponse.class] && data) {", [
+                .blk [("if ((NSInteger)data.length > maxBytes) {", [
+                      .l "result = @{@\"error\": @\"tooLarge\"};"]), ("} else {", [
+                      .l "result = @{@\"status\": @(((NSHTTPURLResponse *)response).statusCode), @\"body\": LNHexOf(data)};"])] "}"]), ("} else {", [
+                .l "result = @{@\"error\": @\"response\"};"])] "}",
+          .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}] resume];"] },
+  { name := "app.invoke", args := "app-defined JSON object",
+    result := "app-defined JSON object; `{\"error\":\"unsupported\"}` when no `LeanNativeAppCapabilities` class is linked",
+    body := [
+      .l "Class bridge = NSClassFromString(@\"LeanNativeAppCapabilities\");",
+      .l "SEL selector = NSSelectorFromString(@\"run:answer:\");",
+      .l "if (!bridge || ![bridge respondsToSelector:selector]) { answer(@{@\"error\": @\"unsupported\"}); return; }",
+      .l "void (*run)(id, SEL, NSDictionary *, void (^)(NSDictionary *)) = (void *)[bridge methodForSelector:selector];",
+      .l "run(bridge, selector, args, answer);" ] },
   { name := "open", args := "`url`", result := "`{\"ok\":…}` opens the URL outside the app",
     body := [
       .l "NSURL *url = [NSURL URLWithString:LNArgString(args, @\"url\") ?: @\"\"];",

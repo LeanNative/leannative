@@ -77,6 +77,10 @@
     {"name": "http.get: body not hex", "request": "http.get.plain", "reply": {"status": 200, "body": "xyz"}, "expect": {"error": {"kind": "malformed"}}},
     {"name": "http.get: no status", "request": "http.get.plain", "reply": {"body": "00"}, "expect": {"error": {"kind": "malformed"}}},
     {"name": "http.get: negative status", "request": "http.get.plain", "reply": {"status": -1, "body": ""}, "expect": {"error": {"kind": "malformed"}}},
+    {"name": "http.request: POST with JSON bytes", "request": "http.request", "capability": "http.request",
+     "args": {"url": "https://example.com/api/login", "maxBytes": 1000000, "method": "POST", "headers": {"Content-Type": "application/json"}, "body": "7b7d"},
+     "reply": {"status": 200, "body": "7b7d"}, "expect": {"ok": {"status": 200, "body": "7b7d"}}},
+    {"name": "http.request: bad body", "request": "http.request", "reply": {"error": "bad-body"}, "expect": {"error": {"kind": "failed", "name": "bad-body"}}},
 
     {"name": "cloudkit.account: available", "request": "cloudkit.account", "capability": "cloudkit.account", "args": {"container": "iCloud.org.example.app"},
      "reply": {"status": "available", "user": "_abc"}, "expect": {"ok": {"status": "available", "user": "_abc"}}},
