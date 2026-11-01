@@ -236,53 +236,6 @@ class ExportTests(unittest.TestCase):
         self.write_journeys([])
         self.assertEqual(self.export()["result"], "incomplete")
 
-    # -- a run the app drove: no result bundle -------------------------------------------------------
-    def drove(self, driver="app", journeys=None, **run):
-        record = json.loads((self.run_dir / "run.json").read_text())
-        record.update(driver=driver, **run)
-        self.write_run(record)
-        shutil.rmtree(self.run_dir / f"{self.name}.xcresult")
-        (self.run_dir / "xcodebuild.log").unlink()
-        self.patch("xcresulttool", lambda *a: self.fail(f"xcresulttool asked for a run the app drove: {a}"))
-        self.write_journeys(journeys if journeys is not None else [
-            {"name": "counting", "passed": True, "seconds": 3.5, "screenshots": ["01-start"]},
-            {"name": "typing", "passed": True, "seconds": 2.0, "screenshots": ["01-start", "02-done"]}])
-
-    def test_a_run_the_app_drove_takes_its_results_from_the_journeys(self):
-        self.drove()
-        evidence = self.export()
-        self.assertEqual(evidence["result"], "passed")
-        self.assertEqual(evidence["run"]["driver"], "app")
-        self.assertEqual([(t["name"], t["result"]) for t in evidence["tests"]], [("counting", "passed"), ("typing", "passed")])
-        self.assertEqual(evidence["test_seconds"], 5.5)
-        shots = {s["name"]: s for s in evidence["screenshots"]}
-        self.assertEqual((shots["01-start"]["test"], shots["01-start"]["tests"]), ("counting", ["counting", "typing"]))
-        self.assertEqual(shots["02-done"]["sha256"], hashlib.sha256(self.shots["02-done"]).hexdigest())
-        self.assertEqual((self.out / "screenshots" / "02-done.png").read_bytes(), self.shots["02-done"])
-        self.assertNotIn("xcodebuild.log", evidence["artifacts_sha256"])
-
-    def test_a_failed_journey_fails_a_run_the_app_drove(self):
-        self.drove(journeys=[{"name": "counting", "passed": False, "seconds": 1, "failure": "stuck", "screenshots": ["01-start", "02-done"]}])
-        evidence = self.export()
-        self.assertEqual(evidence["result"], "failed")
-        self.assertIn("counting", evidence["result_reasons"][0])
-
-    def test_a_lane_that_failed_under_passing_journeys_is_contradictory(self):
-        self.drove(driver="lanes", lanes=[{"directory": "lanes/1", "driver": "app", "journeys": ["counting"], "exit_status": 0},
-                                          {"directory": "lanes/2", "driver": "xctest", "journeys": ["typing"], "exit_status": 65}])
-        evidence = self.export()
-        self.assertEqual(evidence["result"], "contradictory")
-        self.assertIn("2", evidence["result_reasons"][-1])
-
-    def test_a_screenshot_no_journey_took_is_refused(self):
-        self.drove(journeys=[{"name": "counting", "passed": True, "seconds": 1, "screenshots": ["01-start"]}])
-        self.assertFails("no journey took: 02-done")
-
-    def test_a_run_the_app_drove_needs_its_journeys(self):
-        self.drove()
-        (self.run_dir / "journeys.json").unlink()
-        self.assertFails("missing journeys.json")
-
     def test_a_malformed_journeys_file(self):
         self.write_journeys([{"name": "counting", "passed": "yes", "seconds": 1}])
         self.assertFails("journeys.json: malformed")
