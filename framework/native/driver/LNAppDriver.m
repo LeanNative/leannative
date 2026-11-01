@@ -356,19 +356,47 @@ static BOOL LNEnabled(LNTarget *t) {
     }
 }
 
-/// Whether a touch at its middle would reach it: inside the window and not under something else (a sheet's
+/// Where a finger would touch it (XCTest's hit point): the middle of the part of it on screen, inside the
+/// window and every scroll view around it, less the bars over their edges (their adjusted insets). A block
+/// taller than the screen is touched in its visible part, not at its own middle. Null when none of it shows.
+static CGPoint LNHitPoint(UIView *v) {
+    if (!v.window) return CGPointMake(NAN, NAN);
+    CGRect visible = CGRectIntersection([v convertRect:v.bounds toView:nil], v.window.bounds);
+    for (UIView *s = v.superview; s && !CGRectIsNull(visible); s = s.superview) {
+        if (![s isKindOfClass:UIScrollView.class]) continue;
+        UIScrollView *scroll = (UIScrollView *)s;
+        CGRect shown = UIEdgeInsetsInsetRect(scroll.bounds, scroll.adjustedContentInset);
+        visible = CGRectIntersection(visible, [scroll convertRect:shown toView:nil]);
+    }
+    if (CGRectIsNull(visible) || CGRectIsEmpty(visible)) return CGPointMake(NAN, NAN);
+    return CGPointMake(CGRectGetMidX(visible), CGRectGetMidY(visible));
+}
+
+/// Whether a touch at its hit point would reach it: on screen and not under something else (a sheet's
 /// dimming, another view). A view that takes no touches (a label) only needs to be in the window.
 static BOOL LNHittable(LNTarget *t) {
     if (t.kind != LNTargetView && t.kind != LNTargetStepper) return YES;
     UIView *v = t.view;
     if (!LNVisible(v)) return NO;
-    UIWindow *w = v.window;
-    CGRect frame = [v convertRect:v.bounds toView:nil];
-    CGPoint mid = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
-    if (!CGRectContainsPoint(w.bounds, mid)) return NO;
-    UIView *hit = [w hitTest:mid withEvent:nil];
+    CGPoint mid = LNHitPoint(v);
+    if (isnan(mid.x)) return NO;
+    UIView *hit = [v.window hitTest:mid withEvent:nil];
     if (!hit) return NO;
     return hit == v || [hit isDescendantOfView:v] || [v isDescendantOfView:hit];
+}
+
+/// Why LNHittable says no: where it is, where a touch would go and what that touch reaches.
+static NSString *LNWhyNotHittable(LNTarget *t) {
+    UIView *v = t.view;
+    if (!v.window) return @"it is in no window";
+    if (!LNVisible(v)) return @"it or a view around it is hidden";
+    CGRect frame = [v convertRect:v.bounds toView:nil];
+    CGPoint mid = LNHitPoint(v);
+    if (isnan(mid.x))
+        return [NSString stringWithFormat:@"none of it is on screen (frame %@, window %@)", NSStringFromCGRect(frame), NSStringFromCGRect(v.window.bounds)];
+    UIView *hit = [v.window hitTest:mid withEvent:nil];
+    return [NSString stringWithFormat:@"a touch at %@ (frame %@, window %@) reaches %@ id=%@", NSStringFromCGPoint(mid), NSStringFromCGRect(frame),
+            NSStringFromCGRect(v.window.bounds), hit ? NSStringFromClass(hit.class) : @"nothing", hit.accessibilityIdentifier ?: @""];
 }
 
 /// Scrolls every scroll view around it so that it is in view.
@@ -430,10 +458,10 @@ static void LNActivate(LNTarget *t) {
     LNOpenMenu = nil;
     switch (t.kind) {
         case LNTargetView: {
-            // where a finger at its middle lands (a row's button, the row itself), if that is in it
+            // where a finger at its hit point lands (a row's button, the row itself), if that is in it
             UIView *v = t.view;
-            CGRect frame = [v convertRect:v.bounds toView:nil];
-            UIView *hit = v.window ? [v.window hitTest:CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame)) withEvent:nil] : nil;
+            CGPoint mid = LNHitPoint(v);
+            UIView *hit = isnan(mid.x) ? nil : [v.window hitTest:mid withEvent:nil];
             LNActivateView(hit && [hit isDescendantOfView:v] ? hit : v);
             break;
         }
@@ -532,7 +560,8 @@ static LNTarget *LNReady(NSDictionary *find, NSString **name, NSString **why) {
         return LNHittable(now);
     });
     if (!inView) {
-        *why = [NSString stringWithFormat:@"%@ cannot be brought into view (off screen, or under something else)", n];
+        NSString *detail = LNOnMain(^id { NSString *s; LNTarget *now = LNFind(find, &s); return now ? LNWhyNotHittable(now) : @"it went"; });
+        *why = [NSString stringWithFormat:@"%@ cannot be brought into view: %@", n, detail];
         return nil;
     }
     if (!LNPoll(LNEnabledTimeout, ^BOOL { NSString *s; LNTarget *now = LNFind(find, &s); if (now) t = now; return now && LNEnabled(now); })) {
@@ -613,14 +642,20 @@ static NSDictionary *LNAnswer(NSDictionary *command, BOOL *ended) {
         });
     }
     if ([op isEqualToString:@"scroll"]) {
-        BOOL hittable = LNPoll(2, ^BOOL {
+        // as long as a tap waits for its element to come into view; the answer says why not when it does not
+        BOOL hittable = LNPoll(LNHittableTimeout, ^BOOL {
             NSString *s;
             LNTarget *t = LNFind(find, &s);
             if (!t) return NO;
             LNScrollIntoView(t);
             return LNHittable(t);
         });
-        return LNOK(@{@"hittable": LNBool(hittable)});
+        if (hittable) return LNOK(@{@"hittable": @YES});
+        return LNOK(@{@"hittable": @NO, @"why": LNOnMain(^id {
+            NSString *s;
+            LNTarget *t = LNFind(find, &s);
+            return t ? LNWhyNotHittable(t) : @"it is not there";
+        })});
     }
     if ([op isEqualToString:@"tap"] || [op isEqualToString:@"press"] || [op isEqualToString:@"type"]) {
         NSString *why = nil, *n = nil;

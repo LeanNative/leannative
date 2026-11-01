@@ -260,9 +260,14 @@ def state (f : Find) : UI State := do
   let j ← request "state" [("find", f.toJson)]
   return { present := ← bool j "exists", enabled := ← bool j "enabled", hittable := ← bool j "hittable" }
 
-/-- Scrolls until the element can be tapped; whether it can. -/
+/-- Scrolls until the element can be tapped; whether it can. When it cannot, the log says why if the
+driver does (the app's own driver: where it is and what a touch there reaches). -/
 def scrollTo (f : Find) : UI Bool := do
-  bool (← request "scroll" [("find", f.toJson)]) "hittable"
+  let j ← request "scroll" [("find", f.toJson)]
+  let hittable ← bool j "hittable"
+  if !hittable then
+    if let .ok why := j.getObjValAs? String "why" then say s!"  {f.describe} cannot be tapped: {why}"
+  return hittable
 
 /-- A screenshot, attached to the test as `name` and written to the screenshots directory as `<name>.png`. -/
 def shot (name : String) : UI Unit := do
