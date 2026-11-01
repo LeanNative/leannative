@@ -2,6 +2,9 @@ name: check
 # This repository's own checks on GitHub-hosted macOS (free for a public repository): `make check` (the
 # framework's build, proof and axiom gate, protocol harness), then native-demo built for the iOS simulator
 # and for Mac Catalyst, each checked for Swift. Apps use ios-app.yml instead.
+# Each job builds on the latest Lean build main cached under its name and saves its own on main only: a pull
+# request restores main's and adds no entry (the cache holds 10 GB a repository, an entry is the whole build).
+# The toolchain is not cached: it is 700 MB of an entry zstd'd, and elan installs it in half a minute.
 on:
   pull_request:
   push:
@@ -29,11 +32,11 @@ jobs:
           xcodebuild -version
           sw_vers
           command -v zstd >/dev/null || brew install zstd
-      - name: Restore the Lean toolchain and builds
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore the Lean builds (main's latest)
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.elan
             framework/lean/.lake
             examples/native-demo/.lake
           key: check-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-${{ hashFiles('framework/lean/**/*.lean', 'examples/native-demo/**/*.lean') }}
@@ -63,6 +66,14 @@ jobs:
           export DERIVED_DATA="$RUNNER_TEMP/dd-catalyst" BUILD_LOG="$RUNNER_TEMP/Debug-maccatalyst.log"
           framework/native/ci/build-ios Debug maccatalyst
           framework/native/ci/check-no-swift "$BUILD_LOG" "$DERIVED_DATA/Build/Products/Debug-maccatalyst/$SCHEME.app"
+      - name: Save the Lean builds (on main only)
+        if: github.event_name != 'pull_request' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            framework/lean/.lake
+            examples/native-demo/.lake
+          key: ${{ steps.cache.outputs.cache-primary-key }}
       - name: The UI tests build for Mac Catalyst; no app links XCTest
         run: |
           set -euo pipefail
@@ -98,11 +109,11 @@ jobs:
         run: |
           xcodebuild -version
           xcrun simctl list runtimes | grep -i ios || true
-      - name: Restore the Lean toolchain and builds
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore the Lean builds (main's latest)
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.elan
             framework/lean/.lake
             examples/native-demo/.lake
           key: ui-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-${{ hashFiles('framework/lean/**/*.lean', 'examples/native-demo/**/*.lean') }}
@@ -127,6 +138,14 @@ jobs:
           UI_OUT="$RUNNER_TEMP/journeys" UI_NAME=journeys DERIVED_DATA="$RUNNER_TEMP/dd" \
             UI_JOURNEY="$PWD/examples/native-demo/.lake/build/bin/journeys" framework/native/ci/ui-tests
           test -s "$RUNNER_TEMP/journeys/screenshots/journey-widgets.png"
+      - name: Save the Lean builds (on main only)
+        if: github.event_name != 'pull_request' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            framework/lean/.lake
+            examples/native-demo/.lake
+          key: ${{ steps.cache.outputs.cache-primary-key }}
       - name: native-demo journeys against the app itself, headless (no simulator)
         run: |
           set -euo pipefail
@@ -168,11 +187,11 @@ jobs:
           sw_vers
           sysctl -n hw.model
           command -v zstd >/dev/null || brew install zstd
-      - name: Restore the Lean toolchain and builds
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore the Lean builds (main's latest)
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.elan
             framework/lean/.lake
             examples/native-demo/.lake
           key: ui-catalyst-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', 'examples/native-demo/lake-manifest.json') }}-${{ hashFiles('framework/lean/**/*.lean', 'examples/native-demo/**/*.lean') }}
@@ -193,6 +212,14 @@ jobs:
           export LEAN_X86_64_PREFIX="$RUNNER_TEMP/lean-x86_64/lean-$(sed 's/.*:v//' framework/lean/lean-toolchain)-darwin"
           UI_PLATFORM=maccatalyst UI_OUT="$RUNNER_TEMP/ui" UI_BEFORE="$PWD/examples/native-demo/ios/ui-before" \
             DERIVED_DATA="$RUNNER_TEMP/dd" framework/native/ci/ui-tests
+      - name: Save the Lean builds (on main only)
+        if: github.event_name != 'pull_request' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            framework/lean/.lake
+            examples/native-demo/.lake
+          key: ${{ steps.cache.outputs.cache-primary-key }}
       - name: Their evidence
         if: always()
         run: python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/ui" "$RUNNER_TEMP/evidence" --require-passed

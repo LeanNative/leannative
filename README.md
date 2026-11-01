@@ -174,12 +174,12 @@ unavailable on macOS.
 ## Continuous integration for an app
 
 `.github/workflows/ios-app.yml` is a reusable workflow that builds and tests a LeanNative app on GitHub
-Actions in two jobs that start at once. Each builds the app's Lean itself, from the Actions cache, so
-nothing passes between them and either can be rerun alone:
+Actions in two jobs that start at once. Each builds the app's Lean itself, on top of the latest build cached
+from main, so nothing passes between them and either can be rerun alone:
 
 | Job | Runs |
 |---|---|
-| `lean` | elan and the toolchain, `lake build` of the app's packages and test executables, the app's `prepare` command, then every line of `tests` at the same time (`framework/native/ci/run-tests`: the longest one sets the time); the only job that saves the cache |
+| `lean` | elan and the toolchain, `lake build` of the app's packages and test executables, the app's `prepare` command, then every line of `tests` at the same time (`framework/native/ci/run-tests`: the longest one sets the time); the only job that saves the cache, and only on main (a pull request's run restores main's build and adds no entry) |
 | `app` | the same build and `prepare`, then the iOS app: Debug and Release for the simulator, Release for devices (unsigned), each checked for Swift (`check-no-swift`); the app's `release-check` (with `release-builds: false`, Debug for the simulator only, which a pull request may want); the UI tests on a throwaway simulator with a screen recording and a record of the tested revision, `run.json` (`ui-tests`) |
 
 Every long step prints its output as it comes, and a line at least every 30 seconds while a step is
