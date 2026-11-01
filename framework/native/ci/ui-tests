@@ -38,6 +38,18 @@
 #                   in the CI log and journey.log, its results in journeys.json; the run fails if the journeys
 #                   or the tests do. Simulator only (the Mac Catalyst test runner is sandboxed). Without it,
 #                   the driver is left out of the run (-skip-testing).
+#   UI_DRIVER       (with UI_JOURNEY) xctest (default): the steps through XCTest's LNDriver, as above; or app: the
+#                   app's own driver (framework/native/driver/LNAppDriver.m, Debug builds), with no XCTest run.
+#                   The app is installed and the journeys launch it (LeanNative.Journey's LEANNATIVE_DRIVER=app);
+#                   there is no result bundle or xcodebuild.log, and run.json's "driver" says so.
+#   UI_LANES        (with UI_JOURNEY) journeys at once on several simulators, e.g.
+#                   "xctest:createReceiveSendConfirm app:multisigTwoOfThreeWithRecovery,shippedCensus app:silentPaymentSend":
+#                   a lane per word, its driver and its journeys. The app and its tests are built once; each lane
+#                   is a run of this script of its own (its evidence in <UI_OUT>/lanes/<n>, its UI_BEFORE and
+#                   UI_AFTER, its simulator, its recording), its output in the CI log as "[lane n]". The lanes'
+#                   journeys.json and screenshots are merged into <UI_OUT> (a screenshot that several journeys
+#                   take is the first lane's), <UI_OUT>/<name>.mp4 is the first lane's recording, and run.json
+#                   lists the lanes and how each ended. Simulator only, never with UI_SIMULATOR.
 #   UI_SOURCE_REVISION  the tested commit, when the app directory is not a git checkout (else it must match)
 #   UI_RECORDING    auto (default) or none: no screen recording (recording.log says so). For a Mac Catalyst run
 #                   on a Mac someone uses: its recording would be the whole screen, behind a permission prompt.
@@ -59,6 +71,16 @@ case "$PLATFORM" in
   *) echo "UI_PLATFORM: iossim or maccatalyst" >&2; exit 2 ;;
 esac
 if [ -n "${UI_JOURNEY:-}" ] && [ "$PLATFORM" = maccatalyst ]; then echo "UI_JOURNEY: simulator only" >&2; exit 2; fi
+DRIVER="${UI_DRIVER:-xctest}"
+case "$DRIVER" in xctest | app) ;; *) echo "UI_DRIVER: xctest or app" >&2; exit 2 ;; esac
+LANES="${UI_LANES:-}"
+# a lane's run (UI_LANES started it): the parent builds, this run waits for <parent>/build-status
+LANE_OF="${UI_LANE_OF:-}"
+if [ -n "$LANES" ] || [ "$DRIVER" = app ]; then
+  [ -n "${UI_JOURNEY:-}" ] || { echo "UI_LANES and UI_DRIVER=app need UI_JOURNEY" >&2; exit 2; }
+  [ "$PLATFORM" = iossim ] || { echo "UI_LANES and UI_DRIVER=app: simulator only" >&2; exit 2; }
+fi
+if [ -n "$LANES" ] && [ -n "${UI_SIMULATOR:-}" ]; then echo "UI_LANES: each lane makes its own simulator (no UI_SIMULATOR)" >&2; exit 2; fi
 LOCK="${OUT%/}.lock"
 mkdir -p "$(dirname "$LOCK")"
 mkdir "$LOCK" 2>/dev/null || { echo "another ui-tests run is using $OUT ($LOCK)" >&2; exit 1; }
@@ -72,6 +94,8 @@ VIDEO_PID=""
 JOURNEY_PID=""
 BOOT_PID=""
 BUILD_PID=""
+LANE_PIDS=()
+SIM_DISPLAY=""
 SIM_RECORDERS=()
 AFTER_RAN=0
 STATUS=""
@@ -100,11 +124,16 @@ if what == "start":
         ci = {k: os.environ.get(v) for k, v in [("server", "GITHUB_SERVER_URL"), ("repository", "GITHUB_REPOSITORY"),
               ("run_id", "GITHUB_RUN_ID"), ("run_attempt", "GITHUB_RUN_ATTEMPT"), ("workflow", "GITHUB_WORKFLOW"),
               ("job", "GITHUB_JOB"), ("event", "GITHUB_EVENT_NAME"), ("ref", "GITHUB_REF"), ("sha", "GITHUB_SHA")]}
+    driver = "lanes" if os.environ.get("UI_LANES") else os.environ.get("UI_DRIVER") or "xctest"
     run = {"schema": 1, "runner": "framework/native/ci/ui-tests", "name": name, "scheme": scheme, "platform": platform,
-           "started_at": now, "source": source, "framework": {"revision": git(framework, "rev-parse", "HEAD")}, "ci": ci}
+           "driver": driver, "started_at": now, "source": source, "framework": {"revision": git(framework, "rev-parse", "HEAD")}, "ci": ci}
 else:
     run = json.load(open(path))
     run.update(finished_at=now, exit_status=int(sys.argv[3]))
+    lanes = os.path.join(os.path.dirname(path), ".lanes.json")
+    if os.path.exists(lanes):
+        run["lanes"] = json.load(open(lanes))
+        os.remove(lanes)
 with open(path + ".tmp", "w") as f: json.dump(run, f, indent=2); f.write("\n")
 os.replace(path + ".tmp", path)
 PY
@@ -152,9 +181,12 @@ stop_mac_recording() {
 # once left the primary one empty. So: the screen simctl names `primary`, else the first integrated one,
 # else recordVideo's own choice (sim-screens). recording.json lists the screens, the one recorded and its length, and a
 # recording much shorter than the tests is flagged in the CI log (export-evidence then omits it).
+# the primary screen's id, in SIM_DISPLAY (empty: simctl's own choice), and .screens.json
+choose_sim_display() {
+  SIM_DISPLAY="$(xcrun simctl io "$UDID" enumerate 2>/dev/null | /usr/bin/python3 -I "$CI/sim-screens" "$OUT/.screens.json")" || { SIM_DISPLAY=""; echo '{"screens": [], "recorded": null}' > "$OUT/.screens.json"; }
+}
 start_sim_recording() {
-  local id
-  id="$(xcrun simctl io "$UDID" enumerate 2>/dev/null | /usr/bin/python3 -I "$CI/sim-screens" "$OUT/.screens.json")" || { id=""; echo '{"screens": [], "recorded": null}' > "$OUT/.screens.json"; }
+  local id="$SIM_DISPLAY"
   RECORDING_STARTED=$(date +%s)
   if [ -n "$id" ]; then
     xcrun simctl io "$UDID" recordVideo --codec=h264 --display="$id" --force "$OUT/$NAME.mp4" >/dev/null 2>&1 &
@@ -201,10 +233,10 @@ if seconds is not None and seconds < max(1, 0.5 * elapsed):
 cleanup() {
   local code=$?
   if [ -n "$JOURNEY_PID" ]; then kill "$JOURNEY_PID" 2>/dev/null || true; wait "$JOURNEY_PID" 2>/dev/null || true; fi
-  for pid in $BUILD_PID $BOOT_PID; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
+  for pid in $BUILD_PID $BOOT_PID ${LANE_PIDS[@]+"${LANE_PIDS[@]}"}; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
   if [ "$PLATFORM" = maccatalyst ]; then stop_mac_recording; else stop_sim_recording; fi
   [ -f "$OUT/run.json" ] && record end "${STATUS:-$code}" || true
-  if [ -n "${UI_AFTER:-}" ] && [ "$AFTER_RAN" = 0 ]; then AFTER_RAN=1; $UI_AFTER "$OUT" "$UDID" || true; fi
+  if [ -n "${UI_AFTER:-}" ] && [ "$AFTER_RAN" = 0 ] && [ -z "$LANES" ]; then AFTER_RAN=1; $UI_AFTER "$OUT" "$UDID" || true; fi
   if [ -n "$THROWAWAY" ]; then
     xcrun simctl shutdown "$THROWAWAY" >/dev/null 2>&1 || true
     xcrun simctl delete "$THROWAWAY" >/dev/null 2>&1 || true
@@ -257,12 +289,81 @@ print(json.dumps({"name": chosen["name"], "type": chosen["identifier"], "runtime
                   "os": runtime["name"]}))')"
   MODEL="$(/usr/bin/python3 -c 'import json, sys; print(json.loads(sys.argv[1])["type"])' "$DEVICE")"
   RUNTIME="$(/usr/bin/python3 -c 'import json, sys; print(json.loads(sys.argv[1])["runtime"])' "$DEVICE")"
-  UDID=$(xcrun simctl create "$SCHEME UI tests $$" "$MODEL" "$RUNTIME")
-  THROWAWAY="$UDID"
+  if [ -z "$LANES" ]; then
+    UDID=$(xcrun simctl create "$SCHEME UI tests $$" "$MODEL" "$RUNTIME")
+    THROWAWAY="$UDID"
+  fi
 fi
 [ "$PLATFORM" = iossim ] && DESTINATION="id=$UDID"
 echo "$PLATFORM_NAME: $DEVICE"
 printf '%s\n' "$DEVICE" > "$OUT/device.json"
+DERIVED="${DERIVED_DATA:-$IOS_DIR/build/DerivedData}"
+
+if [ -n "$LANES" ]; then
+  # the lanes start now (their simulators boot and their fixtures start while the app is built), then wait
+  # for build-status
+  JOURNEY_EXE="${UI_JOURNEY%% *}"
+  mkdir -p "$OUT/lanes"
+  lane_specs=()
+  n=0
+  for lane in $LANES; do
+    n=$((n + 1))
+    driver="${lane%%:*}"
+    names="${lane#*:}"
+    case "$driver" in xctest | app) ;; *) echo "UI_LANES: $lane: the driver is xctest or app" >&2; exit 2 ;; esac
+    [ "$names" != "$lane" ] && [ -n "$names" ] || { echo "UI_LANES: $lane: <driver>:<journey>[,<journey>…]" >&2; exit 2; }
+    lane_specs+=("$driver ${names//,/ }")
+    UI_LANE_OF="$OUT" UI_LANES="" UI_OUT="$OUT/lanes/$n" UI_DRIVER="$driver" UI_JOURNEY="$JOURNEY_EXE ${names//,/ }" \
+      UI_RUNTIME="$RUNTIME" "$CI/ui-tests" "$@" > >(sed -u "s/^/[lane $n] /") 2>&1 &
+    LANE_PIDS+=("$!")
+  done
+  build=0
+  { PREPARE_ONLY=1 "$CI/build-ios" Debug "$PLATFORM" &&
+    xcodebuild build-for-testing -project "$PROJECT" -scheme "$SCHEME" -destination "generic/platform=iOS Simulator" \
+      -derivedDataPath "$DERIVED" > "$OUT/build-for-testing.log" 2>&1; } || build=$?
+  if [ "$build" != 0 ]; then tail -n 30 "$OUT/build-for-testing.log" >&2; echo "the build failed ($build): build-for-testing.log" >&2; fi
+  echo "$build" > "$OUT/build-status.tmp" && mv "$OUT/build-status.tmp" "$OUT/build-status"
+  codes=()
+  for pid in "${LANE_PIDS[@]}"; do code=0; wait "$pid" || code=$?; codes+=("$code"); done
+  LANE_PIDS=()
+  status="$build"
+  for code in "${codes[@]}"; do [ "$status" = 0 ] && status="$code"; done
+  # the lanes into this run: journeys.json, the screenshots (a name several lanes took: the first lane's),
+  # journey.log, the first lane's recording, and how each lane ended for run.json
+  /usr/bin/python3 - "$OUT" "$NAME" "${#lane_specs[@]}" "${lane_specs[@]}" "${codes[@]}" <<'PY'
+import json, os, shutil, sys
+out, name, count = sys.argv[1], sys.argv[2], int(sys.argv[3])
+specs, codes = sys.argv[4:4 + count], sys.argv[4 + count:]
+journeys, lanes = [], []
+os.makedirs(os.path.join(out, "screenshots"), exist_ok=True)
+with open(os.path.join(out, "journey.log"), "w") as log:
+    for i, spec in enumerate(specs, 1):
+        lane = os.path.join(out, "lanes", str(i))
+        driver, *names = spec.split()
+        results = os.path.join(lane, "journeys.json")
+        ran = json.load(open(results)) if os.path.exists(results) else []
+        journeys += ran
+        shots = os.path.join(lane, "screenshots")
+        for png in sorted(os.listdir(shots)) if os.path.isdir(shots) else []:
+            target = os.path.join(out, "screenshots", png)
+            if not os.path.exists(target):
+                shutil.copyfile(os.path.join(shots, png), target)
+        if os.path.exists(os.path.join(lane, "journey.log")):
+            log.write(f"== lane {i} ({driver}) ==\n" + open(os.path.join(lane, "journey.log"), errors="replace").read())
+        lanes.append({"directory": f"lanes/{i}", "driver": driver, "journeys": names,
+                      "exit_status": int(codes[i - 1]) if i - 1 < len(codes) else None})
+first = os.path.join(out, "lanes", "1")
+for f in (f"{name}.mp4", "recording.json"):
+    if os.path.exists(os.path.join(first, f)):
+        shutil.copyfile(os.path.join(first, f), os.path.join(out, f))
+json.dump(journeys, open(os.path.join(out, "journeys.json"), "w"), indent=2)
+json.dump(lanes, open(os.path.join(out, ".lanes.json"), "w"))
+for l in lanes:
+    print(f"lane {l['directory']}: {l['driver']} {' '.join(l['journeys'])}: exit {l['exit_status']}")
+PY
+  STATUS="$status"
+  exit "$status"
+fi
 
 # The simulator boots while the sources are prepared, the tests are built (build-for-testing.log) and UI_BEFORE
 # runs: one after another, these took about two and a half minutes of a CI run. `xcodebuild test` then has
@@ -271,9 +372,14 @@ if [ "$PLATFORM" = iossim ]; then
   { xcrun simctl boot "$UDID" 2>/dev/null || true; xcrun simctl bootstatus "$UDID" -b >/dev/null; } &
   BOOT_PID=$!
 fi
-PREPARE_ONLY=1 "$CI/build-ios" Debug "$PLATFORM"
-xcodebuild build-for-testing -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
-  -derivedDataPath "${DERIVED_DATA:-$IOS_DIR/build/DerivedData}" > "$OUT/build-for-testing.log" 2>&1 &
+if [ -n "$LANE_OF" ]; then
+  # the parent run builds: the build's result, once it is there
+  { for ((i = 0; i < 36000; i++)); do [ -f "$LANE_OF/build-status" ] && exit "$(cat "$LANE_OF/build-status")"; sleep 0.1; done; exit 1; } &
+else
+  PREPARE_ONLY=1 "$CI/build-ios" Debug "$PLATFORM"
+  xcodebuild build-for-testing -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
+    -derivedDataPath "$DERIVED" > "$OUT/build-for-testing.log" 2>&1 &
+fi
 BUILD_PID=$!
 [ -n "${UI_BEFORE:-}" ] && $UI_BEFORE "$OUT"
 RUNNER_ENV=()
@@ -284,7 +390,9 @@ if [ -f "$OUT/test-env" ]; then
   done < "$OUT/test-env"
 fi
 TEST_ARGS=()
-if [ -n "${UI_JOURNEY:-}" ]; then
+if [ "$DRIVER" = app ]; then
+  : # the journeys run once the app is installed, below
+elif [ -n "${UI_JOURNEY:-}" ]; then
   # the journeys first: they listen before the driver connects
   env ${JOURNEY_ENV[@]+"${JOURNEY_ENV[@]}"} $UI_JOURNEY "$OUT" > >(tee "$OUT/journey.log") 2>&1 &
   JOURNEY_PID=$!
@@ -305,7 +413,7 @@ build=0
 wait "$BUILD_PID" || build=$?
 BUILD_PID=""
 if [ "$build" != 0 ]; then
-  tail -n 30 "$OUT/build-for-testing.log" >&2
+  [ -f "$OUT/build-for-testing.log" ] && tail -n 30 "$OUT/build-for-testing.log" >&2
   echo "xcodebuild build-for-testing failed ($build): build-for-testing.log" >&2
   exit "$build"
 fi
@@ -315,8 +423,20 @@ if [ -n "$BOOT_PID" ]; then
   BOOT_PID=""
   [ "$boot" = 0 ] || { echo "the simulator $UDID did not boot ($boot)" >&2; exit 1; }
 fi
+if [ "$DRIVER" = app ]; then
+  # the app as built for the tests (not its test runner), installed before the recording starts
+  APP_PATH=""
+  for a in "$DERIVED"/Build/Products/Debug-iphonesimulator/*.app; do
+    case "$a" in *-Runner.app) ;; *) APP_PATH="$a" ;; esac
+  done
+  [ -n "$APP_PATH" ] || { echo "no app built under $DERIVED/Build/Products/Debug-iphonesimulator" >&2; exit 1; }
+  BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP_PATH/Info.plist")
+  xcrun simctl install "$UDID" "$APP_PATH"
+fi
+[ "$PLATFORM" = iossim ] && choose_sim_display
 if [ "${UI_RECORDING:-auto}" = none ]; then
   echo "not recorded: UI_RECORDING=none" > "$OUT/recording.log"
+  rm -f "$OUT/.screens.json"
 elif [ "$PLATFORM" = maccatalyst ]; then
   # -v records until a key on its input: a FIFO this script holds open (fd 7) and writes to at the end
   mkfifo "$OUT/.screencapture-input"
@@ -328,9 +448,17 @@ else
 fi
 
 status=0
-env ${RUNNER_ENV[@]+"${RUNNER_ENV[@]}"} xcodebuild test \
+if [ "$DRIVER" = app ]; then
+  env ${JOURNEY_ENV[@]+"${JOURNEY_ENV[@]}"} LEANNATIVE_DRIVER=app LEANNATIVE_SIMULATOR="$UDID" LEANNATIVE_BUNDLE_ID="$BUNDLE_ID" \
+    LEANNATIVE_DISPLAY="$SIM_DISPLAY" $UI_JOURNEY "$OUT" 2>&1 | tee "$OUT/journey.log" || status=$?
+  echo "journeys: exit $status"
+  STATUS="$status"
+  exit "$status"
+fi
+[ -n "$LANE_OF" ] && XCODEBUILD_ACTION=test-without-building || XCODEBUILD_ACTION=test
+env ${RUNNER_ENV[@]+"${RUNNER_ENV[@]}"} xcodebuild "$XCODEBUILD_ACTION" \
   -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
-  -derivedDataPath "${DERIVED_DATA:-$IOS_DIR/build/DerivedData}" -resultBundlePath "$OUT/$NAME.xcresult" \
+  -derivedDataPath "$DERIVED" -resultBundlePath "$OUT/$NAME.xcresult" \
   ${TEST_ARGS[@]+"${TEST_ARGS[@]}"} "$@" 2>&1 | "$CI/progress" "$OUT/xcodebuild.log" '^Test Case .*(passed|failed)|: error:|^\*\* TEST' || status=$?
 if [ -n "$JOURNEY_PID" ]; then
   # the driver has ended or gone: the journeys finish (journeys.json) or are stopped

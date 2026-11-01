@@ -20,6 +20,11 @@ A journeys run (ui-tests with UI_JOURNEY) has one XCTest, LNDriver/testDrive, an
 journeys' own results: the manifest's "journeys" lists them (name, result, seconds, the screenshots each took,
 and a failed one's message), and a run whose test passed while a journey failed is "contradictory".
 
+A run whose journeys the app drove itself (run.json's "driver" is "app", or "lanes": several simulators at once,
+some of them perhaps on XCTest, each lane's own directory under lanes/) has no result bundle of its own. Its
+results are the journeys' (journeys.json, and run.json's exit status), its screenshots the PNGs the journeys
+wrote, each attributed to the first journey that lists it, and its "tests" one entry per journey.
+
 What is checked, and how a run that did not pass is recorded:
 
 * Results come from the result bundle (xcresulttool) and xcodebuild.log, both required. The manifest's
@@ -417,6 +422,98 @@ def device_identity(chosen, bundle_device, platform=None):
 
 # -- the export -----------------------------------------------------------------------------------------
 
+def journey_screenshots(on_disk, journeys, out):
+    """The PNGs a journeys-only run wrote, attributed to the journeys that list them (the first is "test")."""
+    written = {p.stem: p for p in on_disk.glob("*.png")} if on_disk and on_disk.is_dir() else {}
+    listed = {}
+    for j in journeys:
+        for shot in j["screenshots"]:
+            listed.setdefault(shot, []).append(j["name"])
+    if stray := sorted(set(written) - set(listed)):
+        raise Failure(f"screenshots on disk that no journey took: {', '.join(stray)}")
+    if missing := sorted(set(listed) - set(written)):
+        raise Failure(f"screenshots journeys.json lists but none was written: {', '.join(missing)}")
+    entries = []
+    if written:
+        (out / "screenshots").mkdir(parents=True)
+    for name in sorted(written):
+        if not NAME.fullmatch(name):
+            raise Failure(f"screenshot name {name!r}: letters, digits, '.', '_' and '-' only")
+        target = out / "screenshots" / f"{name}.png"
+        original = digest(written[name])
+        shutil.copyfile(written[name], target)
+        width, height = png_size(target)
+        entry = {"name": name, "test": listed[name][0], "tests": sorted(set(listed[name])), "captures": 1,
+                 "original_sha256": original, "path": f"screenshots/{name}.png", "width": width, "height": height,
+                 "bytes": target.stat().st_size, "sha256": digest(target)}
+        if entry["sha256"] != original:
+            raise Failure(f"{name}.png changed while copied")
+        entries.append(entry)
+    return entries
+
+
+def export_journeys(run_dir, out, args, run, name, source, now):
+    """A run the app drove (driver "app" or "lanes"): results from journeys.json, screenshots from disk."""
+    chosen = read_json(run_dir / "device.json", "the runner's device record")
+    journeys = journey_results(run_dir / "journeys.json")
+    if journeys is None:
+        raise Failure("missing journeys.json (a run the app drove has no result bundle)")
+    reasons = []
+    failed = [j["name"] for j in journeys if j["result"] != "passed"]
+    if not journeys:
+        result, reasons = "incomplete", ["journeys.json lists no journey"]
+    elif failed:
+        result, reasons = "failed", ["journeys failed: " + ", ".join(failed)]
+    elif run.get("exit_status") not in (0, None):
+        result, reasons = "failed", [f"the run exited {run.get('exit_status')}"]
+    else:
+        result = "passed"
+    lanes = run.get("lanes") or []
+    if failed_lanes := [str(i + 1) for i, lane in enumerate(lanes) if lane.get("exit_status") not in (0, None)]:
+        if result == "passed":
+            result = "contradictory"
+        reasons.append("lanes exited non-zero: " + ", ".join(failed_lanes))
+    out.mkdir(parents=True, exist_ok=True)
+    on_disk = (run_dir / args.screenshots) if args.screenshots else run_dir / "screenshots"
+    shots = journey_screenshots(on_disk, journeys, out)
+    # the recording is the first lane's (or the run's): it covers that lane's journeys
+    recorded = set(lanes[0].get("journeys") or []) if lanes else {j["name"] for j in journeys}
+    recorded_seconds = sum(j["seconds"] for j in journeys if j["name"] in recorded)
+    recording, original, omitted = video(run_dir / f"{name}.mp4", args.video_out or f"video/{name}.mp4", out,
+                                         args.transcode, args.max_video_bytes, recorded_seconds)
+    artifacts = {"device.json": digest(run_dir / "device.json"), "run.json": digest(run_dir / "run.json"),
+                 "journeys.json": digest(run_dir / "journeys.json")}
+    if (run_dir / "journey.log").is_file():
+        artifacts["journey.log"] = digest(run_dir / "journey.log")
+    if args.app_metadata:
+        artifacts["app_metadata"] = digest(args.app_metadata)
+    evidence = {
+        "schema": SCHEMA,
+        "run": {"name": name, "scheme": run.get("scheme"), "platform": run.get("platform"), "driver": run.get("driver"),
+                "lanes": lanes or None, "started_at": run.get("started_at"), "finished_at": run.get("finished_at"),
+                "exit_status": run.get("exit_status"), "ci": run.get("ci"), "framework": run.get("framework")},
+        "source": source,
+        "device": device_identity(chosen, None, run.get("platform")),
+        "result": result,
+        "result_reasons": reasons,
+        "test_seconds": round(sum(j["seconds"] for j in journeys), 3),
+        "tests": [{"class": "journey", "name": j["name"], "result": j["result"], "bundle_result": None, "seconds": j["seconds"]}
+                  for j in journeys],
+        "screenshots": shots,
+        "video": recording,
+        "original_video": original,
+        "artifacts_sha256": artifacts,
+        "app": read_json(args.app_metadata, "the app metadata") if args.app_metadata else None,
+        "exported": {"at": (now or datetime.now(timezone.utc)).replace(microsecond=0).isoformat(),
+                     "by": "framework/native/ci/export-evidence"},
+        "journeys": journeys,
+    }
+    if omitted:
+        evidence["video_omitted"] = omitted
+    (out / MANIFEST).write_text(json.dumps(evidence, indent=2) + "\n")
+    return evidence
+
+
 def export(run_dir, out, args, now=None):
     run_dir, out = Path(run_dir), Path(out)
     if not run_dir.is_dir():
@@ -430,6 +527,8 @@ def export(run_dir, out, args, now=None):
     if not NAME.fullmatch(name):
         raise Failure(f"run name {name!r}: letters, digits, '.', '_' and '-' only")
     source = source_identity(run, args.source_revision)
+    if run.get("driver") in ("app", "lanes"):
+        return export_journeys(run_dir, out, args, run, name, source, now)
     chosen = read_json(run_dir / "device.json", "the runner's device record")
     bundle = run_dir / f"{name}.xcresult"
     log_path = run_dir / "xcodebuild.log"

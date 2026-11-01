@@ -103,6 +103,17 @@ on:
           (`journeys counting typing`) to run only those
         type: string
         default: ''
+      ui-driver:
+        description: >-
+          With ui-journey: xctest (XCTest's LNDriver) or app (the app's own driver, no XCTest run): ui-tests' UI_DRIVER
+        type: string
+        default: xctest
+      ui-lanes:
+        description: >-
+          With ui-journey: journeys at once on several simulators, a lane per word, `<driver>:<journey>,<journey>…`
+          (ui-tests' UI_LANES); empty: one simulator
+        type: string
+        default: ''
       release-builds:
         description: >-
           Build Release too: the Release simulator build (and release-check) and the unsigned Release device
@@ -280,6 +291,8 @@ jobs:
           UI_AFTER: ${{ inputs.ui-after }}
           UI_ARGS: ${{ inputs.ui-args }}
           JOURNEY_EXE: ${{ inputs.ui-journey }}
+          UI_DRIVER: ${{ inputs.ui-driver }}
+          UI_LANES: ${{ inputs.ui-lanes }}
         run: |
           set -euo pipefail
           if [ -n "$JOURNEY_EXE" ]; then

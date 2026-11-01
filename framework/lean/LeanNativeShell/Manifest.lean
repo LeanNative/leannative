@@ -219,6 +219,8 @@ def Manifest.project (m : Manifest) (p : Paths) : Json :=
   let sources : List Json :=
     [Json.mkObj [("path", Json.str s!"{p.build}/native-shell"), ("name", "LeanNativeShell")],
      Json.mkObj [("path", Json.str s!"{p.native}/c"), ("name", "LeanNativeShim")],
+     -- the journeys' in-app driver (LNAppDriver.m): compiled to nothing outside Debug (`#if DEBUG`)
+     Json.mkObj [("path", Json.str s!"{p.native}/driver"), ("name", "LeanNativeDriver")],
      Json.mkObj [("path", Json.str s!"{p.build}/lean-c"), ("name", "LeanC"), ("compilerFlags", strs ["-w"])]] ++
     m.nativeSources.map (fun s => Json.mkObj [("path", Json.str s)]) ++
     m.resources.map (fun r => Json.mkObj [("path", Json.str r), ("buildPhase", "resources")]) ++
