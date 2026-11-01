@@ -447,6 +447,25 @@ APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo \
 
 `ios-app.yml` takes `ui-journey:`, the name of the app package's executable, then any journey names: built, then run as `UI_JOURNEY` (`ui-journey: journeys counting` runs only `counting`).
 
+**The app's own driver.** XCUITest is slow for this: each step finds its element several times, and every
+lookup has the app snapshot its whole accessibility tree on its main thread, besides XCTest's waits for the
+app to go idle. With `UI_DRIVER=app` the steps are carried out inside the app instead, by
+`driver/LNAppDriver.m`, which every app's Debug build compiles (`#if DEBUG`: nothing of it in Release) and
+which starts only when the host passes it a port. It finds elements in the view tree and uses each control
+the way its touch would (a button's primary action, a row's selection, a menu's action, an alert action, a
+tab, back), so the renderer sends the same events; it refuses a control that is covered, disabled or out of
+view, and waits for sheets and screens to finish coming and going. The host launches the app with `simctl`
+and takes the screenshots itself, and no XCTest runs. What it does not test is touches themselves: gestures,
+hit-testing beyond its own check, the system keyboard. Winnow's five journeys take about 75 s this way,
+against about 525 s through XCUITest.
+
+**Lanes.** `UI_LANES` runs journeys on several simulators at once, a lane per word, each with its driver:
+`UI_LANES="xctest:createReceiveSendConfirm app:multisig,ledger"` keeps one journey on real touches and runs the
+rest on the app's driver beside it. The app is built once; each lane has its own simulator, `UI_BEFORE`
+fixture, recording and evidence (`<UI_OUT>/lanes/<n>`), merged into `<UI_OUT>` (`export-evidence` reads a
+merged run from `journeys.json` and the screenshots, there being no single result bundle). `ios-app.yml`
+takes `ui-driver:` and `ui-lanes:`.
+
 CI runs them on both platforms (check.yml): `ui` on an iOS simulator, `ui-catalyst` under Mac Catalyst on
 the same GitHub-hosted macOS runner (an arm64 virtual Mac), each with its evidence exported. Under
 Catalyst every test runs but Face ID: the click, scroll-wheel and Command-A paths, the selftest (BackgroundRun

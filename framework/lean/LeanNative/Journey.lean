@@ -22,6 +22,13 @@ and `xcodebuild test` runs the driver alone, which connects to it. Each journey'
 `<dir>/journeys.json` and the log; a failed journey is also an XCTest failure in the result bundle, with the
 journey's message. Screenshots go to `<dir>/screenshots/<name>.png` and into the result bundle.
 
+With `LEANNATIVE_DRIVER=app` the steps are carried out by the app's own driver instead
+(framework/native/driver/LNAppDriver.m, in Debug builds): the host launches the app with `simctl`, passing it the
+port, the app connects, and the host itself terminates it, brings it back and takes the screenshots (`simctl io`).
+No XCTest runs, so a step costs milliseconds instead of XCTest's lookups and waits; what that does not test is
+real touches (LNAppDriver.m says which). ui-tests sets it for a lane whose driver is `app`, with
+`LEANNATIVE_SIMULATOR` (the device), `LEANNATIVE_BUNDLE_ID` and `LEANNATIVE_DISPLAY` (the screen to capture).
+
 Not under Mac Catalyst: its test runner is sandboxed, and whether it may connect to the host is untested. -/
 
 namespace LeanNative.Journey
@@ -70,11 +77,32 @@ def Find.describe : Find → String
   | .text p => s!"a text matching {p}"
   | .inside parent child => s!"{child.describe} in {parent}"
 
-/-- The connection to the driver. -/
-structure Driver where
+/-- Who carries out the steps: XCTest's LNDriver, or the app's LNAppDriver with the host doing the rest. -/
+inductive Mode where
+  | xctest
+  | app
+  deriving BEq, Repr
+
+/-- A connection to a driver. -/
+structure Link where
   socket : TCP.Socket.Client
   /-- bytes received past the last answer read -/
   pending : IO.Ref ByteArray
+
+/-- The app's simulator, for `Mode.app`. -/
+structure Device where
+  udid : String
+  bundle : String
+  /-- `simctl io --display`: the screen the app is on; none: simctl's default -/
+  display : Option String
+
+/-- The connection to the driver. -/
+structure Driver where
+  mode : Mode
+  /-- XCTest's driver, connected once; the app's, connected again by each launch (none while it is not running) -/
+  link : IO.Ref (Option Link)
+  server : TCP.Socket.Server
+  device : Option Device
   /-- where `shot` writes its PNGs (the driver also attaches them to the test) -/
   screenshots : Option String
   /-- the screenshots the running journey has taken, for journeys.json -/
@@ -97,7 +125,7 @@ private def newline? (b : ByteArray) : Option Nat := Id.run do
     if b.get! i == 10 then return some i
   return none
 
-private partial def readLine (d : Driver) : IO String := do
+private partial def readLine (d : Link) : IO String := do
   let buf ← d.pending.get
   match newline? buf with
   | some i =>
@@ -108,14 +136,65 @@ private partial def readLine (d : Driver) : IO String := do
   | none =>
     match ← (d.socket.recv? 65536).block with
     | some more => d.pending.set (buf ++ more); readLine d
-    | none => failure "the driver closed the connection (the UI test ended: see xcodebuild.log)"
+    | none => failure "the driver closed the connection (the UI test ended, or the app: see xcodebuild.log, journey.log)"
+
+private def accept (server : TCP.Socket.Server) (waitMs : Nat) (who : String) : IO TCP.Socket.Client := do
+  let deadline := (← IO.monoMsNow) + waitMs
+  repeat
+    if let some c ← server.tryAccept then return c
+    if (← IO.monoMsNow) ≥ deadline then failure s!"{who} did not connect within {waitMs / 1000} s"
+    IO.sleep 50
+  failure "unreachable"
+
+/-- `xcrun simctl …`; its output, or the journey fails with it. -/
+private def simctl (args : Array String) (env : Array (String × Option String) := #[]) : IO String := do
+  let out ← IO.Process.output { cmd := "xcrun", args := #["simctl"] ++ args, env }
+  unless out.exitCode == 0 do failure s!"simctl {" ".intercalate args.toList}: {out.stderr.trimAscii}"
+  return out.stdout
+
+private def okJson : Json := Json.mkObj [("ok", true)]
+
+/-- What the host does itself when the app drives (`Mode.app`): launch, terminate, activate, shot, log, fail;
+none for what the app answers. -/
+private def hostAnswer (d : Driver) (dev : Device) (op : String) (fields : List (String × Json)) : IO (Option Json) := do
+  let field (k : String) := (fields.lookup k).getD Json.null
+  match op with
+  | "launch" =>
+    d.link.set none
+    let env : Array (String × Option String) := match (field "env").getObj? with
+      | .ok kvs => kvs.foldl (init := #[]) fun acc (k : String) (v : Json) =>
+          match v.getStr? with | .ok s => acc.push (s!"SIMCTL_CHILD_{k}", some s) | .error _ => acc
+      | .error _ => #[]
+    let port := (← d.server.getSockName).port
+    discard <| simctl #["launch", "--terminate-running-process", dev.udid, dev.bundle]
+      (env.push ("SIMCTL_CHILD_LEANNATIVE_APP_DRIVER_PORT", some s!"{port}"))
+    let socket ← accept d.server 60000 "the app's driver (LNAppDriver: a Debug build?)"
+    d.link.set (some { socket, pending := ← IO.mkRef .empty })
+    return some okJson
+  | "terminate" =>
+    d.link.set none
+    discard <| (simctl #["terminate", dev.udid, dev.bundle]).toBaseIO
+    return some okJson
+  -- a running app is brought to the front, not launched again
+  | "activate" => discard <| simctl #["launch", dev.udid, dev.bundle]; return some okJson
+  | "shot" =>
+    let some dir := (field "directory").getStr?.toOption | return some okJson
+    let display := dev.display.toArray.map (s!"--display={·}")
+    discard <| simctl (#["io", dev.udid, "screenshot", "--type=png"] ++ display ++ #[s!"{dir}/{(field "name").getStr?.toOption.getD "shot"}.png"])
+    return some okJson
+  | "log" | "fail" => return some okJson
+  | "end" => if (← d.link.get).isNone then return some okJson else return none
+  | _ => return none
 
 /-- One command to the driver and its answer; a refusal (`ok: false`) fails the journey with the driver's reason. -/
 def request (op : String) (fields : List (String × Json) := []) : UI Json := do
   let d ← read
+  if let some dev := d.device then
+    if let some j ← hostAnswer d dev op fields then return j
+  let some l ← d.link.get | failure s!"{op}: the app is not running (launch it first)"
   let line := (Json.mkObj (("op", Json.str op) :: fields)).compress ++ "\n"
-  (d.socket.send line.toUTF8).block
-  let answer ← readLine d
+  (l.socket.send line.toUTF8).block
+  let answer ← readLine l
   let .ok j := Json.parse answer | failure s!"the driver's answer is not JSON: {answer}"
   if j.getObjValAs? Bool "ok" matches .ok true then return j
   failure ((j.getObjValAs? String "error").toOption.getD s!"{op} refused: {answer}")
@@ -242,15 +321,6 @@ structure LeanNative.Journey where
 namespace LeanNative.Journey
 open Lean Std.Async
 
-private def accept (server : TCP.Socket.Server) (waitMs : Nat) : IO TCP.Socket.Client := do
-  let deadline := (← IO.monoMsNow) + waitMs
-  repeat
-    if let some c ← server.tryAccept then return c
-    if (← IO.monoMsNow) ≥ deadline then
-      failure s!"the driver did not connect within {waitMs / 1000} s (did xcodebuild run LNDriver/testDrive?)"
-    IO.sleep 200
-  failure "unreachable"
-
 /-- An app's journey executable: `main := Journey.main [j₁, j₂, …]`, run by framework/native/ci/ui-tests as
 `<exe> [journey names…] <evidence dir>` (all of them when no name is given; UI_JOURNEY="<exe> <name>" runs one). It listens on 127.0.0.1, writes the
 port to `<dir>/driver-port`, waits for the driver (LEANNATIVE_DRIVER_WAIT seconds, default 3600: xcodebuild
@@ -271,14 +341,25 @@ def main (journeys : List Journey) (args : List String) : IO UInt32 := do
   server.bind (.v4 { addr := Std.Net.IPv4Addr.ofParts 127 0 0 1, port := 0 })
   server.listen 1
   let port := (← server.getSockName).port
-  -- written whole, then renamed: ui-tests reads it as soon as it exists
-  IO.FS.writeFile (dir / "driver-port.tmp") s!"{port}\n"
-  IO.FS.rename (dir / "driver-port.tmp") (dir / "driver-port")
-  say s!"journeys: listening on 127.0.0.1:{port}"
-  let waitSecs := ((← IO.getEnv "LEANNATIVE_DRIVER_WAIT").bind String.toNat?).getD 3600
-  let .ok socket ← (accept server (waitSecs * 1000)).toBaseIO
-    | say s!"journeys: the driver did not connect within {waitSecs} s (did xcodebuild run LNDriver/testDrive? xcodebuild.log)"; return 1
-  let d : Driver := { socket, pending := ← IO.mkRef .empty, screenshots := some shots.toString, taken := ← IO.mkRef #[] }
+  let device ← if (← IO.getEnv "LEANNATIVE_DRIVER") == some "app" then
+      match ← IO.getEnv "LEANNATIVE_SIMULATOR", ← IO.getEnv "LEANNATIVE_BUNDLE_ID" with
+      | some udid, some bundle => pure (some { udid, bundle, display := (← IO.getEnv "LEANNATIVE_DISPLAY").filter (· != "") : Device })
+      | _, _ => IO.eprintln "LEANNATIVE_DRIVER=app needs LEANNATIVE_SIMULATOR and LEANNATIVE_BUNDLE_ID"; return 2
+    else pure none
+  let link ← IO.mkRef none
+  if device.isNone then
+    -- written whole, then renamed: ui-tests reads it as soon as it exists
+    IO.FS.writeFile (dir / "driver-port.tmp") s!"{port}\n"
+    IO.FS.rename (dir / "driver-port.tmp") (dir / "driver-port")
+    say s!"journeys: listening on 127.0.0.1:{port}"
+    let waitSecs := ((← IO.getEnv "LEANNATIVE_DRIVER_WAIT").bind String.toNat?).getD 3600
+    let .ok socket ← (accept server (waitSecs * 1000) "the driver (did xcodebuild run LNDriver/testDrive?)").toBaseIO
+      | say s!"journeys: the driver did not connect within {waitSecs} s (did xcodebuild run LNDriver/testDrive? xcodebuild.log)"; return 1
+    link.set (some { socket, pending := ← IO.mkRef .empty })
+  else
+    say s!"journeys: the app's driver, on 127.0.0.1:{port}"
+  let d : Driver := { mode := if device.isSome then .app else .xctest, link, server, device,
+                      screenshots := some shots.toString, taken := ← IO.mkRef #[] }
   let mut results : Array Json := #[]
   let mut failed := 0
   for j in chosen do
