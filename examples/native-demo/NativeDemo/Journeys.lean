@@ -1,4 +1,5 @@
 import LeanNative.Journey
+import LeanNative.Journey.Wire
 import NativeDemo.App
 
 /-! # native-demo's journeys: the test kit's driver from Lean on the host
@@ -7,7 +8,11 @@ The same app as ios/UITests/NativeDemoUITests.m (the kit's own tests, in Objecti
 `LeanNative.Journey`: each step a command to LNDriver, each check here, against the app's own `update`.
 
     APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo \
-      UI_JOURNEY="$PWD/examples/native-demo/.lake/build/bin/journeys" framework/native/ci/ui-tests -/
+      UI_JOURNEY="$PWD/examples/native-demo/.lake/build/bin/journeys" framework/native/ci/ui-tests
+
+or, with no simulator, against the app itself (LeanNative.Journey.Wire):
+
+    LEANNATIVE_DRIVER=wire examples/native-demo/.lake/build/bin/journeys <evidence directory> -/
 
 namespace NativeDemo.Journeys
 open LeanNative LeanNative.Journey
@@ -63,3 +68,4 @@ end NativeDemo.Journeys
 open NativeDemo.Journeys in
 def main (args : List String) : IO UInt32 :=
   LeanNative.Journey.main [counting, typing, refusals, scrolling, screenshots] args
+    (wire := some (LeanNative.Journey.Wire.app NativeDemo.app))

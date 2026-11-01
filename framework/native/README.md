@@ -459,6 +459,20 @@ and takes the screenshots itself, and no XCTest runs. What it does not test is t
 hit-testing beyond its own check, the system keyboard. Winnow's five journeys take about 75 s this way,
 against about 525 s through XCUITest.
 
+**Headless: the app itself.** A LeanNative app is a `Wire` tree and a proven dispatcher, so a journey can also
+drive the app with nothing rendered: `LEANNATIVE_DRIVER=wire <journeys> <evidence dir>`
+(`LeanNative.Journey.Wire`; the executable's `main` passes the app as `Journey.main`'s `wire`). The journeys
+executable runs the app as a child of itself with a fake shell (a Keychain kept in a file, authentication that
+says yes, paths under `<evidence dir>/wire`, a clipboard, no network, no Bluetooth, no iCloud account) and
+answers each step from the current view: an element is what a person would see (the selected tab, under the
+innermost sheet, under its alert), its text what XCTest reads from the view the identifier lands on, a tap the
+event the node advertises, sent through `Session.step` as the shell sends a touch; a node that advertises no
+event, or a disabled control, is refused. `shot` writes the visible tree as `<name>.wire.json`. No simulator, no
+XCTest, no `ui-tests`: a step costs a tree walk, so an app's journeys belong beside its other headless tests
+(native-demo's five take under a second apart from the refusals journey's deliberate timeouts). What it does not
+test is the renderer, real touches and the shell's capabilities: keep one simulator run for those, and for the
+screenshots and recording.
+
 **Lanes.** `UI_LANES` runs journeys on several simulators at once, a lane per word, each with its driver:
 `UI_LANES="xctest:createReceiveSendConfirm app:multisig,ledger"` keeps one journey on real touches and runs the
 rest on the app's driver beside it. The app is built once; each lane has its own simulator, `UI_BEFORE`

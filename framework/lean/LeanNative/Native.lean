@@ -72,8 +72,11 @@ structure Runtime where
   drain : IO String
   capResult : String → IO Unit
   wait : IO Unit
+  /-- The session's `seq` and the view the shell is looking at (`lastView`), for a headless driver
+  (`LeanNative.Journey.Wire`) that finds elements in the tree instead of on a screen. -/
+  current : IO (Nat × Wire)
 
-instance : Nonempty Runtime := ⟨⟨pure "", fun _ => pure "", fun _ => pure "", pure "", fun _ => pure (), pure ()⟩⟩
+instance : Nonempty Runtime := ⟨⟨pure "", fun _ => pure "", fun _ => pure "", pure "", fun _ => pure (), pure (), pure (0, .divider)⟩⟩
 
 initialize registry : IO.Ref (Option Runtime) ← IO.mkRef none
 
@@ -141,7 +144,8 @@ def runtime [ToJson Cmd] (app : App Model Msg Cmd Host) : IO Runtime := do
         let result := (j.getObjVal? "result").toOption.getD Json.null
         let k? ← shared.atomically (modifyGet fun s => (s.waiting[id]?, { s with waiting := s.waiting.erase id }))
         if let some k := k? then k result
-      wait := shared.atomicallyOnce cv (do let s ← get; pure (!s.inbox.isEmpty || !s.caps.isEmpty)) (pure ()) }
+      wait := shared.atomicallyOnce cv (do let s ← get; pure (!s.inbox.isEmpty || !s.caps.isEmpty)) (pure ())
+      current := do let s ← session.get; pure (s.seq, s.lastView.toWire) }
 
 /-- Register the app this binary runs. Call it from an `initialize` block in the app's root module. -/
 def register [ToJson Cmd] (app : App Model Msg Cmd Host) : IO Unit := do

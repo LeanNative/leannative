@@ -29,6 +29,10 @@ No XCTest runs, so a step costs milliseconds instead of XCTest's lookups and wai
 real touches (LNAppDriver.m says which). ui-tests sets it for a lane whose driver is `app`, with
 `LEANNATIVE_SIMULATOR` (the device), `LEANNATIVE_BUNDLE_ID` and `LEANNATIVE_DISPLAY` (the screen to capture).
 
+With `LEANNATIVE_DRIVER=wire` there is no simulator at all: the journeys executable runs the app itself, compiled
+into it, as a child process answering from its view tree (LeanNative.Journey.Wire; the executable's `main` passes
+the app as `wire`). A step costs a tree walk; what that does not test is the renderer and the shell.
+
 Not under Mac Catalyst: its test runner is sandboxed, and whether it may connect to the host is untested. -/
 
 namespace LeanNative.Journey
@@ -77,11 +81,18 @@ def Find.describe : Find → String
   | .text p => s!"a text matching {p}"
   | .inside parent child => s!"{child.describe} in {parent}"
 
-/-- Who carries out the steps: XCTest's LNDriver, or the app's LNAppDriver with the host doing the rest. -/
+/-- Who carries out the steps: XCTest's LNDriver, the app's LNAppDriver with the host doing the rest, or the app
+itself, headless (LeanNative.Journey.Wire). -/
 inductive Mode where
   | xctest
   | app
+  | wire
   deriving BEq, Repr
+
+/-- The app itself, for `Mode.wire`: `LeanNative.Journey.Wire.app myApp`. -/
+structure WireApp where
+  /-- Runs the app headless as the driver, connected to the host on this port, until the journey ends it. -/
+  serve : UInt16 → IO Unit
 
 /-- A connection to a driver. -/
 structure Link where
@@ -103,6 +114,9 @@ structure Driver where
   link : IO.Ref (Option Link)
   server : TCP.Socket.Server
   device : Option Device
+  /-- `Mode.wire`: the running app's process, and where its files go -/
+  child : IO.Ref (Option (IO.Process.Child {}))
+  wireDir : Option String
   /-- where `shot` writes its PNGs (the driver also attaches them to the test) -/
   screenshots : Option String
   /-- the screenshots the running journey has taken, for journeys.json -/
@@ -186,11 +200,43 @@ private def hostAnswer (d : Driver) (dev : Device) (op : String) (fields : List 
   | "end" => if (← d.link.get).isNone then return some okJson else return none
   | _ => return none
 
+/-- What the host does itself when the app runs headless (`Mode.wire`): launch (the journeys executable again, as
+`--wire-app <port>`, with the environment asked for), terminate, end; none for what the app answers (`shot` and
+`activate` among them). -/
+private def wireAnswer (d : Driver) (dir : String) (op : String) (fields : List (String × Json)) : IO (Option Json) := do
+  let field (k : String) := (fields.lookup k).getD Json.null
+  let stop : IO Unit := do
+    if let some c ← d.child.get then
+      d.child.set none
+      try c.kill catch _ => pure ()
+      discard <| c.wait
+    d.link.set none
+  match op with
+  | "launch" =>
+    stop
+    let env : Array (String × Option String) := match (field "env").getObj? with
+      | .ok kvs => kvs.foldl (init := #[]) fun acc (k : String) (v : Json) =>
+          match v.getStr? with | .ok s => acc.push (k, some s) | .error _ => acc
+      | .error _ => #[]
+    let port := (← d.server.getSockName).port
+    IO.FS.createDirAll dir
+    let child ← IO.Process.spawn { cmd := (← IO.appPath).toString, args := #["--wire-app", s!"{port}"],
+                                   env := env.push ("LEANNATIVE_WIRE_DIR", some dir) }
+    d.child.set (some child)
+    let socket ← accept d.server 60000 "the app (LeanNative.Journey.Wire.serve)"
+    d.link.set (some { socket, pending := ← IO.mkRef .empty })
+    return some okJson
+  | "terminate" => stop; return some okJson
+  | "end" => if (← d.link.get).isNone then return some okJson else return none
+  | _ => return none
+
 /-- One command to the driver and its answer; a refusal (`ok: false`) fails the journey with the driver's reason. -/
 def request (op : String) (fields : List (String × Json) := []) : UI Json := do
   let d ← read
   if let some dev := d.device then
     if let some j ← hostAnswer d dev op fields then return j
+  if let some dir := d.wireDir then
+    if let some j ← wireAnswer d dir op fields then return j
   let some l ← d.link.get | failure s!"{op}: the app is not running (launch it first)"
   let line := (Json.mkObj (("op", Json.str op) :: fields)).compress ++ "\n"
   (l.socket.send line.toUTF8).block
@@ -326,12 +372,19 @@ structure LeanNative.Journey where
 namespace LeanNative.Journey
 open Lean Std.Async
 
-/-- An app's journey executable: `main := Journey.main [j₁, j₂, …]`, run by framework/native/ci/ui-tests as
+/-- An app's journey executable: `main := Journey.main [j₁, j₂, …] args (wire := some (Wire.app app))`, run by framework/native/ci/ui-tests as
 `<exe> [journey names…] <evidence dir>` (all of them when no name is given; UI_JOURNEY="<exe> <name>" runs one). It listens on 127.0.0.1, writes the
 port to `<dir>/driver-port`, waits for the driver (LEANNATIVE_DRIVER_WAIT seconds, default 3600: xcodebuild
 builds the tests first), runs the journeys in order (one that fails is reported to the driver as a test failure,
-and the next still runs), and writes `<dir>/journeys.json` (each journey's result, time and screenshots). 1 if any failed. -/
-def main (journeys : List Journey) (args : List String) : IO UInt32 := do
+and the next still runs), and writes `<dir>/journeys.json` (each journey's result, time and screenshots). 1 if any failed.
+With `LEANNATIVE_DRIVER=wire` (and `wire` given) the app runs headless in a child of this executable
+(`<exe> --wire-app <port>`, which this `main` answers by serving the app). -/
+def main (journeys : List Journey) (args : List String) (wire : Option WireApp := none) : IO UInt32 := do
+  if let ["--wire-app", port] := args then
+    match wire, port.toNat? with
+    | some w, some p => w.serve p.toUInt16; return 0
+    | none, _ => IO.eprintln "--wire-app: this executable's journeys were given no app (Journey.main's wire)"; return 2
+    | _, none => IO.eprintln s!"--wire-app: not a port: {port}"; return 2
   let some dir := args.getLast?
     | IO.eprintln "usage: <journeys> [journey names…] <evidence directory>"; return 2
   let names := args.dropLast
@@ -346,13 +399,20 @@ def main (journeys : List Journey) (args : List String) : IO UInt32 := do
   server.bind (.v4 { addr := Std.Net.IPv4Addr.ofParts 127 0 0 1, port := 0 })
   server.listen 1
   let port := (← server.getSockName).port
-  let device ← if (← IO.getEnv "LEANNATIVE_DRIVER") == some "app" then
+  let driver := (← IO.getEnv "LEANNATIVE_DRIVER").getD "xctest"
+  let device ← if driver == "app" then
       match ← IO.getEnv "LEANNATIVE_SIMULATOR", ← IO.getEnv "LEANNATIVE_BUNDLE_ID" with
       | some udid, some bundle => pure (some { udid, bundle, display := (← IO.getEnv "LEANNATIVE_DISPLAY").filter (· != "") : Device })
       | _, _ => IO.eprintln "LEANNATIVE_DRIVER=app needs LEANNATIVE_SIMULATOR and LEANNATIVE_BUNDLE_ID"; return 2
     else pure none
+  let wireDir ← if driver == "wire" then
+      if wire.isNone then IO.eprintln "LEANNATIVE_DRIVER=wire: this executable's journeys were given no app (Journey.main's wire)"; return 2
+      pure (some (dir / "wire").toString)
+    else pure none
+  unless driver == "xctest" || driver == "app" || driver == "wire" do
+    IO.eprintln s!"LEANNATIVE_DRIVER: xctest, app or wire, not {driver}"; return 2
   let link ← IO.mkRef none
-  if device.isNone then
+  if device.isNone && wireDir.isNone then
     -- written whole, then renamed: ui-tests reads it as soon as it exists
     IO.FS.writeFile (dir / "driver-port.tmp") s!"{port}\n"
     IO.FS.rename (dir / "driver-port.tmp") (dir / "driver-port")
@@ -361,10 +421,12 @@ def main (journeys : List Journey) (args : List String) : IO UInt32 := do
     let .ok socket ← (accept server (waitSecs * 1000) "the driver (did xcodebuild run LNDriver/testDrive?)").toBaseIO
       | say s!"journeys: the driver did not connect within {waitSecs} s (did xcodebuild run LNDriver/testDrive? xcodebuild.log)"; return 1
     link.set (some { socket, pending := ← IO.mkRef .empty })
+  else if wireDir.isSome then
+    say s!"journeys: the app itself, headless, on 127.0.0.1:{port}"
   else
     say s!"journeys: the app's driver, on 127.0.0.1:{port}"
-  let d : Driver := { mode := if device.isSome then .app else .xctest, link, server, device,
-                      screenshots := some shots.toString, taken := ← IO.mkRef #[] }
+  let d : Driver := { mode := if device.isSome then .app else if wireDir.isSome then .wire else .xctest, link, server, device,
+                      child := ← IO.mkRef none, wireDir, screenshots := some shots.toString, taken := ← IO.mkRef #[] }
   let mut results : Array Json := #[]
   let mut failed := 0
   for j in chosen do
@@ -389,6 +451,9 @@ def main (journeys : List Journey) (args : List String) : IO UInt32 := do
         discard <| (request "terminate").run d
       catch _ => pure ()
   try discard <| (request "end").run d catch _ => pure ()
+  if let some c ← d.child.get then
+    try c.kill catch _ => pure ()
+    discard <| c.wait
   IO.FS.writeFile (dir / "journeys.json") ((Json.arr results).pretty ++ "\n")
   say s!"journeys: {chosen.length - failed} passed, {failed} failed"
   return if failed == 0 then 0 else 1
