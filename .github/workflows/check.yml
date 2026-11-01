@@ -133,6 +133,11 @@ jobs:
           UI_OUT="$RUNNER_TEMP/journeys-app" UI_NAME=journeys DERIVED_DATA="$RUNNER_TEMP/dd" UI_DRIVER=app \
             UI_JOURNEY="$PWD/examples/native-demo/.lake/build/bin/journeys" framework/native/ci/ui-tests
           test -s "$RUNNER_TEMP/journeys-app/screenshots/journey-widgets.png"
+      - name: native-demo journeys against the app itself, headless (no simulator)
+        run: |
+          set -euo pipefail
+          LEANNATIVE_DRIVER=wire examples/native-demo/.lake/build/bin/journeys "$RUNNER_TEMP/journeys-wire"
+          test -s "$RUNNER_TEMP/journeys-wire/screenshots/journey-widgets.wire.json"
       - name: Their evidence
         if: always()
         run: |
@@ -151,6 +156,7 @@ jobs:
             ${{ runner.temp }}/evidence-journeys/
             ${{ runner.temp }}/journeys-app/
             ${{ runner.temp }}/evidence-journeys-app/
+            ${{ runner.temp }}/journeys-wire/
             !${{ runner.temp }}/ui/*.xcresult/**/private/
             !${{ runner.temp }}/journeys/*.xcresult/**/private/
           if-no-files-found: warn
