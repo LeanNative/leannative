@@ -7,15 +7,14 @@ import LeanNative.Journey.Regex
 
 A LeanNative app is a `Wire` tree and a proven dispatcher: what a journey taps is a node with a path, and what
 it reads is a string in that tree. So the same journey programs that drive the app in a simulator through
-XCTest (`LNDriver.m`) or the app's view hierarchy (`LNAppDriver.m`) can drive the app itself, compiled into the
-journeys executable, with nothing rendered: `Mode.wire`.
+XCTest (`LNDriver.m`) can drive the app itself, compiled into the journeys executable, with nothing rendered:
+`Mode.wire`.
 
 The journeys executable (`Journey.main … (wire := some (Wire.app myApp))`) runs the app as a child process of
-itself (`<exe> --wire-app <port>`, the environment of `launch` in its environment), the way `Mode.app` launches
-the app in a simulator. The child runs `Native.runtime` with a fake shell (`Shell`) answering the capabilities
-the real shell would (`LeanNativeShell/Capabilities.lean`'s protocol: a Keychain in a file, authentication that
-says yes, paths under `LEANNATIVE_WIRE_DIR`, a clipboard, no network, no Bluetooth, no iCloud account), connects
-to the host, and answers the driver's commands (`LNDriver.m` lists them) from the current view:
+itself (`<exe> --wire-app <port>`, the environment of `launch` in its environment). The child runs
+`Native.runtime` with a fake shell (`Shell`) answering the capabilities the real shell would
+(`LeanNativeShell/Capabilities.lean`'s protocol: a Keychain in a file, authentication that says yes, paths under
+`LEANNATIVE_WIRE_DIR`, a clipboard, no network, no Bluetooth, no iCloud account), connects to the host, and answers the driver's commands (`LNDriver.m` lists them) from the current view:
 
 * an element is found as a person would see it: the selected tab's content, covered by the innermost sheet,
   covered by the alert on it. `id` is `Html.identified`; `tab`, `alert`, `button`, `nav`, `back` and `text` as

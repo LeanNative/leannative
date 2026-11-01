@@ -1,6 +1,6 @@
 /-! # A small regular-expression matcher for the headless journey driver
 
-`Find.text` carries an `NSRegularExpression` pattern (the XCTest and in-app drivers hand it to Foundation). The
+`Find.text` carries an `NSRegularExpression` pattern (the XCTest driver hands it to Foundation). The
 headless driver (`LeanNative.Journey.Wire`) matches it here instead, with the part of the syntax journeys use:
 literals, `.`, `\d \w \s` (and their negations), escaped metacharacters, `[…]` classes with ranges and `^`
 negation, groups `(…)` with `|`, the quantifiers `* + ? {n} {n,} {n,m}` (greedy), and the anchors `^` and `$`.

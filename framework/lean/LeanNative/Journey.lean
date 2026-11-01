@@ -22,13 +22,6 @@ and `xcodebuild test` runs the driver alone, which connects to it. Each journey'
 `<dir>/journeys.json` and the log; a failed journey is also an XCTest failure in the result bundle, with the
 journey's message. Screenshots go to `<dir>/screenshots/<name>.png` and into the result bundle.
 
-With `LEANNATIVE_DRIVER=app` the steps are carried out by the app's own driver instead
-(framework/native/driver/LNAppDriver.m, in Debug builds): the host launches the app with `simctl`, passing it the
-port, the app connects, and the host itself terminates it, brings it back and takes the screenshots (`simctl io`).
-No XCTest runs, so a step costs milliseconds instead of XCTest's lookups and waits; what that does not test is
-real touches (LNAppDriver.m says which). ui-tests sets it for a lane whose driver is `app`, with
-`LEANNATIVE_SIMULATOR` (the device), `LEANNATIVE_BUNDLE_ID` and `LEANNATIVE_DISPLAY` (the screen to capture).
-
 With `LEANNATIVE_DRIVER=wire` there is no simulator at all: the journeys executable runs the app itself, compiled
 into it, as a child process answering from its view tree (LeanNative.Journey.Wire; the executable's `main` passes
 the app as `wire`). A step costs a tree walk; what that does not test is the renderer and the shell.
@@ -81,11 +74,9 @@ def Find.describe : Find → String
   | .text p => s!"a text matching {p}"
   | .inside parent child => s!"{child.describe} in {parent}"
 
-/-- Who carries out the steps: XCTest's LNDriver, the app's LNAppDriver with the host doing the rest, or the app
-itself, headless (LeanNative.Journey.Wire). -/
+/-- Who carries out the steps: XCTest's LNDriver, or the app itself, headless (LeanNative.Journey.Wire). -/
 inductive Mode where
   | xctest
-  | app
   | wire
   deriving BEq, Repr
 
@@ -100,20 +91,13 @@ structure Link where
   /-- bytes received past the last answer read -/
   pending : IO.Ref ByteArray
 
-/-- The app's simulator, for `Mode.app`. -/
-structure Device where
-  udid : String
-  bundle : String
-  /-- `simctl io --display`: the screen the app is on; none: simctl's default -/
-  display : Option String
-
 /-- The connection to the driver. -/
 structure Driver where
   mode : Mode
-  /-- XCTest's driver, connected once; the app's, connected again by each launch (none while it is not running) -/
+  /-- XCTest's driver, connected once; the headless app, connected again by each launch (none while it is not
+  running) -/
   link : IO.Ref (Option Link)
   server : TCP.Socket.Server
-  device : Option Device
   /-- `Mode.wire`: the running app's process, and where its files go -/
   child : IO.Ref (Option (IO.Process.Child {}))
   wireDir : Option String
@@ -163,45 +147,7 @@ private def accept (server : TCP.Socket.Server) (waitMs : Nat) (who : String) : 
     IO.sleep 50
   failure "unreachable"
 
-/-- `xcrun simctl …`; its output, or the journey fails with it. -/
-private def simctl (args : Array String) (env : Array (String × Option String) := #[]) : IO String := do
-  let out ← IO.Process.output { cmd := "xcrun", args := #["simctl"] ++ args, env }
-  unless out.exitCode == 0 do failure s!"simctl {" ".intercalate args.toList}: {out.stderr.trimAscii}"
-  return out.stdout
-
 private def okJson : Json := Json.mkObj [("ok", true)]
-
-/-- What the host does itself when the app drives (`Mode.app`): launch, terminate, activate, shot, log, fail;
-none for what the app answers. -/
-private def hostAnswer (d : Driver) (dev : Device) (op : String) (fields : List (String × Json)) : IO (Option Json) := do
-  let field (k : String) := (fields.lookup k).getD Json.null
-  match op with
-  | "launch" =>
-    d.link.set none
-    let env : Array (String × Option String) := match (field "env").getObj? with
-      | .ok kvs => kvs.foldl (init := #[]) fun acc (k : String) (v : Json) =>
-          match v.getStr? with | .ok s => acc.push (s!"SIMCTL_CHILD_{k}", some s) | .error _ => acc
-      | .error _ => #[]
-    let port := (← d.server.getSockName).port
-    discard <| simctl #["launch", "--terminate-running-process", dev.udid, dev.bundle]
-      (env.push ("SIMCTL_CHILD_LEANNATIVE_APP_DRIVER_PORT", some s!"{port}"))
-    let socket ← accept d.server 60000 "the app's driver (LNAppDriver: a Debug build?)"
-    d.link.set (some { socket, pending := ← IO.mkRef .empty })
-    return some okJson
-  | "terminate" =>
-    d.link.set none
-    discard <| (simctl #["terminate", dev.udid, dev.bundle]).toBaseIO
-    return some okJson
-  -- a running app is brought to the front, not launched again
-  | "activate" => discard <| simctl #["launch", dev.udid, dev.bundle]; return some okJson
-  | "shot" =>
-    let some dir := (field "directory").getStr?.toOption | return some okJson
-    let display := dev.display.toArray.map (s!"--display={·}")
-    discard <| simctl (#["io", dev.udid, "screenshot", "--type=png"] ++ display ++ #[s!"{dir}/{(field "name").getStr?.toOption.getD "shot"}.png"])
-    return some okJson
-  | "log" | "fail" => return some okJson
-  | "end" => if (← d.link.get).isNone then return some okJson else return none
-  | _ => return none
 
 /-- What the host does itself when the app runs headless (`Mode.wire`): launch (the journeys executable again, as
 `--wire-app <port>`, with the environment asked for), terminate, end; none for what the app answers (`shot` and
@@ -256,8 +202,6 @@ def request (op : String) (fields : List (String × Json) := []) : UI Json := do
   return answer
 where
   go (d : Driver) : IO Json := do
-    if let some dev := d.device then
-      if let some j ← hostAnswer d dev op fields then return j
     if let some dir := d.wireDir then
       if let some j ← wireAnswer d dir op fields then return j
     let some l ← d.link.get | failure s!"{op}: the app is not running (launch it first)"
@@ -330,7 +274,7 @@ def state (f : Find) : UI State := do
   return { present := ← bool j "exists", enabled := ← bool j "enabled", hittable := ← bool j "hittable" }
 
 /-- Scrolls until the element can be tapped; whether it can. When it cannot, the log says why if the
-driver does (the app's own driver: where it is and what a touch there reaches). -/
+driver does. -/
 def scrollTo (f : Find) : UI Bool := do
   let j ← request "scroll" [("find", f.toJson)]
   let hittable ← bool j "hittable"
@@ -423,19 +367,14 @@ def main (journeys : List Journey) (args : List String) (wire : Option WireApp :
   server.listen 1
   let port := (← server.getSockName).port
   let driver := (← IO.getEnv "LEANNATIVE_DRIVER").getD "xctest"
-  let device ← if driver == "app" then
-      match ← IO.getEnv "LEANNATIVE_SIMULATOR", ← IO.getEnv "LEANNATIVE_BUNDLE_ID" with
-      | some udid, some bundle => pure (some { udid, bundle, display := (← IO.getEnv "LEANNATIVE_DISPLAY").filter (· != "") : Device })
-      | _, _ => IO.eprintln "LEANNATIVE_DRIVER=app needs LEANNATIVE_SIMULATOR and LEANNATIVE_BUNDLE_ID"; return 2
-    else pure none
   let wireDir ← if driver == "wire" then
       if wire.isNone then IO.eprintln "LEANNATIVE_DRIVER=wire: this executable's journeys were given no app (Journey.main's wire)"; return 2
       pure (some (dir / "wire").toString)
     else pure none
-  unless driver == "xctest" || driver == "app" || driver == "wire" do
-    IO.eprintln s!"LEANNATIVE_DRIVER: xctest, app or wire, not {driver}"; return 2
+  unless driver == "xctest" || driver == "wire" do
+    IO.eprintln s!"LEANNATIVE_DRIVER: xctest or wire, not {driver}"; return 2
   let link ← IO.mkRef none
-  if device.isNone && wireDir.isNone then
+  if wireDir.isNone then
     -- written whole, then renamed: ui-tests reads it as soon as it exists
     IO.FS.writeFile (dir / "driver-port.tmp") s!"{port}\n"
     IO.FS.rename (dir / "driver-port.tmp") (dir / "driver-port")
@@ -444,11 +383,9 @@ def main (journeys : List Journey) (args : List String) (wire : Option WireApp :
     let .ok socket ← (accept server (waitSecs * 1000) "the driver (did xcodebuild run LNDriver/testDrive?)").toBaseIO
       | say s!"journeys: the driver did not connect within {waitSecs} s (did xcodebuild run LNDriver/testDrive? xcodebuild.log)"; return 1
     link.set (some { socket, pending := ← IO.mkRef .empty })
-  else if wireDir.isSome then
-    say s!"journeys: the app itself, headless, on 127.0.0.1:{port}"
   else
-    say s!"journeys: the app's driver, on 127.0.0.1:{port}"
-  let d : Driver := { mode := if device.isSome then .app else if wireDir.isSome then .wire else .xctest, link, server, device,
+    say s!"journeys: the app itself, headless, on 127.0.0.1:{port}"
+  let d : Driver := { mode := if wireDir.isSome then .wire else .xctest, link, server,
                       child := ← IO.mkRef none, wireDir, screenshots := some shots.toString, taken := ← IO.mkRef #[],
                       timing := ← IO.mkRef #[] }
   let mut results : Array Json := #[]

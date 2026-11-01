@@ -110,7 +110,6 @@ def main : IO UInt32 := do
   check "the shell's sources" (at? p (app ++ ["sources"]) == some (Json.arr #[
     Json.mkObj [("path", "build/native-shell"), ("name", "LeanNativeShell")],
     Json.mkObj [("path", "../fw/native/c"), ("name", "LeanNativeShim")],
-    Json.mkObj [("path", "../fw/native/driver"), ("name", "LeanNativeDriver")],
     Json.mkObj [("path", "build/lean-c"), ("name", "LeanC"), ("compilerFlags", toJson ["-w"])],
     Json.mkObj [("path", "../docs/a.html"), ("buildPhase", "resources")],
     Json.mkObj [("path", "Assets.xcassets")]]))

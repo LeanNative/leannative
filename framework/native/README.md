@@ -463,16 +463,6 @@ scrolls from 2.4 s to 1.5 s, `text` from 0.4 s to under 0.1 s. XCTest's idle wai
 private interaction option, tried with either bit) had touches land during a screen's transition, which UIKit
 drops, and journeys lost taps.
 
-**The app's own driver.** With `UI_DRIVER=app` the steps are carried out inside the app instead, by
-`driver/LNAppDriver.m`, which every app's Debug build compiles (`#if DEBUG`: nothing of it in Release) and
-which starts only when the host passes it a port. It finds elements in the view tree and uses each control
-the way its touch would (a button's primary action, a row's selection, a menu's action, an alert action, a
-tab, back), so the renderer sends the same events; it refuses a control that is covered, disabled or out of
-view, and waits for sheets and screens to finish coming and going. The host launches the app with `simctl`
-and takes the screenshots itself, and no XCTest runs. What it does not test is touches themselves: gestures,
-hit-testing beyond its own check, the system keyboard. Winnow's five journeys take about 75 s this way,
-against about 525 s through XCUITest.
-
 **Headless: the app itself.** A LeanNative app is a `Wire` tree and a proven dispatcher, so a journey can also
 drive the app with nothing rendered: `LEANNATIVE_DRIVER=wire <journeys> <evidence dir>`
 (`LeanNative.Journey.Wire`; the executable's `main` passes the app as `Journey.main`'s `wire`). The journeys
@@ -486,13 +476,6 @@ XCTest, no `ui-tests`: a step costs a tree walk, so an app's journeys belong bes
 (native-demo's five take under a second apart from the refusals journey's deliberate timeouts). What it does not
 test is the renderer, real touches and the shell's capabilities: keep one simulator run for those, and for the
 screenshots and recording.
-
-**Lanes.** `UI_LANES` runs journeys on several simulators at once, a lane per word, each with its driver:
-`UI_LANES="xctest:createReceiveSendConfirm app:multisig,ledger"` keeps one journey on real touches and runs the
-rest on the app's driver beside it. The app is built once; each lane has its own simulator, `UI_BEFORE`
-fixture, recording and evidence (`<UI_OUT>/lanes/<n>`), merged into `<UI_OUT>` (`export-evidence` reads a
-merged run from `journeys.json` and the screenshots, there being no single result bundle). `ios-app.yml`
-takes `ui-driver:` and `ui-lanes:`.
 
 CI runs them on both platforms (check.yml): `ui` on an iOS simulator, `ui-catalyst` under Mac Catalyst on
 the same GitHub-hosted macOS runner (an arm64 virtual Mac), each with its evidence exported. Under

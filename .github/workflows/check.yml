@@ -127,12 +127,6 @@ jobs:
           UI_OUT="$RUNNER_TEMP/journeys" UI_NAME=journeys DERIVED_DATA="$RUNNER_TEMP/dd" \
             UI_JOURNEY="$PWD/examples/native-demo/.lake/build/bin/journeys" framework/native/ci/ui-tests
           test -s "$RUNNER_TEMP/journeys/screenshots/journey-widgets.png"
-      - name: native-demo journeys on the app's own driver (no XCTest)
-        run: |
-          set -euo pipefail
-          UI_OUT="$RUNNER_TEMP/journeys-app" UI_NAME=journeys DERIVED_DATA="$RUNNER_TEMP/dd" UI_DRIVER=app \
-            UI_JOURNEY="$PWD/examples/native-demo/.lake/build/bin/journeys" framework/native/ci/ui-tests
-          test -s "$RUNNER_TEMP/journeys-app/screenshots/journey-widgets.png"
       - name: native-demo journeys against the app itself, headless (no simulator)
         run: |
           set -euo pipefail
@@ -143,7 +137,6 @@ jobs:
         run: |
           python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/ui" "$RUNNER_TEMP/evidence" --require-passed
           python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/journeys" "$RUNNER_TEMP/evidence-journeys" --require-passed
-          python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/journeys-app" "$RUNNER_TEMP/evidence-journeys-app" --require-passed
       - name: Preserve the run and its evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -154,8 +147,6 @@ jobs:
             ${{ runner.temp }}/evidence/
             ${{ runner.temp }}/journeys/
             ${{ runner.temp }}/evidence-journeys/
-            ${{ runner.temp }}/journeys-app/
-            ${{ runner.temp }}/evidence-journeys-app/
             ${{ runner.temp }}/journeys-wire/
             !${{ runner.temp }}/ui/*.xcresult/**/private/
             !${{ runner.temp }}/journeys/*.xcresult/**/private/
