@@ -39,3 +39,17 @@ root = "LeanNativeTest.EffectScope"
 [[lean_exe]]
 name = "manifest-test"
 root = "LeanNativeTest.Manifest"
+
+# The release workflow's steps (.github/workflows/ios-release.yml): policy, bundle checks, App Store Connect.
+# Not a default target: an app builds it only to release (`lake build leannative/leannative-release`).
+[[lean_lib]]
+name = "LeanNativeRelease"
+
+[[lean_exe]]
+name = "leannative-release"
+root = "LeanNativeRelease.Main"
+
+# The release tool against openssl, plutil and codesign on this Mac (`make check`; not a default target).
+[[lean_exe]]
+name = "release-test"
+root = "LeanNativeTest.Release"
