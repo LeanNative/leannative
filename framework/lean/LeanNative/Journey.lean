@@ -121,6 +121,9 @@ structure Driver where
   screenshots : Option String
   /-- the screenshots the running journey has taken, for journeys.json -/
   taken : IO.Ref (Array String)
+  /-- each command's count, total and longest time (ms) and the driver's looks (snapshots) for it in the running
+  journey: where a journey's time goes -/
+  timing : IO.Ref (Array (String × Nat × Nat × Nat × Nat))
 
 /-- What a journey runs in: IO, with the driver. -/
 abbrev UI := ReaderT Driver IO
@@ -230,20 +233,40 @@ private def wireAnswer (d : Driver) (dir : String) (op : String) (fields : List 
   | "end" => if (← d.link.get).isNone then return some okJson else return none
   | _ => return none
 
+/-- `ms` more spent on `op`, and `looks` more snapshots, in the running journey's timing. -/
+private def timed (d : Driver) (op : String) (ms looks : Nat) : IO Unit :=
+  d.timing.modify fun rows =>
+    match rows.findIdx? (·.1 == op) with
+    | some i => let (o, n, total, longest, l) := rows[i]!; rows.set! i (o, n + 1, total + ms, max longest ms, l + looks)
+    | none => rows.push (op, 1, ms, ms, looks)
+
+/-- The journey's timing, longest total first: `tap 12× 34.1 s (longest 6.2, 31 looks)`. -/
+def timingSummary (rows : Array (String × Nat × Nat × Nat × Nat)) : String :=
+  let sorted := rows.qsort fun a b => a.2.2.1 > b.2.2.1
+  let secs (ms : Nat) : String := s!"{ms / 1000}.{(ms % 1000) / 100}"
+  ", ".intercalate (sorted.toList.map fun (op, n, total, longest, looks) =>
+    s!"{op} {n}× {secs total} s (longest {secs longest}{if looks > 0 then s!", {looks} looks" else ""})")
+
 /-- One command to the driver and its answer; a refusal (`ok: false`) fails the journey with the driver's reason. -/
 def request (op : String) (fields : List (String × Json) := []) : UI Json := do
   let d ← read
-  if let some dev := d.device then
-    if let some j ← hostAnswer d dev op fields then return j
-  if let some dir := d.wireDir then
-    if let some j ← wireAnswer d dir op fields then return j
-  let some l ← d.link.get | failure s!"{op}: the app is not running (launch it first)"
-  let line := (Json.mkObj (("op", Json.str op) :: fields)).compress ++ "\n"
-  (l.socket.send line.toUTF8).block
-  let answer ← readLine l
-  let .ok j := Json.parse answer | failure s!"the driver's answer is not JSON: {answer}"
-  if j.getObjValAs? Bool "ok" matches .ok true then return j
-  failure ((j.getObjValAs? String "error").toOption.getD s!"{op} refused: {answer}")
+  let start ← IO.monoMsNow
+  let answer ← go d
+  timed d op ((← IO.monoMsNow) - start) ((answer.getObjValAs? Nat "snapshots").toOption.getD 0)
+  return answer
+where
+  go (d : Driver) : IO Json := do
+    if let some dev := d.device then
+      if let some j ← hostAnswer d dev op fields then return j
+    if let some dir := d.wireDir then
+      if let some j ← wireAnswer d dir op fields then return j
+    let some l ← d.link.get | failure s!"{op}: the app is not running (launch it first)"
+    let line := (Json.mkObj (("op", Json.str op) :: fields)).compress ++ "\n"
+    (l.socket.send line.toUTF8).block
+    let answer ← readLine l
+    let .ok j := Json.parse answer | failure s!"the driver's answer is not JSON: {answer}"
+    if j.getObjValAs? Bool "ok" matches .ok true then return j
+    failure ((j.getObjValAs? String "error").toOption.getD s!"{op} refused: {answer}")
 
 private def seconds (s : Float) : Json := toJson s
 
@@ -426,25 +449,34 @@ def main (journeys : List Journey) (args : List String) (wire : Option WireApp :
   else
     say s!"journeys: the app's driver, on 127.0.0.1:{port}"
   let d : Driver := { mode := if device.isSome then .app else if wireDir.isSome then .wire else .xctest, link, server, device,
-                      child := ← IO.mkRef none, wireDir, screenshots := some shots.toString, taken := ← IO.mkRef #[] }
+                      child := ← IO.mkRef none, wireDir, screenshots := some shots.toString, taken := ← IO.mkRef #[],
+                      timing := ← IO.mkRef #[] }
   let mut results : Array Json := #[]
   let mut failed := 0
   for j in chosen do
     say s!"journey {j.name}"
     d.taken.set #[]
+    d.timing.set #[]
     let start ← IO.monoMsNow
     let outcome ← (j.run.run d).toBaseIO
     let secs := (Float.ofNat ((← IO.monoMsNow) - start)) / 1000
+    let timing ← d.timing.get
+    -- where the time went: each command's count, total and longest, for journeys.json and the log
+    let timingJson := Json.mkObj (timing.toList.map fun (op, n, total, longest, looks) =>
+      (op, Json.mkObj [("count", toJson n), ("ms", toJson total), ("longestMs", toJson longest), ("looks", toJson looks)]))
     match outcome with
     | .ok () =>
       say s!"journey {j.name}: passed ({secs} s)"
+      say s!"  driver: {timingSummary timing}"
       results := results.push (Json.mkObj [("name", Json.str j.name), ("passed", true), ("seconds", toJson secs),
-                                           ("screenshots", toJson (← d.taken.get))])
+                                           ("screenshots", toJson (← d.taken.get)), ("driver", timingJson)])
     | .error e =>
       failed := failed + 1
       say s!"journey {j.name}: FAILED ({secs} s): {e}"
+      say s!"  driver: {timingSummary timing}"
       results := results.push (Json.mkObj [("name", Json.str j.name), ("passed", false), ("seconds", toJson secs),
-                                           ("failure", Json.str (toString e)), ("screenshots", toJson (← d.taken.get))])
+                                           ("failure", Json.str (toString e)), ("screenshots", toJson (← d.taken.get)),
+                                           ("driver", timingJson)])
       -- the failure into the result bundle, and the app stopped for the next journey; the connection may be gone
       try
         discard <| (request "fail" [("message", Json.str s!"journey {j.name}: {e}")]).run d
