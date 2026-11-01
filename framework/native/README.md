@@ -447,9 +447,23 @@ APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo \
 
 `ios-app.yml` takes `ui-journey:`, the name of the app package's executable, then any journey names: built, then run as `UI_JOURNEY` (`ui-journey: journeys counting` runs only `counting`).
 
-**The app's own driver.** XCUITest is slow for this: each step finds its element several times, and every
-lookup has the app snapshot its whole accessibility tree on its main thread, besides XCTest's waits for the
-app to go idle. With `UI_DRIVER=app` the steps are carried out inside the app instead, by
+**One snapshot per look.** Every `XCUIElementQuery` makes the app walk its whole accessibility tree, fetching each
+element's attributes, on its main thread; a step that asked `exists`, `hittable`, `isEnabled` and then tapped
+paid that four to six times, and a journey's time was mostly those walks. `LNDriver` instead takes one snapshot
+of the whole app per look (`-snapshotWithError:`, the same walk, once) and finds the element in it: identifier,
+label, frame, type, enabled, and what is drawn over it (an alert, a sheet, the keyboard, a later window showing
+something there). A tap is then a touch at the middle of the element's visible part (`XCUICoordinate`), once two
+looks 50 ms apart agree on its frame (nothing is carrying it), with no element to resolve again. A read (`text`,
+`exists`, `state`) is one look, under 50 ms. A refusal names what is on screen (the identifiers and labels the
+snapshot holds), so a journey's author sees what the step could have named, and every answer carries how many
+looks it took (`journeys.json` and the log show each command's count, time and looks). Measured on Winnow's five
+journeys on one Mac: 327 s through element queries, 262 s with snapshots, every journey faster, taps from
+1.4 s to about 1.2 s (what remains in a tap is XCTest's wait for the app to go idle before and after the touch),
+scrolls from 2.4 s to 1.5 s, `text` from 0.4 s to under 0.1 s. XCTest's idle waits stay: skipping them (a
+private interaction option, tried with either bit) had touches land during a screen's transition, which UIKit
+drops, and journeys lost taps.
+
+**The app's own driver.** With `UI_DRIVER=app` the steps are carried out inside the app instead, by
 `driver/LNAppDriver.m`, which every app's Debug build compiles (`#if DEBUG`: nothing of it in Release) and
 which starts only when the host passes it a port. It finds elements in the view tree and uses each control
 the way its touch would (a button's primary action, a row's selection, a menu's action, an alert action, a
