@@ -375,9 +375,10 @@ class PrepareTests(Fixture):
         self.assertFalse(self.out.exists())
 
 
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg (each part's recording is made with it)")
 class PartsTests(Fixture):
     """A journeys run split across runners (ios-app.yml's ui-journey-shards): each part a UI-tests output
-    directory of its own, published as one run."""
+    directory of its own, published as one run. Joined for real by every winnow-lean run's media job."""
 
     def setUp(self):
         super().setUp()
