@@ -366,7 +366,8 @@ def argHelpers : List Stmt := [
     .blank,
     .l "/// How a capability answers: once, on the main queue.",
     .l "typedef void (^LNAnswer)(NSDictionary *result);",
-    .blank,    .l "/// Lowercase hex of some bytes, and back (nil unless every character is a hex digit and they pair up).",
+    .blank,
+    .l "/// Lowercase hex of some bytes, and back (nil unless every character is a hex digit and they pair up).",
     b "static NSString *LNHexOf(NSData *data) {" [
         .l "static const char digits[] = \"0123456789abcdef\";",
         .l "const unsigned char *bytes = data.bytes;",

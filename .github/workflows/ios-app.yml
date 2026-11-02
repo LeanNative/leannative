@@ -9,8 +9,9 @@ name: LeanNative iOS app
 # launch after it are minutes of CPU on a hosted runner's three cores, so a build beside it slows by about as
 # much as it would save (README.md). The scripts it runs are LeanNative's own, from the
 # app's resolved LeanNative package (<app-dir>/.lake/packages/leannative/framework/native/ci), so they are the
-# commit the app pins; `leannative` must name that commit, and both jobs fail if the app's lake-manifest.json
-# pins another.
+# commit the app pins; `leannative` must name that commit, and every job fails if the app's lake-manifest.json
+# pins another. An app in LeanNative's own repository (examples/*, whose manifest names the framework by path)
+# runs this checkout's scripts and needs no `leannative`: check.yml runs the examples so.
 #
 #   uses: LeanNative/leannative/.github/workflows/ios-app.yml@<commit>
 #   with: { leannative: <commit>, lean-packages: …, app-dir: …, app-root: …, scheme: …, … }
@@ -22,7 +23,9 @@ on:
   workflow_call:
     inputs:
       leannative:
-        description: The LeanNative commit this workflow is called at; must equal the app's lake-manifest.json pin
+        description: >-
+          The LeanNative commit this workflow is called at; must equal the app's lake-manifest.json pin (none for
+          an app whose manifest names LeanNative by path, as LeanNative's own examples do)
         type: string
         required: false
       elmlean:
@@ -177,8 +180,6 @@ env:
   APP_ROOT: ${{ inputs.app-root }}
   SCHEME: ${{ inputs.scheme }}
   IOS_DIR: ${{ inputs.ios-dir }}
-  LEANNATIVE_CI: ${{ github.workspace }}/${{ inputs.app-dir }}/.lake/packages/leannative/framework/native/ci
-  ELMLEAN_CI: ${{ github.workspace }}/${{ inputs.app-dir }}/.lake/packages/leannative/framework/native/ci
 jobs:
   lean:
     runs-on: ${{ inputs.runs-on }}
@@ -189,17 +190,33 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: The app pins this LeanNative
+        id: pin
         env:
           WANT: ${{ inputs.leannative || inputs.elmlean }}
+        # LEANNATIVE_CI (and ELMLEAN_CI) for the steps after: the pinned package's scripts, or for an app that
+        # names LeanNative by path (LeanNative's own examples), this checkout's. PACKAGE_ROOT, where a job keeps
+        # the package itself (the media job's checkout of it).
         run: &pin |
-          [ -n "$WANT" ] || { echo "::error::the workflow needs leannative: <commit>"; exit 1; }
+          set -euo pipefail
           found=$(/usr/bin/python3 - "$APP_DIR/lake-manifest.json" <<'PY'
           import json, sys
-          print(" ".join(p.get("rev", "") for p in json.load(open(sys.argv[1]))["packages"] if p.get("name") == "leannative"))
+          for p in json.load(open(sys.argv[1]))["packages"]:
+              if p.get("name") == "leannative":
+                  print(p.get("type", "git"), p.get("dir") if p.get("type") == "path" else p.get("rev", ""))
           PY
           )
-          echo "lake-manifest.json: leannative $found; workflow: leannative $WANT"
-          [ "$found" = "$WANT" ] || { echo "::error::$APP_DIR/lake-manifest.json pins LeanNative at '$found', but the workflow is called with leannative: $WANT"; exit 1; }
+          kind=${found%% *}; ref=${found#* }
+          if [ "$kind" = path ]; then
+            echo "lake-manifest.json: leannative at $ref, in this repository"
+            ci=$(cd "$APP_DIR/$ref/../native/ci" && pwd)
+          else
+            [ -n "$WANT" ] || { echo "::error::the workflow needs leannative: <commit>"; exit 1; }
+            echo "lake-manifest.json: leannative $ref; workflow: leannative $WANT"
+            [ "$ref" = "$WANT" ] || { echo "::error::$APP_DIR/lake-manifest.json pins LeanNative at '$ref', but the workflow is called with leannative: $WANT"; exit 1; }
+            ci="${PACKAGE_ROOT:-$GITHUB_WORKSPACE/$APP_DIR/.lake/packages/leannative}/framework/native/ci"
+          fi
+          { echo "LEANNATIVE_CI=$ci"; echo "ELMLEAN_CI=$ci"; } >> "$GITHUB_ENV"
+          { echo "kind=$kind"; echo "rev=$ref"; } >> "$GITHUB_OUTPUT"
       - name: The cache key
         id: key
         env:
@@ -283,7 +300,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: lean-${{ github.run_id }}-${{ github.run_attempt }}
+          name: lean-${{ inputs.scheme }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/leannative-ci/lean/
             !${{ runner.temp }}/leannative-ci/lean/**/private/
@@ -408,8 +425,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          # a part's is app-<run>-<attempt>-part-<index>, which the media job downloads
-          name: app-${{ github.run_id }}-${{ github.run_attempt }}${{ matrix.shard && format('-part-{0}', strategy.job-index) || '' }}
+          # app-<scheme>-<run>-<attempt> (several apps can share a run: check.yml's examples); a part's ends
+          # -part-<index>, which the media job downloads
+          name: app-${{ inputs.scheme }}-${{ github.run_id }}-${{ github.run_attempt }}${{ matrix.shard && format('-part-{0}', strategy.job-index) || '' }}
           path: |
             ${{ runner.temp }}/leannative-ci/app/
             !${{ runner.temp }}/leannative-ci/app/DerivedData/
@@ -426,8 +444,7 @@ jobs:
     timeout-minutes: ${{ inputs.timeout-minutes }}
     env:
       # the pinned commit's scripts, checked out on their own: this job builds no Lean
-      LEANNATIVE_CI: ${{ github.workspace }}/.leannative/framework/native/ci
-      ELMLEAN_CI: ${{ github.workspace }}/.leannative/framework/native/ci
+      PACKAGE_ROOT: ${{ github.workspace }}/.leannative
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -436,22 +453,29 @@ jobs:
       - name: ffmpeg, installing while the parts download
         if: inputs.journey-media != ''
         run: *ffmpeg
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The app pins this LeanNative
+        id: pin
+        env:
+          WANT: ${{ inputs.leannative || inputs.elmlean }}
+        run: *pin
+      - name: LeanNative at the pinned commit (an app in this repository has it already)
+        if: steps.pin.outputs.kind != 'path'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: LeanNative/leannative
-          ref: ${{ inputs.leannative || inputs.elmlean }}
+          ref: ${{ steps.pin.outputs.rev }}
           path: .leannative
       - name: The parts' evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: app-${{ github.run_id }}-${{ github.run_attempt }}-part-*
+          pattern: app-${{ inputs.scheme }}-${{ github.run_id }}-${{ github.run_attempt }}-part-*
           path: ${{ runner.temp }}/leannative-ci/media/parts
       - name: The parts, in order
         env:
           SHARDS: ${{ inputs.ui-journey-shards }}
           UI_NAME: ${{ inputs.ui-name }}
-          PREFIX: ${{ runner.temp }}/leannative-ci/media/parts/app-${{ github.run_id }}-${{ github.run_attempt }}-part-
+          PREFIX: ${{ runner.temp }}/leannative-ci/media/parts/app-${{ inputs.scheme }}-${{ github.run_id }}-${{ github.run_attempt }}-part-
         run: |
           set -euo pipefail
           count=$(/usr/bin/python3 -c 'import json, os; print(len(json.loads(os.environ["SHARDS"])))')
@@ -549,7 +573,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-${{ inputs.scheme }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/leannative-ci/release/
             !${{ runner.temp }}/leannative-ci/release/DerivedData/

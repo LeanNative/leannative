@@ -1,0 +1,23 @@
+# The smallest useful LeanNative app: a counter, a greeting and a list, and one capability (`open`). Its
+# manifest's `uses` lists only that, so the shell it builds has no Bluetooth or Face ID code and links neither
+# framework (ios/release-check checks the built app).
+name = "simple"
+defaultTargets = ["Simple"]
+
+[[require]]
+name = "leannative"
+path = "../../framework/lean"
+
+[[lean_lib]]
+name = "Simple"
+
+# The Xcode project's spec, from Simple/Project.lean (framework/native/ci/build-ios runs it)
+[[lean_exe]]
+name = "ios-project"
+root = "Simple.Project"
+
+# The UI journey (Simple/Journeys.lean), run on the Mac by framework/native/ci/ui-tests as UI_JOURNEY, or headless
+# by framework/native/ci/wire-journeys
+[[lean_exe]]
+name = "journeys"
+root = "Simple.Journeys"

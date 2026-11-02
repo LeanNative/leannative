@@ -1,7 +1,11 @@
 name: check
 # This repository's own checks on GitHub-hosted macOS (free for a public repository): `make check` (the
 # framework's build, proof and axiom gate, protocol harness), then native-demo built for the iOS simulator
-# and for Mac Catalyst, each checked for Swift. Apps use ios-app.yml instead.
+# and for Mac Catalyst, each checked for Swift; native-demo's Objective-C UI tests on iOS and Mac Catalyst; and
+# every example (native-demo, simple, bluetooth-auth) through ios-app.yml, as an app's own CI calls it: the Lean
+# build and the journeys headless, the Debug build and the journeys on a simulator with their media (the
+# journey-media-<example> artifacts, which leannative.com shows), and the Release builds with the frameworks
+# each must or must not link.
 # Each job builds on the latest Lean build main cached under its name and saves its own on main only: a pull
 # request restores main's and adds no entry (the cache holds 10 GB a repository, an entry is the whole build).
 # The toolchain is not cached: it is 700 MB of an entry zstd'd, and elan installs it in half a minute.
@@ -96,8 +100,9 @@ jobs:
             examples/native-demo/ios/build/*.log
           if-no-files-found: warn
           retention-days: 14
-  # native-demo's UI tests (the framework's XCTest kit against real controls) on a throwaway simulator,
-  # then their evidence (framework/native/ci/export-evidence), both kept as artifacts
+  # native-demo's Objective-C UI tests (the framework's XCTest kit against real controls) on a throwaway
+  # simulator, then their evidence (framework/native/ci/export-evidence), both kept as artifacts; its journeys
+  # run in `examples`
   ui:
     runs-on: macos-26
     timeout-minutes: 90
@@ -131,13 +136,6 @@ jobs:
         run: |
           UI_OUT="$RUNNER_TEMP/ui" UI_BEFORE="$PWD/examples/native-demo/ios/ui-before" DERIVED_DATA="$RUNNER_TEMP/dd" \
             framework/native/ci/ui-tests
-      - name: native-demo journeys (Lean on the host, the kit's driver in the app)
-        run: |
-          set -euo pipefail
-          (cd examples/native-demo && lake build journeys)
-          UI_OUT="$RUNNER_TEMP/journeys" UI_NAME=journeys DERIVED_DATA="$RUNNER_TEMP/dd" \
-            UI_JOURNEY="$PWD/examples/native-demo/.lake/build/bin/journeys" framework/native/ci/ui-tests
-          test -s "$RUNNER_TEMP/journeys/screenshots/journey-widgets.png"
       - name: Save the Lean builds (on main only)
         if: github.event_name != 'pull_request' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -146,22 +144,10 @@ jobs:
             framework/lean/.lake
             examples/native-demo/.lake
           key: ${{ steps.cache.outputs.cache-primary-key }}
-      - name: native-demo journeys against the app itself, headless (no simulator)
-        run: |
-          set -euo pipefail
-          UI_OUT="$RUNNER_TEMP/journeys-wire" framework/native/ci/wire-journeys journeys
-          test -s "$RUNNER_TEMP/journeys-wire/screenshots/journey-widgets.wire.json"
       - name: Their evidence
         if: always()
         run: |
           python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/ui" "$RUNNER_TEMP/evidence" --require-passed
-          python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/journeys" "$RUNNER_TEMP/evidence-journeys" --require-passed
-      - name: The journeys' media (journey-media, as ios-app.yml's journey-media input makes it)
-        run: |
-          set -euo pipefail
-          python3 -I framework/native/ci/journey-media "$RUNNER_TEMP/journeys" "$RUNNER_TEMP/journey-media" \
-            --journeys examples/native-demo/NativeDemo/Journeys.lean --test-prefix test --field app=native-demo
-          test -s "$RUNNER_TEMP/journey-media/screenshots/journey-widgets.png"
       - name: Preserve the run and its evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -170,12 +156,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ui/
             ${{ runner.temp }}/evidence/
-            ${{ runner.temp }}/journeys/
-            ${{ runner.temp }}/evidence-journeys/
-            ${{ runner.temp }}/journeys-wire/
-            ${{ runner.temp }}/journey-media/
             !${{ runner.temp }}/ui/*.xcresult/**/private/
-            !${{ runner.temp }}/journeys/*.xcresult/**/private/
           if-no-files-found: warn
           retention-days: 14
   # the same UI tests under Mac Catalyst, on the runner's own logged-in session: the kit's click, scroll wheel
@@ -241,3 +222,43 @@ jobs:
             !${{ runner.temp }}/ui/*.xcresult/**/private/
           if-no-files-found: warn
           retention-days: 14
+
+  # Every example as an app's CI runs it (ios-app.yml, from this checkout: the examples name the framework by
+  # path). Each publishes its journeys' media as journey-media-<example>; the Release check holds the frameworks
+  # the manifest's `uses` decides: simple links neither CoreBluetooth nor LocalAuthentication, bluetooth-auth both.
+  examples:
+    name: "example: ${{ matrix.example }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - example: native-demo
+            root: NativeDemo
+            # its Release builds are not what it shows; `check` builds it for both platforms
+            release-builds: false
+            release-check: ''
+          - example: simple
+            root: Simple
+            release-builds: true
+            release-check: framework/native/ci/check-frameworks --lacks CoreBluetooth --lacks LocalAuthentication
+          - example: bluetooth-auth
+            root: BluetoothAuth
+            release-builds: true
+            release-check: framework/native/ci/check-frameworks --links CoreBluetooth --links LocalAuthentication
+    uses: ./.github/workflows/ios-app.yml
+    with:
+      lean-packages: framework/lean examples/${{ matrix.example }}
+      app-dir: examples/${{ matrix.example }}
+      app-root: ${{ matrix.root }}
+      scheme: ${{ matrix.root }}
+      wire-journey: journeys
+      ui-name: journey
+      ui-journey: journeys
+      release-builds: ${{ matrix.release-builds }}
+      release-check: ${{ matrix.release-check }}
+      journey-media: build/journey-media
+      journey-media-args: >-
+        --video videos/${{ matrix.example }}.mp4 --journeys examples/${{ matrix.example }}/${{ matrix.root }}/Journeys.lean
+        --test-prefix test --field app=${{ matrix.example }}
+      publish-name: journey-media-${{ matrix.example }}
+      publish-path: build/journey-media/

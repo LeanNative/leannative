@@ -26,8 +26,16 @@ or written per app.
   signing requirements differ by platform; see the [native platform guide](framework/native/README.md).
 
 LeanNative is being developed alongside [Winnow](https://github.com/winnowwallet/winnow-lean), a Bitcoin
-wallet written in Lean. Start with [`examples/native-demo`](examples/native-demo) for a smaller app that
-exercises the framework's controls and capabilities.
+wallet written in Lean. Three examples are smaller:
+
+| Example | Shows |
+|---|---|
+| [`examples/simple`](examples/simple) | the smallest useful app: a counter, a greeting, a list, and one capability (`open`); its manifest lists only that, so it links neither CoreBluetooth nor LocalAuthentication |
+| [`examples/bluetooth-auth`](examples/bluetooth-auth) | a heart-rate monitor behind Face ID: `auth`, Bluetooth LE (connect, subscribe, read, write), the keychain; in test mode a scripted sensor stands in for the hardware, so its journey runs on a simulator and headless |
+| [`examples/native-demo`](examples/native-demo) | every control and capability in one app, with the framework's own UI tests |
+
+CI runs each of them as an app's CI would (`check.yml` calls `ios-app.yml`), and leannative.com shows their
+journeys' screenshots and recordings.
 
 ## Current scope and limits
 
@@ -205,7 +213,15 @@ jobs:
         Lean .lake/build/bin/my-test
 ```
 
-The inputs are documented at the top of the workflow.
+The inputs are documented at the top of the workflow. LeanNative's own examples run through it too
+(`check.yml`): an app whose lake-manifest.json names LeanNative by path runs that checkout's scripts and needs
+no `leannative`. Each job's evidence is the artifact `<job>-<scheme>-<run>-<attempt>`, so one run can test
+several apps.
+
+`framework/native/ci/check-frameworks [--links NAME]… [--lacks NAME]… <App.app>…` checks the system
+frameworks a built app links (a Debug build's `.debug.dylib` included); as a `release-check`, it holds what the
+manifest's `uses` decides: `examples/simple` lacks CoreBluetooth and LocalAuthentication, and
+`examples/bluetooth-auth` links both.
 
 **UI-test evidence.** `framework/native/ci/export-evidence <run> <out>` turns one `ui-tests` run into
 evidence an app can keep or publish: the screenshots the tests attached (each attributed to the tests
@@ -309,7 +325,8 @@ docs/ISSUES.md              issues moved from posix4e/elmlean
 .github/workflows/
   ios-app.yml               the reusable CI workflow for an app
   ios-release.yml           the reusable release workflow for an app (TestFlight, GitHub release)
-  check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst, its UI tests on both)
+  check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst, its UI tests on both,
+                            every example through ios-app.yml)
 framework/
   lean/                     Lake package `leannative`
     LeanNative/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,
@@ -324,6 +341,8 @@ framework/
   scripts/                  check-axioms.sh, protocol_test.py, fake_cli.py
   Makefile                  the framework's own checks
 examples/
+  simple/                   the smallest useful app, one capability
+  bluetooth-auth/           Face ID, Bluetooth LE and the keychain, with a scripted sensor for test mode
   native-demo/              every capability in one app, no Swift
 ```
 
