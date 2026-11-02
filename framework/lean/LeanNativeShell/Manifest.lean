@@ -394,6 +394,15 @@ def Manifest.main (m : Manifest) (args : List String) : IO UInt32 := do
     if let some dir := (System.FilePath.mk out).parent then IO.FS.createDirAll dir
     let old ← (try IO.FS.readFile out catch _ => pure "")
     if old != text then IO.FS.writeFile out text
+    -- leannative-shell printed every capability into native-shell/ beside the spec; an app that lists its
+    -- `uses` gets only those and its `unlisted`, so it links no framework it never calls (`capsFileFor`)
+    if !m.uses.isEmpty then
+      if let some dir := (System.FilePath.mk out).parent then
+        let caps := dir / "native-shell" / "LNCapabilities.m"
+        if ← caps.pathExists then
+          let text := file (shellHeader "LNCapabilities.m") (capsFileFor (some (m.uses ++ m.unlisted)))
+          let old ← (try IO.FS.readFile caps catch _ => pure "")
+          if old != text then IO.FS.writeFile caps text
     return 0
 
 end LeanNativeShell
