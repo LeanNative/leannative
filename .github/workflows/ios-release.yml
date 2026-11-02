@@ -188,11 +188,11 @@ jobs:
           RUNS_ON: ${{ inputs.runs-on }}
         run: |
           set -euo pipefail
-          paths="$HOME/.elan"
+          paths=()
           deps=()
           specs=()
           for p in $LEAN_PACKAGES; do
-            paths+=$'\n'"$p/.lake"
+            paths+=("$p/.lake")
             deps+=("$p/lean-toolchain" "$p/lake-manifest.json")
             specs+=("$p/*.lean")
           done
@@ -200,15 +200,15 @@ jobs:
           src_hash=$(git ls-files -z -- "${specs[@]}" | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-20)
           {
             echo "key=leannative-$RUNS_ON-$deps_hash-$src_hash"
-            echo "prefix=leannative-$RUNS_ON-$deps_hash-"
-            echo 'paths<<PATHS'; echo "$paths"; echo PATHS
+            echo 'restore-keys<<KEYS'; echo "leannative-$RUNS_ON-$deps_hash-"; echo "leannative-$RUNS_ON-"; echo KEYS
+            echo 'paths<<PATHS'; printf '%s\n' "${paths[@]}"; echo PATHS
           } >> "$GITHUB_OUTPUT"
-      - name: Restore the Lean toolchain and builds (CI saves them)
+      - name: Restore the Lean builds (main's latest; CI saves them)
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.key.outputs.paths }}
           key: ${{ steps.key.outputs.key }}
-          restore-keys: ${{ steps.key.outputs.prefix }}
+          restore-keys: ${{ steps.key.outputs.restore-keys }}
       - name: elan and the Lean toolchain
         run: |
           set -euo pipefail
