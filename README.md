@@ -183,8 +183,9 @@ from main, so nothing passes between them and any can be rerun alone:
 | `app` | the same build and `prepare`, then the iOS app, Debug for the simulator, checked for Swift (`check-no-swift`); the UI tests on a throwaway simulator with a screen recording and a record of the tested revision, `run.json` (`ui-tests`); the journeys' media |
 | `release` | (unless `release-builds: false`, which a pull request may want) the same build and `prepare`, then Release for the simulator and for devices (unsigned), each checked for Swift; with a `release-check` or `test-mode-env`, a Debug simulator build too and those checks on the pair |
 
-A job that needs a simulator creates it before its builds (`framework/native/ci/simulator create`), so it
-boots while they run: on a hosted runner a cold boot and the first launch after it take about four minutes.
+A job that needs a simulator creates it after `lake build` (`framework/native/ci/simulator create`), so it
+boots while the iOS builds run: on a hosted runner a cold boot and the first launch after it take about four
+minutes, and a new simulator keeps the runner busy long after, so it is not started under the Lean build.
 `app` also installs ffmpeg for the media in the background from its first step.
 
 Every long step prints its output as it comes, and a line at least every 30 seconds while a step is
