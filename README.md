@@ -34,8 +34,8 @@ wallet written in Lean. Three examples are smaller:
 | [`examples/bluetooth-auth`](examples/bluetooth-auth) | a heart-rate monitor behind Face ID: `auth`, Bluetooth LE (connect, subscribe, read, write), the keychain; in test mode a scripted sensor stands in for the hardware, so its journey runs on a simulator and headless |
 | [`examples/native-demo`](examples/native-demo) | every control and capability in one app, with the framework's own UI tests |
 
-CI runs each of them as an app's CI would (`check.yml` calls `ios-app.yml`), and leannative.com shows their
-journeys' screenshots and recordings.
+CI runs each one's journeys headless and on a simulator (`check.yml`), and leannative.com shows their
+screenshots and recordings.
 
 ## Current scope and limits
 
@@ -213,14 +213,11 @@ jobs:
         Lean .lake/build/bin/my-test
 ```
 
-The inputs are documented at the top of the workflow. LeanNative's own examples run through it too
-(`check.yml`): an app whose lake-manifest.json names LeanNative by path runs that checkout's scripts and needs
-no `leannative`. Each job's evidence is the artifact `<job>-<scheme>-<run>-<attempt>`, so one run can test
-several apps.
+The inputs are documented at the top of the workflow.
 
 `framework/native/ci/check-frameworks [--links NAME]… [--lacks NAME]… <App.app>…` checks the system
-frameworks a built app links (a Debug build's `.debug.dylib` included); as a `release-check`, it holds what the
-manifest's `uses` decides: `examples/simple` lacks CoreBluetooth and LocalAuthentication, and
+frameworks a built app links (a Debug build's `.debug.dylib` included), for instance as a `release-check`. It
+holds what the manifest's `uses` decides: `examples/simple` lacks CoreBluetooth and LocalAuthentication, and
 `examples/bluetooth-auth` links both.
 
 **UI-test evidence.** `framework/native/ci/export-evidence <run> <out>` turns one `ui-tests` run into
@@ -326,7 +323,7 @@ docs/ISSUES.md              issues moved from posix4e/elmlean
   ios-app.yml               the reusable CI workflow for an app
   ios-release.yml           the reusable release workflow for an app (TestFlight, GitHub release)
   check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst, its UI tests on both,
-                            every example through ios-app.yml)
+                            simple and bluetooth-auth one job each: five macOS jobs, GitHub's limit at once)
 framework/
   lean/                     Lake package `leannative`
     LeanNative/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,
