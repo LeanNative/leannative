@@ -5,6 +5,10 @@ name: check
 # examples simple and bluetooth-auth, one job each (`examples`). Apps use ios-app.yml instead.
 # Five macOS jobs at once, no more: GitHub runs at most five macOS jobs at a time for the whole organization, so
 # a run that needs more queues against itself. A new example goes into a job that is already here.
+# The repository variable MACOS_RUNNER, when set, is the runner label check, ui and examples run on instead (a
+# self-hosted Mac, while GitHub's are backed up; unset it before that Mac goes away, or its jobs wait for it).
+# A fork's pull request always runs on GitHub's: a self-hosted runner never runs code from outside the repository.
+# ui-catalyst stays on GitHub's: it tests under the runner's own logged-in session.
 # Each job builds on the latest Lean build main cached under its name and saves its own on main only: a pull
 # request restores main's and adds no entry (the cache holds 10 GB a repository, an entry is the whole build).
 # The toolchain is not cached: it is 700 MB of an entry zstd'd, and elan installs it in half a minute.
@@ -24,7 +28,7 @@ env:
   SCHEME: NativeDemo
 jobs:
   check:
-    runs-on: macos-26
+    runs-on: ${{ (github.event.pull_request.head.repo.fork && 'macos-26') || vars.MACOS_RUNNER || 'macos-26' }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,7 +106,7 @@ jobs:
   # native-demo's UI tests (the framework's XCTest kit against real controls) on a throwaway simulator,
   # then their evidence (framework/native/ci/export-evidence), both kept as artifacts
   ui:
-    runs-on: macos-26
+    runs-on: ${{ (github.event.pull_request.head.repo.fork && 'macos-26') || vars.MACOS_RUNNER || 'macos-26' }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -251,7 +255,7 @@ jobs:
   # throwaway simulator with a recording, made into journey-media-<example> (leannative.com shows it).
   examples:
     name: "example: ${{ matrix.example }}"
-    runs-on: macos-26
+    runs-on: ${{ (github.event.pull_request.head.repo.fork && 'macos-26') || vars.MACOS_RUNNER || 'macos-26' }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
