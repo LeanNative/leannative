@@ -281,23 +281,6 @@ def capsBefore : List Stmt := [
     .pp "#import <mach-o/getsect.h>",
     .pp "#import <mach-o/loader.h>",
     .blank,
-    .l "/// An `LAError`'s name for `auth` (`unknown` for any other error, or none).",
-    b "static NSString *LNAuthErrorName(NSError *error) {" [
-        .l "if (![error.domain isEqualToString:LAErrorDomain]) return @\"unknown\";",
-        b "switch ((LAError)error.code) {" [
-            .l "case LAErrorAuthenticationFailed: return @\"authenticationFailed\";",
-            .l "case LAErrorUserCancel: return @\"userCancel\";",
-            .l "case LAErrorUserFallback: return @\"userFallback\";",
-            .l "case LAErrorSystemCancel: return @\"systemCancel\";",
-            .l "case LAErrorPasscodeNotSet: return @\"passcodeNotSet\";",
-            .l "case LAErrorAppCancel: return @\"appCancel\";",
-            .l "case LAErrorInvalidContext: return @\"invalidContext\";",
-            .l "case LAErrorNotInteractive: return @\"notInteractive\";",
-            .l "case LAErrorBiometryNotAvailable: return @\"biometryNotAvailable\";",
-            .l "case LAErrorBiometryNotEnrolled: return @\"biometryNotEnrolled\";",
-            .l "case LAErrorBiometryLockout: return @\"biometryLockout\";",
-            .l "default: return @\"unknown\";"]],
-    .blank,
     .l "/// The ephemeral URLSessions of `http.get`: no cookies, no cache, redirects only within the same host and",
     .l "/// never from https down to http. One shared session without a proxy, and one per SOCKS5 proxy (`host:port`),",
     .l "/// kept for the life of the app (a session is never invalidated while a request might still use it).",
@@ -381,26 +364,9 @@ def argHelpers : List Stmt := [
     b "static NSNumber *LNArgNumber(NSDictionary *args, NSString *k) {" [
         .l "return [args[k] isKindOfClass:NSNumber.class] ? args[k] : nil;"],
     .blank,
-    ]
-
-set_option maxRecDepth 8000 in
-def bluetoothClass : List Stmt := [
-    .l "/// Bluetooth Low Energy (GATT) for the `ble.*` capabilities: generic, by service and characteristic UUIDs;",
-    .l "/// what the bytes mean is the app's. One central manager, made on the first `ble.*` request so that an app",
-    .l "/// that never uses Bluetooth never asks for it. Callbacks arrive on the main queue, like every answer.",
+    .l "/// How a capability answers: once, on the main queue.",
     .l "typedef void (^LNAnswer)(NSDictionary *result);",
-    .blank,
-    .l "@interface LNBluetooth : NSObject <CBCentralManagerDelegate, CBPeripheralDelegate>",
-    .l "+ (instancetype)shared;",
-    .l "- (void)state:(LNAnswer)answer;",
-    .l "- (void)connect:(NSDictionary *)args answer:(LNAnswer)answer;",
-    .l "- (void)subscribe:(NSDictionary *)args answer:(LNAnswer)answer;",
-    .l "- (void)write:(NSDictionary *)args answer:(LNAnswer)answer;",
-    .l "- (void)read:(NSDictionary *)args answer:(LNAnswer)answer;",
-    .l "- (void)close:(NSDictionary *)args answer:(LNAnswer)answer;",
-    .l "@end",
-    .blank,
-    .l "/// Lowercase hex of some bytes, and back (nil unless every character is a hex digit and they pair up).",
+    .blank,    .l "/// Lowercase hex of some bytes, and back (nil unless every character is a hex digit and they pair up).",
     b "static NSString *LNHexOf(NSData *data) {" [
         .l "static const char digits[] = \"0123456789abcdef\";",
         .l "const unsigned char *bytes = data.bytes;",
@@ -424,6 +390,45 @@ def bluetoothClass : List Stmt := [
             .l "if (hi < 0 || lo < 0) return nil;",
             .l "bytes[i / 2] = (unsigned char)(hi << 4 | lo);"],
         .l "return data;"],
+    .blank,
+    ]
+
+set_option maxRecDepth 8000 in
+/-- `LNAuthErrorName`, for `auth` alone: it names LocalAuthentication's errors, so an app without `auth`
+does not get it (nor, then, the framework). -/
+def authErrorName : List Stmt := [
+    .l "/// An `LAError`'s name for `auth` (`unknown` for any other error, or none).",
+    b "static NSString *LNAuthErrorName(NSError *error) {" [
+        .l "if (![error.domain isEqualToString:LAErrorDomain]) return @\"unknown\";",
+        b "switch ((LAError)error.code) {" [
+            .l "case LAErrorAuthenticationFailed: return @\"authenticationFailed\";",
+            .l "case LAErrorUserCancel: return @\"userCancel\";",
+            .l "case LAErrorUserFallback: return @\"userFallback\";",
+            .l "case LAErrorSystemCancel: return @\"systemCancel\";",
+            .l "case LAErrorPasscodeNotSet: return @\"passcodeNotSet\";",
+            .l "case LAErrorAppCancel: return @\"appCancel\";",
+            .l "case LAErrorInvalidContext: return @\"invalidContext\";",
+            .l "case LAErrorNotInteractive: return @\"notInteractive\";",
+            .l "case LAErrorBiometryNotAvailable: return @\"biometryNotAvailable\";",
+            .l "case LAErrorBiometryNotEnrolled: return @\"biometryNotEnrolled\";",
+            .l "case LAErrorBiometryLockout: return @\"biometryLockout\";",
+            .l "default: return @\"unknown\";"]],
+    .blank]
+
+set_option maxRecDepth 8000 in
+def bluetoothClass : List Stmt := [
+    .l "/// Bluetooth Low Energy (GATT) for the `ble.*` capabilities: generic, by service and characteristic UUIDs;",
+    .l "/// what the bytes mean is the app's. One central manager, made on the first `ble.*` request so that an app",
+    .l "/// that never uses Bluetooth never asks for it. Callbacks arrive on the main queue, like every answer.",
+    .l "@interface LNBluetooth : NSObject <CBCentralManagerDelegate, CBPeripheralDelegate>",
+    .l "+ (instancetype)shared;",
+    .l "- (void)state:(LNAnswer)answer;",
+    .l "- (void)connect:(NSDictionary *)args answer:(LNAnswer)answer;",
+    .l "- (void)subscribe:(NSDictionary *)args answer:(LNAnswer)answer;",
+    .l "- (void)write:(NSDictionary *)args answer:(LNAnswer)answer;",
+    .l "- (void)read:(NSDictionary *)args answer:(LNAnswer)answer;",
+    .l "- (void)close:(NSDictionary *)args answer:(LNAnswer)answer;",
+    .l "@end",
     .blank,
     b "static NSString *LNStateName(CBManagerState state) {" [
         b "switch (state) {" [
@@ -701,12 +706,38 @@ def bluetoothClass : List Stmt := [
 /-- The statements before the first declaration: the imports. -/
 def capsImports : Nat := (capsBefore.findIdx? fun | .l _ | .blk .. => true | _ => false).getD 0
 
-def capsFile : List Stmt :=
-  capsBefore.take capsImports ++ argHelpers ++ bluetoothClass ++ [.blank] ++ backgroundTasksClass ++ [.blank] ++ cloudKitClass ++ [.blank] ++ capsBefore.drop capsImports ++
+/-- Whether `uses` (`auth`, `ble.*`, `ble.connect`) selects the capability named `name`. -/
+def selects (uses : List String) (name : String) : Bool :=
+  uses.any fun u => u == name || (u.endsWith ".*" && (u.splitOn ".").headD u == (name.splitOn ".").headD name)
+
+/-- `LNCapabilities.m` for an app that uses `uses` (none: every capability, which `leannative-shell` prints).
+Only what a selected capability needs is printed: without `auth` there is no LocalAuthentication, and without a
+`ble.*` capability no CoreBluetooth and no `LNBluetooth`, so the binary does not link a framework that App Store
+Connect then asks a purpose string for. Any other request answers `unknownCapability`, and
+`Manifest.callProblems` already refuses an app whose code calls a capability `uses` leaves out. -/
+def capsFileFor (uses : Option (List String)) : List Stmt :=
+  let chosen := match uses with
+    | none => capabilities
+    | some us => capabilities.filter (selects us ·.name)
+  let has (fam : String) := chosen.any fun c => (c.name.splitOn ".").headD c.name == fam
+  let auth := chosen.any (·.name == "auth")
+  let ble := has "ble"
+  let imports := (capsBefore.take capsImports).filter fun
+    | .pp t => (auth || !t.contains "LocalAuthentication") && (ble || !t.contains "CoreBluetooth")
+    | _ => true
+  imports ++ argHelpers ++ (if ble then bluetoothClass ++ [.blank] else []) ++ backgroundTasksClass ++ [.blank] ++
+  cloudKitClass ++ [.blank] ++ (if auth then authErrorName else []) ++ capsBefore.drop capsImports ++
   [ b "- (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(NSDictionary *))answer {"
-      [ ifChain "" (capabilities.map (fun c => (s!"[name isEqualToString:{lit c.name}]", c.body)) ++ [("", unknownCapability)]) ] ] ++
+      [ ifChain "" (chosen.map (fun c => (s!"[name isEqualToString:{lit c.name}]", c.body)) ++ [("", unknownCapability)]) ] ] ++
   [
     .blank,
     .l "@end"]
+
+def capsFile : List Stmt := capsFileFor none
+
+/-- The comment at the top of every printed shell file. -/
+def shellHeader (name : String) : List String :=
+  [ s!"GENERATED by leannative-shell ({name}) from framework/lean/LeanNativeShell (Lean {Lean.versionString}). Do not edit:",
+    "framework/native/scripts/ios_lean_sources.sh writes it on every build." ]
 
 end LeanNativeShell

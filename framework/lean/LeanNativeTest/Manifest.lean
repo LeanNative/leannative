@@ -151,6 +151,24 @@ def main : IO UInt32 := do
   check "fixed versions in Info.plist" (is plain ["targets", "App", "info", "properties", "CFBundleVersion"] "1")
   check "no UI tests, no test target" (at? plain ["targets", "AppUITests"] == none
     && at? plain ["schemes", "App", "test"] == none)
+  -- the capabilities file for an app's `uses`: only what they need is printed, so linked
+  let caps (uses : Option (List String)) := file [] (capsFileFor uses)
+  let every := caps none
+  check "every capability: LocalAuthentication and CoreBluetooth" (every.contains "LocalAuthentication"
+    && every.contains "CoreBluetooth" && every.contains "LNBluetooth" && every.contains "LNAuthErrorName")
+  let http := caps (some ["http.request", "keychain.*"])
+  check "http and keychain: neither framework" (!http.contains "LocalAuthentication" && !http.contains "CoreBluetooth"
+    && !http.contains "LNBluetooth" && !http.contains "LNAuthErrorName")
+  check "http and keychain: their rows, and no other" (http.contains "@\"http.request\"" && http.contains "@\"keychain.get\""
+    && !http.contains "@\"auth\"" && !http.contains "@\"ble.")
+  let auth := caps (some ["auth"])
+  check "auth: LocalAuthentication, no CoreBluetooth" (auth.contains "LocalAuthentication" && auth.contains "LNAuthErrorName"
+    && !auth.contains "CoreBluetooth")
+  let ble := caps (some ["ble.connect"])
+  check "one ble capability: CoreBluetooth and LNBluetooth, no LocalAuthentication" (ble.contains "CoreBluetooth"
+    && ble.contains "LNBluetooth" && !ble.contains "LocalAuthentication")
+  check "a family selects its rows" (selects ["ble.*"] "ble.connect" && !selects ["ble.*"] "blex.scan"
+    && selects ["auth"] "auth" && !selects ["auth"] "auth.other")
   let n ← failures.get
   IO.println (if n == 0 then "manifest: all passed" else s!"manifest: {n} failed")
   return if n == 0 then 0 else 1
