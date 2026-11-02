@@ -21,9 +21,13 @@
 #   UI_OUT          the evidence directory (default $IOS_DIR/build/ui-tests); emptied first, one run at a time
 #   UI_NAME         the result bundle's and recording's name (default ui-tests)
 #   UI_SIMULATOR    (simulator) an existing simulator to use instead (a name or UDID; it is not deleted)
+#   UI_THROWAWAY    (simulator) the UDID of one made for this run (framework/native/ci/simulator create, booting
+#                   while the app builds): used instead of a new one, and deleted at the end as that would be
 #   UI_RUNTIME      (simulator) the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest)
 #   UI_DEVICE_TYPE  (simulator) the iPhone model (default iPhone 17 Pro), so screenshots keep their size from run to run;
-#                   a runtime without it fails the run; device.json records it
+#                   a runtime without it fails the run; device.json records it (framework/native/ci/simulator)
+#   UI_PREPARED=1   the app's sources and project are ready (build-ios Debug just built them on this platform), so
+#                   they are not prepared again
 #   UI_BEFORE       a command run as `$UI_BEFORE <UI_OUT>` once the device is chosen: the app's fixture
 #                   (a node, files, a config). Each KEY=VALUE line it leaves in <UI_OUT>/test-env reaches the
 #                   test runner as TEST_RUNNER_KEY, i.e. as KEY in the tests' environment.
@@ -224,41 +228,17 @@ print(json.dumps({"platform": "Mac Catalyst", "type": "Mac", "model": out("sysct
                   "os": "macOS " + out("sw_vers", "-productVersion") + " (" + out("sw_vers", "-buildVersion") + ")",
                   "architecture": platform.machine()}))')"
   DESTINATION="platform=macOS,variant=Mac Catalyst,arch=$(uname -m)"
+elif [ -n "${UI_THROWAWAY:-}" ]; then
+  UDID="$UI_THROWAWAY"
+  THROWAWAY="$UDID"
+  DEVICE="$("$CI/simulator" record "$UDID")"
 elif [ -n "${UI_SIMULATOR:-}" ]; then
   UDID="$UI_SIMULATOR"
-  DEVICE="$(xcrun simctl list -j | /usr/bin/python3 -c '
-import json, sys
-data = json.load(sys.stdin)
-models = {t["identifier"]: t["name"] for t in data["devicetypes"]}
-for runtime, devices in data["devices"].items():
-    for d in devices:
-        if sys.argv[1] in (d["udid"], d["name"]):
-            kind = d.get("deviceTypeIdentifier")
-            print(json.dumps({"name": models.get(kind, d["name"]), "type": kind, "runtime": runtime})); sys.exit()
-print("{}")' "$UDID")"
+  DEVICE="$("$CI/simulator" record "$UDID")"
 else
-  DEVICE="$(xcrun simctl list -j runtimes | UI_DEVICE_TYPE="${UI_DEVICE_TYPE:-iPhone 17 Pro}" /usr/bin/python3 -c '
-import json, os, sys
-runtimes = [r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and r.get("platform", "iOS") == "iOS"
-            and r["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS")]
-wanted = os.environ.get("UI_RUNTIME")
-if wanted:
-    runtimes = [r for r in runtimes if r["identifier"] == wanted]
-    if not runtimes: sys.exit("no available runtime " + wanted)
-if not runtimes: sys.exit("no available iOS runtime")
-runtime = max(runtimes, key=lambda r: [int(p) for p in r["version"].split(".") if p.isdigit()])
-iphones = [t for t in runtime.get("supportedDeviceTypes", []) if t["name"].startswith("iPhone")]
-if not iphones: sys.exit("no iPhone for " + runtime["identifier"])
-chosen = next((t for t in iphones if t["name"] == os.environ["UI_DEVICE_TYPE"]), None)
-if chosen is None:
-    sys.exit(os.environ["UI_DEVICE_TYPE"] + " is not available on " + runtime["identifier"] + "; set UI_DEVICE_TYPE to one of: "
-             + ", ".join(t["name"] for t in iphones))
-print(json.dumps({"name": chosen["name"], "type": chosen["identifier"], "runtime": runtime["identifier"],
-                  "os": runtime["name"]}))')"
-  MODEL="$(/usr/bin/python3 -c 'import json, sys; print(json.loads(sys.argv[1])["type"])' "$DEVICE")"
-  RUNTIME="$(/usr/bin/python3 -c 'import json, sys; print(json.loads(sys.argv[1])["runtime"])' "$DEVICE")"
-  UDID=$(xcrun simctl create "$SCHEME UI tests $$" "$MODEL" "$RUNTIME")
+  UDID="$("$CI/simulator" create "$SCHEME UI tests $$")"
   THROWAWAY="$UDID"
+  DEVICE="$("$CI/simulator" record "$UDID")"
 fi
 [ "$PLATFORM" = iossim ] && DESTINATION="id=$UDID"
 echo "$PLATFORM_NAME: $DEVICE"
@@ -271,7 +251,7 @@ if [ "$PLATFORM" = iossim ]; then
   { xcrun simctl boot "$UDID" 2>/dev/null || true; xcrun simctl bootstatus "$UDID" -b >/dev/null; } &
   BOOT_PID=$!
 fi
-PREPARE_ONLY=1 "$CI/build-ios" Debug "$PLATFORM"
+[ "${UI_PREPARED:-0}" = 1 ] || PREPARE_ONLY=1 "$CI/build-ios" Debug "$PLATFORM"
 xcodebuild build-for-testing -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
   -derivedDataPath "${DERIVED_DATA:-$IOS_DIR/build/DerivedData}" > "$OUT/build-for-testing.log" 2>&1 &
 BUILD_PID=$!

@@ -1,0 +1,68 @@
+#!/bin/bash
+# The throwaway iPhone simulator a CI step runs on, chosen the same way every time:
+#
+#   framework/native/ci/simulator pick            the runtime and model a new one gets, as device.json's record
+#   framework/native/ci/simulator create <name>   a new one, already booting: prints its UDID
+#   framework/native/ci/simulator record <udid>   an existing one's record (a UDID or a name)
+#
+#   UI_RUNTIME      the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest)
+#   UI_DEVICE_TYPE  the iPhone model (default iPhone 17 Pro), so screenshots keep their size from run to run;
+#                   a runtime without it fails
+#
+# `create` returns once the boot is asked for, not once it is done. A cold boot and the first launch after it
+# take minutes on a hosted runner (four, measured on macos-26), so ios-app.yml creates its simulators before
+# the builds and the step that uses one waits for it (`xcrun simctl bootstatus <udid> -b`). ui-tests
+# (UI_THROWAWAY) and test-mode-check (CHECK_SIMULATOR) take such a simulator and delete it when they end.
+set -euo pipefail
+CI="$(cd "$(dirname "$0")" && pwd)"
+
+pick() {
+  xcrun simctl list -j runtimes | UI_DEVICE_TYPE="${UI_DEVICE_TYPE:-iPhone 17 Pro}" /usr/bin/python3 -c '
+import json, os, sys
+runtimes = [r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and r.get("platform", "iOS") == "iOS"
+            and r["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS")]
+wanted = os.environ.get("UI_RUNTIME")
+if wanted:
+    runtimes = [r for r in runtimes if r["identifier"] == wanted]
+    if not runtimes: sys.exit("no available runtime " + wanted)
+if not runtimes: sys.exit("no available iOS runtime")
+runtime = max(runtimes, key=lambda r: [int(p) for p in r["version"].split(".") if p.isdigit()])
+iphones = [t for t in runtime.get("supportedDeviceTypes", []) if t["name"].startswith("iPhone")]
+if not iphones: sys.exit("no iPhone for " + runtime["identifier"])
+chosen = next((t for t in iphones if t["name"] == os.environ["UI_DEVICE_TYPE"]), None)
+if chosen is None:
+    sys.exit(os.environ["UI_DEVICE_TYPE"] + " is not available on " + runtime["identifier"] + "; set UI_DEVICE_TYPE to one of: "
+             + ", ".join(t["name"] for t in iphones))
+print(json.dumps({"name": chosen["name"], "type": chosen["identifier"], "runtime": runtime["identifier"],
+                  "os": runtime["name"]}))'
+}
+
+case "${1:-}" in
+  pick) pick ;;
+  create)
+    name="${2:?simulator create <name>}"
+    device="$(pick)"
+    model="$(/usr/bin/python3 -c 'import json, sys; print(json.loads(sys.argv[1])["type"])' "$device")"
+    runtime="$(/usr/bin/python3 -c 'import json, sys; print(json.loads(sys.argv[1])["runtime"])' "$device")"
+    udid="$(xcrun simctl create "$name" "$model" "$runtime")"
+    # detached, its output nowhere: `$(simulator create …)` returns now, and the boot goes on after this step
+    nohup xcrun simctl boot "$udid" </dev/null >/dev/null 2>&1 &
+    echo "$udid"
+    ;;
+  record)
+    xcrun simctl list -j | /usr/bin/python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+models = {t["identifier"]: t["name"] for t in data["devicetypes"]}
+names = {r["identifier"]: r["name"] for r in data["runtimes"]}
+for runtime, devices in data["devices"].items():
+    for d in devices:
+        if sys.argv[1] in (d["udid"], d["name"]):
+            kind = d.get("deviceTypeIdentifier")
+            print(json.dumps({k: v for k, v in {"name": models.get(kind, d["name"]), "type": kind, "runtime": runtime,
+                                                "os": names.get(runtime)}.items() if v}))
+            sys.exit()
+sys.exit("no simulator " + sys.argv[1])' "${2:?simulator record <udid>}"
+    ;;
+  *) echo "usage: $CI/simulator pick | create <name> | record <udid>" >&2; exit 2 ;;
+esac

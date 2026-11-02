@@ -1,10 +1,12 @@
 name: LeanNative iOS app
-# Builds and tests a LeanNative app (README.md, "Continuous integration for an app") in two jobs that start
+# Builds and tests a LeanNative app (README.md, "Continuous integration for an app") in three jobs that start
 # at once: `lean` builds the Lean and runs every `tests` command at the same time; `app` builds the iOS app
-# and runs the UI tests. Each builds the Lean itself, on top of the latest build cached from main (`lean`
-# saves it there: a pull request restores main's and adds no entry of its own; the toolchain is not cached,
-# elan installs it in half a minute), so nothing passes between them and a rerun of either works alone.
-# The scripts it runs are LeanNative's own, from the
+# for the simulator (Debug) and runs the UI tests; `release` (with release-builds) makes the Release builds,
+# simulator and device, and checks them. Each builds the Lean itself, on top of the latest build cached from
+# main (`lean` saves it there: a pull request restores main's and adds no entry of its own; the toolchain is
+# not cached, elan installs it in half a minute), so nothing passes between them and a rerun of any works
+# alone. A simulator a job needs is created before its builds and boots while they run: a cold boot and the
+# first launch after it take minutes on a hosted runner. The scripts it runs are LeanNative's own, from the
 # app's resolved LeanNative package (<app-dir>/.lake/packages/leannative/framework/native/ci), so they are the
 # commit the app pins; `leannative` must name that commit, and both jobs fail if the app's lake-manifest.json
 # pins another.
@@ -27,7 +29,7 @@ on:
         type: string
         required: false
       runs-on:
-        description: The macOS runner label for both jobs
+        description: The macOS runner label for the jobs
         type: string
         default: macos-26
       app-runs-on:
@@ -138,8 +140,8 @@ on:
         default: ''
       release-builds:
         description: >-
-          Build Release too: the Release simulator build (and release-check) and the unsigned Release device
-          build. Off, `app` builds Debug for the simulator only
+          The `release` job: the Release simulator build (and release-check and the test-mode check, on it
+          and a Debug one) and the unsigned Release device build. Off, there is no `release` job
         type: boolean
         default: true
       after-ui:
@@ -287,6 +289,14 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # a minute of downloads, done by the time the media step needs it (which waits for ffmpeg.done)
+      - name: ffmpeg, installing while the app builds
+        if: inputs.ui-tests && inputs.journey-media != ''
+        run: |
+          if command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; then echo 0 > "$RUNNER_TEMP/ffmpeg.done"; exit 0; fi
+          # shellcheck disable=SC2016 # the inner bash expands them
+          nohup bash -c 'HOMEBREW_NO_AUTO_UPDATE=1 brew install ffmpeg > "$RUNNER_TEMP/ffmpeg.log" 2>&1; echo $? > "$RUNNER_TEMP/ffmpeg.done"' \
+            </dev/null >/dev/null 2>&1 &
       - name: The app pins this LeanNative
         env:
           WANT: ${{ inputs.leannative || inputs.elmlean }}
@@ -304,6 +314,14 @@ jobs:
           restore-keys: ${{ steps.key.outputs.restore-keys }}
       - name: elan and the Lean toolchain
         run: *elan
+      - name: A simulator for the UI tests, booting while the app builds
+        if: inputs.ui-tests
+        env:
+          UI_DEVICE_TYPE: ${{ inputs.ui-device-type }}
+        run: |
+          set -euo pipefail
+          (cd "$APP_DIR" && lake env true)
+          echo "UI_THROWAWAY=$("$LEANNATIVE_CI/simulator" create "$SCHEME UI tests $GITHUB_RUN_ID")" >> "$GITHUB_ENV"
       - name: lake build
         run: *build
       - name: Prepare
@@ -311,29 +329,13 @@ jobs:
         env:
           COMMAND: ${{ inputs.prepare }}
         run: *prepare
-      - name: The simulator builds
-        env:
-          RELEASE_CHECK: ${{ inputs.release-check }}
-          TEST_MODE_ENV: ${{ inputs.test-mode-env }}
-          TEST_MODE_MARKER: ${{ inputs.test-mode-marker }}
-          RELEASE_MARKER: ${{ inputs.release-marker }}
-          UI_DEVICE_TYPE: ${{ inputs.ui-device-type }}
-          CONFIGS: ${{ inputs.release-builds && 'Debug Release' || 'Debug' }}
+      - name: The simulator build, Debug
         run: |
           set -euo pipefail
           export DERIVED_DATA="$CI_RESULTS/DerivedData"
-          P="$DERIVED_DATA/Build/Products"
           mkdir -p "$CI_RESULTS"
-          for config in $CONFIGS; do
-            BUILD_LOG="$CI_RESULTS/$config-iossim.log" "$LEANNATIVE_CI/build-ios" "$config" iossim
-            "$LEANNATIVE_CI/check-no-swift" "$CI_RESULTS/$config-iossim.log" "$P/$config-iphonesimulator/$SCHEME.app"
-          done
-          if [ -n "$RELEASE_CHECK" ] && [ "$CONFIGS" != Debug ]; then
-            $RELEASE_CHECK "$P/Release-iphonesimulator/$SCHEME.app" "$P/Debug-iphonesimulator/$SCHEME.app"
-          fi
-          if [ -n "$TEST_MODE_ENV" ] && [ "$CONFIGS" != Debug ]; then
-            "$LEANNATIVE_CI/test-mode-check" "$P/Release-iphonesimulator/$SCHEME.app" "$P/Debug-iphonesimulator/$SCHEME.app"
-          fi
+          BUILD_LOG="$CI_RESULTS/Debug-iossim.log" "$LEANNATIVE_CI/build-ios" Debug iossim
+          "$LEANNATIVE_CI/check-no-swift" "$CI_RESULTS/Debug-iossim.log" "$DERIVED_DATA/Build/Products/Debug-iphonesimulator/$SCHEME.app"
       - name: UI tests
         if: inputs.ui-tests
         env:
@@ -343,6 +345,8 @@ jobs:
           UI_AFTER: ${{ inputs.ui-after }}
           UI_ARGS: ${{ inputs.ui-args }}
           JOURNEY_EXE: ${{ inputs.ui-journey }}
+          # the Debug build has just prepared the sources and project
+          UI_PREPARED: '1'
         run: |
           set -euo pipefail
           if [ -n "$JOURNEY_EXE" ]; then
@@ -361,8 +365,13 @@ jobs:
           UI_NAME: ${{ inputs.ui-name }}
         run: |
           set -euo pipefail
-          # the recording is well over 25 MiB: its browser copy needs ffmpeg, and media without it is a failure
-          command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 brew install ffmpeg >/dev/null
+          # the recording is well over 25 MiB: its browser copy needs ffmpeg, and media without it is a failure.
+          # It has been installing since the job began; installed here when that failed.
+          for ((i = 0; i < 1200; i++)); do [ -f "$RUNNER_TEMP/ffmpeg.done" ] && break; sleep 0.5; done
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            cat "$RUNNER_TEMP/ffmpeg.log" 2>/dev/null || true
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install ffmpeg >/dev/null
+          fi
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
             echo "::error::journey-media needs ffmpeg and ffprobe"; exit 1
           fi
@@ -374,13 +383,6 @@ jobs:
         env:
           COMMAND: ${{ inputs.after-ui }}
         run: bash -c "$COMMAND" 2>&1 | "$LEANNATIVE_CI/progress" "$CI_RESULTS/after-ui.log" .
-      - name: The device build, Release (unsigned)
-        if: inputs.release-builds
-        run: |
-          set -euo pipefail
-          export DERIVED_DATA="$CI_RESULTS/DerivedData"
-          BUILD_LOG="$CI_RESULTS/Release-ios.log" "$LEANNATIVE_CI/build-ios" Release ios
-          "$LEANNATIVE_CI/check-no-swift" "$CI_RESULTS/Release-ios.log" "$DERIVED_DATA/Build/Products/Release-iphoneos/$SCHEME.app"
       - name: Publish
         if: success() && inputs.publish-name != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -399,5 +401,87 @@ jobs:
             ${{ runner.temp }}/leannative-ci/app/
             !${{ runner.temp }}/leannative-ci/app/DerivedData/
             !${{ runner.temp }}/leannative-ci/app/**/private/
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    if: inputs.release-builds
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: The app pins this LeanNative
+        env:
+          WANT: ${{ inputs.leannative || inputs.elmlean }}
+        run: *pin
+      - name: The cache key
+        id: key
+        env:
+          RUNS_ON: ${{ inputs.runs-on }}
+        run: *key
+      - name: Restore the Lean builds (main's latest; `lean` saves them)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.key.outputs.paths }}
+          key: ${{ steps.key.outputs.key }}
+          restore-keys: ${{ steps.key.outputs.restore-keys }}
+      - name: elan and the Lean toolchain
+        run: *elan
+      - name: A simulator for the test-mode check, booting while the app builds
+        if: inputs.test-mode-env != ''
+        env:
+          UI_DEVICE_TYPE: ${{ inputs.ui-device-type }}
+        run: |
+          set -euo pipefail
+          (cd "$APP_DIR" && lake env true)
+          echo "CHECK_SIMULATOR=$("$LEANNATIVE_CI/simulator" create "LeanNative test-mode check $GITHUB_RUN_ID")" >> "$GITHUB_ENV"
+      - name: lake build
+        run: *build
+      - name: Prepare
+        if: inputs.prepare != ''
+        env:
+          COMMAND: ${{ inputs.prepare }}
+        run: *prepare
+      - name: The simulator builds, Release (and Debug, for the checks)
+        env:
+          RELEASE_CHECK: ${{ inputs.release-check }}
+          TEST_MODE_ENV: ${{ inputs.test-mode-env }}
+          TEST_MODE_MARKER: ${{ inputs.test-mode-marker }}
+          RELEASE_MARKER: ${{ inputs.release-marker }}
+          UI_DEVICE_TYPE: ${{ inputs.ui-device-type }}
+          CONFIGS: ${{ (inputs.release-check != '' || inputs.test-mode-env != '') && 'Debug Release' || 'Release' }}
+        run: |
+          set -euo pipefail
+          export DERIVED_DATA="$CI_RESULTS/DerivedData"
+          P="$DERIVED_DATA/Build/Products"
+          mkdir -p "$CI_RESULTS"
+          for config in $CONFIGS; do
+            BUILD_LOG="$CI_RESULTS/$config-iossim.log" "$LEANNATIVE_CI/build-ios" "$config" iossim
+            "$LEANNATIVE_CI/check-no-swift" "$CI_RESULTS/$config-iossim.log" "$P/$config-iphonesimulator/$SCHEME.app"
+          done
+          if [ -n "$RELEASE_CHECK" ]; then
+            $RELEASE_CHECK "$P/Release-iphonesimulator/$SCHEME.app" "$P/Debug-iphonesimulator/$SCHEME.app"
+          fi
+          if [ -n "$TEST_MODE_ENV" ]; then
+            "$LEANNATIVE_CI/test-mode-check" "$P/Release-iphonesimulator/$SCHEME.app" "$P/Debug-iphonesimulator/$SCHEME.app"
+          fi
+      - name: The device build, Release (unsigned)
+        run: |
+          set -euo pipefail
+          export DERIVED_DATA="$CI_RESULTS/DerivedData"
+          BUILD_LOG="$CI_RESULTS/Release-ios.log" "$LEANNATIVE_CI/build-ios" Release ios
+          "$LEANNATIVE_CI/check-no-swift" "$CI_RESULTS/Release-ios.log" "$DERIVED_DATA/Build/Products/Release-iphoneos/$SCHEME.app"
+      - name: Preserve the evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/leannative-ci/release/
+            !${{ runner.temp }}/leannative-ci/release/DerivedData/
+            !${{ runner.temp }}/leannative-ci/release/**/private/
           if-no-files-found: warn
           retention-days: 14
