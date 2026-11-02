@@ -173,33 +173,25 @@ unavailable on macOS.
 
 ## Continuous integration for an app
 
-`.github/workflows/ios-app.yml` is a reusable workflow that builds and tests a LeanNative app on GitHub
-Actions in two jobs that start at once. Each builds the app's Lean itself, on top of the latest build cached
-from main, so nothing passes between them and either can be rerun alone:
+An app writes its own workflow ([Winnow's](https://github.com/winnowwallet/winnow-lean/blob/main/.github/workflows/ci.yml)
+builds the Lean, runs its tests, builds the iOS app and splits its UI journeys across runners). What the
+framework supplies is the scripts in `framework/native/ci`, run from the app's resolved LeanNative package
+(`<app-dir>/.lake/packages/leannative/framework/native/ci`), so they are the commit the app pins:
 
-| Job | Runs |
+| Script | Does |
 |---|---|
-| `lean` | elan and the toolchain, `lake build` of the app's packages and test executables, the app's `prepare` command, then every line of `tests` at the same time (`framework/native/ci/run-tests`: the longest one sets the time); the only job that saves the cache, and only on main (a pull request's run restores main's build and adds no entry) |
-| `app` | the same build and `prepare`, then the iOS app: Debug and Release for the simulator, Release for devices (unsigned), each checked for Swift (`check-no-swift`); the app's `release-check` (with `release-builds: false`, Debug for the simulator only, which a pull request may want); the UI tests on a throwaway simulator with a screen recording and a record of the tested revision, `run.json` (`ui-tests`) |
+| `build-ios <config> <platform>` | the app built for `iossim`, `ios` or `maccatalyst` (above); `PREPARE_ONLY=1` stops once the sources and project are ready |
+| `check-no-swift <log> <App.app>` | no Swift: none in the repository, no compile step in the xcodebuild log, none linked or bundled |
+| `ui-tests` | the scheme's UI tests, or with `UI_JOURNEY` an app's journeys (`LeanNative.Journey`) on the test kit's driver, on a throwaway simulator, with a screen recording and a record of the tested revision, `run.json`; `UI_BEFORE` / `UI_AFTER` are the app's fixture |
+| `wire-journeys <exe> [names]` | the journeys headless against the app itself (`LEANNATIVE_DRIVER=wire`: no simulator, no XCTest), with the same hooks |
+| `export-evidence <run> <out>` | a `ui-tests` run as evidence to keep or publish (below) |
+| `simulator pick \| create <name> \| record <udid>` | the throwaway simulator, the same runtime and iPhone model every time (`UI_RUNTIME`, `UI_DEVICE_TYPE`) |
+| `progress <log> <pattern>` | a long step's output as it comes, and a line at least every 30 seconds while it is quiet |
+| `install-xcodegen` | the audited XcodeGen release |
 
-Every long step prints its output as it comes, and a line at least every 30 seconds while a step is
-quiet (`framework/native/ci/progress`). An app calls it with its own paths and hooks:
-
-```yaml
-jobs:
-  app:
-    uses: LeanNative/leannative/.github/workflows/ios-app.yml@<commit>
-    with:
-      leannative: <commit>            # the same commit; checked against the app's lake-manifest.json
-      lean-packages: Lean LeanApp
-      app-dir: LeanApp
-      app-root: MyApp
-      scheme: MyApp
-      tests: |
-        Lean .lake/build/bin/my-test
-```
-
-The inputs are documented at the top of the workflow.
+On a GitHub-hosted macOS runner (three cores) a cold simulator boot and the first launch after it are
+minutes of CPU, so a simulator is best created once the iOS build it tests is done: a build beside a booting
+one slows by about as much as the overlap would save.
 
 **UI-test evidence.** `framework/native/ci/export-evidence <run> <out>` turns one `ui-tests` run into
 evidence an app can keep or publish: the screenshots the tests attached (each attributed to the tests
@@ -211,27 +203,19 @@ Catalyst, checked against the result bundle), the device, each test's result, th
 hashes of every input, and the export's own time apart from the run's. A run that did not pass is
 recorded as `failed`, `skipped`, `incomplete` or `contradictory` (the result bundle and the log
 disagree), never as `passed`; `--require-passed` makes such a run exit 3 once the manifest is written.
-Publishing the output is the app's: an `after-ui` hook can call the exporter and the workflow's
-`publish-path` upload it.
-
-**Journeys and their media.** Three inputs cover what an app with journeys (`LeanNative.Journey`) and a
-test mode otherwise writes for itself; the app keeps only its fixture, the `ui-before` / `ui-after` hooks:
-
-| Input | Runs |
-|---|---|
-| `wire-journey: journeys` | the journeys headless against the app itself (`framework/native/ci/wire-journeys`, `LEANNATIVE_DRIVER=wire`: no simulator, no XCTest), one more line of `lean`'s tests, with the same hooks as the simulator run; evidence in `wire-journeys/` |
-| `test-mode-env`, `test-mode-marker`, `release-marker` | `framework/native/ci/test-mode-check` on the simulator builds: launched fresh on a throwaway simulator with `test-mode-env`, the Debug build must write `test-mode-marker` in its data container and the Release build must not (and must write `release-marker`, its ordinary storage) |
-| `journey-media: build/media`, `journey-media-args` | once the UI tests pass, `framework/native/ci/journey-media`: the screenshots, a browser copy of the recording (ffmpeg, at most 25 MiB) and `journey-provenance.json` (version 2: the run, source, device, each journey's result and seconds, each file's SHA-256), from `export-evidence`; only a run whose every test passed is published. `--video`, `--journeys`, `--test-prefix` and `--field KEY=VALUE` shape it for its reader |
+Publishing the output is the app's.
 
 Locally, the same scripts run with the app's variables: `APP_DIR=… framework/native/ci/wire-journeys
 journeys`, and `ui-tests` with `UI_JOURNEY` for the simulator.
 
 ## Releasing an app
 
-`.github/workflows/ios-release.yml` is the reusable release workflow: it signs the app, checks it, uploads it
-to App Store Connect, hands it to TestFlight's internal group and publishes a GitHub release. Its steps are
-LeanNative's release tool, `leannative-release` (`framework/lean/LeanNativeRelease`), which drives
-xcodebuild, codesign, altool, openssl and curl:
+LeanNative's release tool, `leannative-release` (`framework/lean/LeanNativeRelease`), is the steps of an
+app's release workflow: it drives xcodebuild, codesign, altool, openssl and curl.
+([Winnow's release.yml](https://github.com/winnowwallet/winnow-lean/blob/main/.github/workflows/release.yml)
+builds it with `lake build leannative/leannative-release`, requires a successful CI run on the tagged tree,
+signs with the App Store Connect key and a development certificate, and on a manual run stops before the
+upload.)
 
 | Command | Does |
 |---|---|
@@ -241,39 +225,6 @@ xcodebuild, codesign, altool, openssl and curl:
 | `verify-ipa <ipa>` | the exported package's one app, for distribution, and its SHA-256 recorded for the upload to check |
 | `testflight <step>` | App Store Connect: `wait-processing`, `notes`, `internal`, `check` (read only), `status`, `external` (beta review, a person's step), `register-bundle-id`, `create-app`, `upload`, and the App Store version's `appstore-status`, `appstore-attach`, `appstore-notes`, `appstore-submit` |
 | `jwt` | an App Store Connect API token (ES256, 20 minutes) for a person's own requests |
-
-A release needs a successful run of the app's CI workflow (not a pull request's) on the tagged tree. A
-manual run (`upload: false`) does everything up to the upload, signing included, and reads App Store
-Connect with the key, so a change to the release can be tried without publishing anything:
-
-```yaml
-on:
-  push:
-    tags: ["v*.*.*"]
-  workflow_dispatch:
-permissions:
-  contents: write
-  actions: read
-jobs:
-  release:
-    uses: LeanNative/leannative/.github/workflows/ios-release.yml@<commit>
-    with:
-      leannative: <commit>
-      lean-packages: Lean LeanApp
-      app-dir: LeanApp
-      app-root: MyApp
-      scheme: MyApp
-      bundle-id: com.example.myapp
-      team-id: ABCDE12345
-      what-to-test: docs/testflight-what-to-test.txt
-      upload: ${{ github.event_name == 'push' }}
-    secrets:   # named: `secrets: inherit` reaches only a workflow in the caller's own organization
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
-      DEV_CERT_P12: ${{ secrets.DEV_CERT_P12 }}
-      DEV_CERT_P12_PASSWORD: ${{ secrets.DEV_CERT_P12_PASSWORD }}
-```
 
 On a Mac, `lake build leannative/leannative-release` in the app's directory builds the tool into
 `.lake/packages/leannative/framework/lean/.lake/build/bin/`; with `ASC_KEY_ID`, `ASC_ISSUER_ID`,
@@ -300,8 +251,6 @@ README.md, PROTOCOL.md      this file; the wire protocol (nodes, events, seq, er
 Makefile                    check: the framework's checks
 docs/ISSUES.md              issues moved from posix4e/elmlean
 .github/workflows/
-  ios-app.yml               the reusable CI workflow for an app
-  ios-release.yml           the reusable release workflow for an app (TestFlight, GitHub release)
   check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst, its UI tests on both)
 framework/
   lean/                     Lake package `leannative`
@@ -309,10 +258,10 @@ framework/
                             Native (trusted shell); Gate; Proofs/ and Proofs.lean (the framework's gate);
                             Native/ (optional native support: BackgroundRun, the typed capability clients, EffectScope)
     LeanNativeTest/            the native support modules' tests and fixtures (`make check`)
-    LeanNativeRelease/         the release tool, `leannative-release` (ios-release.yml's steps)
+    LeanNativeRelease/         the release tool, `leannative-release` (an app's release steps)
     LeanNativeShell/               the native shell as Lean data; `lake exe leannative-shell <dir>` prints its Objective-C
   native/                   README (the shell, capabilities, Mac Catalyst, UI tests), c/ (the C shim), scripts/
-                            (ios_lean_sources.sh, retarget_ar.py, …), ci/ (the workflow's scripts),
+                            (ios_lean_sources.sh, retarget_ar.py, …), ci/ (the scripts an app's CI runs),
                             testkit/ (Objective-C XCTest helpers for an app's UI-test target only)
   scripts/                  check-axioms.sh, protocol_test.py, fake_cli.py
   Makefile                  the framework's own checks

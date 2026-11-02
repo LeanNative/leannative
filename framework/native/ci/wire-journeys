@@ -16,7 +16,7 @@
 #   UI_AFTER   run as `$UI_AFTER <UI_OUT> ''` when the journeys end, passed or not (no simulator: the app's
 #              files are under <UI_OUT>/wire)
 #
-# ios-app.yml runs it as one line of the `lean` job's tests when the app sets `wire-journey`.
+# Needs no simulator, so an app's CI can run it beside its other tests (Winnow's `lean` job does).
 set -euo pipefail
 EXE="${1:?the journeys executable (a Lake target of APP_DIR)}"; shift
 APP_DIR="$(cd "${APP_DIR:?set APP_DIR to the app Lake package}" && pwd)"

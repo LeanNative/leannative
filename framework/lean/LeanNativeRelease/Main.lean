@@ -13,7 +13,7 @@ import LeanNativeRelease.Asc
 The app's identity and the App Store Connect key come from the environment: APP_BUNDLE_ID, APP_TEAM_ID,
 APP_ICLOUD_CONTAINER (when the app has iCloud), TESTFLIGHT_MARKETING_VERSION and TESTFLIGHT_BUILD_NUMBER,
 ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH; the steps' own variables are in `LeanNativeRelease.Asc`. The
-release workflow (.github/workflows/ios-release.yml) builds it from the app's LeanNative package:
+app's release workflow builds it from the app's LeanNative package:
 `lake build leannative/leannative-release` in the app's directory. -/
 
 open LeanNativeRelease

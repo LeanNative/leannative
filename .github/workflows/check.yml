@@ -1,7 +1,7 @@
 name: check
 # This repository's own checks on GitHub-hosted macOS (free for a public repository): `make check` (the
 # framework's build, proof and axiom gate, protocol harness), then native-demo built for the iOS simulator
-# and for Mac Catalyst, each checked for Swift. Apps use ios-app.yml instead.
+# and for Mac Catalyst, each checked for Swift. An app writes its own from framework/native/ci (README.md).
 # Each job builds on the latest Lean build main cached under its name and saves its own on main only: a pull
 # request restores main's and adds no entry (the cache holds 10 GB a repository, an entry is the whole build).
 # The toolchain is not cached: it is 700 MB of an entry zstd'd, and elan installs it in half a minute.
@@ -156,12 +156,6 @@ jobs:
         run: |
           python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/ui" "$RUNNER_TEMP/evidence" --require-passed
           python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/journeys" "$RUNNER_TEMP/evidence-journeys" --require-passed
-      - name: The journeys' media (journey-media, as ios-app.yml's journey-media input makes it)
-        run: |
-          set -euo pipefail
-          python3 -I framework/native/ci/journey-media "$RUNNER_TEMP/journeys" "$RUNNER_TEMP/journey-media" \
-            --journeys examples/native-demo/NativeDemo/Journeys.lean --test-prefix test --field app=native-demo
-          test -s "$RUNNER_TEMP/journey-media/screenshots/journey-widgets.png"
       - name: Preserve the run and its evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -173,7 +167,6 @@ jobs:
             ${{ runner.temp }}/journeys/
             ${{ runner.temp }}/evidence-journeys/
             ${{ runner.temp }}/journeys-wire/
-            ${{ runner.temp }}/journey-media/
             !${{ runner.temp }}/ui/*.xcresult/**/private/
             !${{ runner.temp }}/journeys/*.xcresult/**/private/
           if-no-files-found: warn

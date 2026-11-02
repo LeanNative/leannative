@@ -168,7 +168,7 @@ name = "ios-project"
 root = "NativeDemo.Project"
 ```
 
-`framework/native/ci/build-ios` (and so `ui-tests` and `ios-app.yml`) runs `lake exe ios-project` after
+`framework/native/ci/build-ios` (and so `ui-tests`) runs `lake exe ios-project` after
 `ios_lean_sources.sh`: it writes the XcodeGen spec to `ios/build/project.json`, and XcodeGen generates
 `ios/<name>.xcodeproj` with `ios/` as its root, writing `build/Info.plist` and, when there are any,
 `build/<name>.entitlements`. The app's `ios/` keeps only what cannot be generated: its icon (an asset
@@ -445,7 +445,7 @@ APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo \
   UI_JOURNEY="$PWD/examples/native-demo/.lake/build/bin/journeys" framework/native/ci/ui-tests
 ```
 
-`ios-app.yml` takes `ui-journey:`, the name of the app package's executable, then any journey names: built, then run as `UI_JOURNEY` (`ui-journey: journeys counting` runs only `counting`).
+`UI_JOURNEY` is the journeys executable, then any journey names (`…/journeys counting` runs only `counting`).
 
 **One snapshot per look.** Every `XCUIElementQuery` makes the app walk its whole accessibility tree, fetching each
 element's attributes, on its main thread; a step that asked `exists`, `hittable`, `isEnabled` and then tapped
