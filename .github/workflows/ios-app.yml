@@ -1,8 +1,10 @@
 name: LeanNative iOS app
 # Builds and tests a LeanNative app (README.md, "Continuous integration for an app") in two jobs that start
 # at once: `lean` builds the Lean and runs every `tests` command at the same time; `app` builds the iOS app
-# and runs the UI tests. Each builds the Lean itself from the Actions cache (`lean` saves it), so nothing
-# passes between them and a rerun of either works alone. The scripts it runs are LeanNative's own, from the
+# and runs the UI tests. Each builds the Lean itself, on top of the latest build cached from main (`lean`
+# saves it there: a pull request restores main's and adds no entry of its own; the toolchain is not cached,
+# elan installs it in half a minute), so nothing passes between them and a rerun of either works alone.
+# The scripts it runs are LeanNative's own, from the
 # app's resolved LeanNative package (<app-dir>/.lake/packages/leannative/framework/native/ci), so they are the
 # commit the app pins; `leannative` must name that commit, and both jobs fail if the app's lake-manifest.json
 # pins another.
@@ -160,13 +162,17 @@ jobs:
         id: key
         env:
           RUNS_ON: ${{ inputs.runs-on }}
+        # Each package's .lake, keyed by the toolchain and manifests (deps) and every .lean file (source). A
+        # miss restores the newest entry with the same deps, else with any (a bumped pin keeps the rest of the
+        # build), and Lake rebuilds what changed. Not ~/.elan: the toolchain is 700 MB of every entry zstd'd and
+        # elan installs it in half a minute.
         run: &key |
           set -euo pipefail
-          paths="$HOME/.elan"
+          paths=()
           deps=()
           specs=()
           for p in $LEAN_PACKAGES; do
-            paths+=$'\n'"$p/.lake"
+            paths+=("$p/.lake")
             deps+=("$p/lean-toolchain" "$p/lake-manifest.json")
             specs+=("$p/*.lean")
           done
@@ -174,15 +180,16 @@ jobs:
           src_hash=$(git ls-files -z -- "${specs[@]}" | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-20)
           {
             echo "key=leannative-$RUNS_ON-$deps_hash-$src_hash"
-            echo "prefix=leannative-$RUNS_ON-$deps_hash-"
-            echo 'paths<<PATHS'; echo "$paths"; echo PATHS
+            echo 'restore-keys<<KEYS'; echo "leannative-$RUNS_ON-$deps_hash-"; echo "leannative-$RUNS_ON-"; echo KEYS
+            echo 'paths<<PATHS'; printf '%s\n' "${paths[@]}"; echo PATHS
           } >> "$GITHUB_OUTPUT"
-      - name: Restore the Lean toolchain and builds (saved when the job ends)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore the Lean builds (main's latest; saved after `lake build`, on main only)
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.key.outputs.paths }}
           key: ${{ steps.key.outputs.key }}
-          restore-keys: ${{ steps.key.outputs.prefix }}
+          restore-keys: ${{ steps.key.outputs.restore-keys }}
       - name: elan and the Lean toolchain
         run: &elan |
           set -euo pipefail
@@ -202,6 +209,14 @@ jobs:
         run: &build |
           (cd "$APP_DIR" && lake env true)
           "$LEANNATIVE_CI/lake-build"
+      # a pull request's run restores main's build and adds no entry: each is the whole build, and the cache
+      # holds 10 GB a repository
+      - name: Save the Lean builds
+        if: github.event_name != 'pull_request' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.key.outputs.paths }}
+          key: ${{ steps.key.outputs.key }}
       - name: Prepare
         if: inputs.prepare != ''
         env:
@@ -240,12 +255,12 @@ jobs:
         env:
           RUNS_ON: ${{ inputs.runs-on }}
         run: *key
-      - name: Restore the Lean toolchain and builds (`lean` saves them)
+      - name: Restore the Lean builds (main's latest; `lean` saves them)
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.key.outputs.paths }}
           key: ${{ steps.key.outputs.key }}
-          restore-keys: ${{ steps.key.outputs.prefix }}
+          restore-keys: ${{ steps.key.outputs.restore-keys }}
       - name: elan and the Lean toolchain
         run: *elan
       - name: lake build
