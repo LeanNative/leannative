@@ -394,6 +394,18 @@ def Manifest.main (m : Manifest) (args : List String) : IO UInt32 := do
     if let some dir := (System.FilePath.mk out).parent then IO.FS.createDirAll dir
     let old ← (try IO.FS.readFile out catch _ => pure "")
     if old != text then IO.FS.writeFile out text
+    -- leannative-shell printed every capability into native-shell/ beside the spec; an app that lists its
+    -- `uses` gets only those and its `unlisted`, so it links no framework it never calls (`capsFileFor`).
+    -- Without that file the app would build with every capability, so its absence is an error.
+    if !m.uses.isEmpty then
+      if let some dir := (System.FilePath.mk out).parent then
+        let caps := dir / "native-shell" / "LNCapabilities.m"
+        unless ← caps.pathExists do
+          IO.eprintln s!"{m.name} manifest: no {caps}: run `lake exe leannative-shell {dir / "native-shell"}` first (ios_lean_sources.sh does), so the shell has only the capabilities `uses` lists"
+          return 1
+        let text := file (shellHeader "LNCapabilities.m") (capsFileFor (some (m.uses ++ m.unlisted)))
+        let old ← (try IO.FS.readFile caps catch _ => pure "")
+        if old != text then IO.FS.writeFile caps text
     return 0
 
 end LeanNativeShell

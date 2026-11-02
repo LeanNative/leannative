@@ -1,7 +1,10 @@
 name: check
 # This repository's own checks on GitHub-hosted macOS (free for a public repository): `make check` (the
 # framework's build, proof and axiom gate, protocol harness), then native-demo built for the iOS simulator
-# and for Mac Catalyst, each checked for Swift. Apps use ios-app.yml instead.
+# and for Mac Catalyst, each checked for Swift; native-demo's UI tests and journeys (`ui`, `ui-catalyst`); and the
+# examples simple and bluetooth-auth, one job each (`examples`). Apps use ios-app.yml instead.
+# Five macOS jobs at once, no more: GitHub runs at most five macOS jobs at a time for the whole organization, so
+# a run that needs more queues against itself. A new example goes into a job that is already here.
 # Each job builds on the latest Lean build main cached under its name and saves its own on main only: a pull
 # request restores main's and adds no entry (the cache holds 10 GB a repository, an entry is the whole build).
 # The toolchain is not cached: it is 700 MB of an entry zstd'd, and elan installs it in half a minute.
@@ -239,5 +242,121 @@ jobs:
             ${{ runner.temp }}/ui/
             ${{ runner.temp }}/evidence/
             !${{ runner.temp }}/ui/*.xcresult/**/private/
+          if-no-files-found: warn
+          retention-days: 14
+
+  # simple and bluetooth-auth, one job each and everything on its runner: their journeys headless (no simulator),
+  # then the Debug simulator build (checked for Swift, and for the frameworks the manifest's `uses` decides:
+  # simple links neither CoreBluetooth nor LocalAuthentication, bluetooth-auth both), then the journeys on a
+  # throwaway simulator with a recording, made into journey-media-<example> (leannative.com shows it).
+  examples:
+    name: "example: ${{ matrix.example }}"
+    runs-on: macos-26
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - example: simple
+            root: Simple
+            frameworks: --lacks CoreBluetooth --lacks LocalAuthentication
+          - example: bluetooth-auth
+            root: BluetoothAuth
+            frameworks: --links CoreBluetooth --links LocalAuthentication
+    env:
+      APP_DIR: examples/${{ matrix.example }}
+      APP_ROOT: ${{ matrix.root }}
+      SCHEME: ${{ matrix.root }}
+      EXAMPLE: ${{ matrix.example }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the recording's browser copy needs ffmpeg: a minute of downloads, done by the time the media step waits
+      - name: ffmpeg, installing while the app builds
+        run: |
+          if command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; then echo 0 > "$RUNNER_TEMP/ffmpeg.done"; exit 0; fi
+          # shellcheck disable=SC2016 # the inner bash expands them
+          nohup bash -c 'HOMEBREW_NO_AUTO_UPDATE=1 brew install ffmpeg > "$RUNNER_TEMP/ffmpeg.log" 2>&1; echo $? > "$RUNNER_TEMP/ffmpeg.done"' \
+            </dev/null >/dev/null 2>&1 &
+      - name: Tools
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes | grep -i ios || true
+      - name: Restore the Lean builds (main's latest)
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            framework/lean/.lake
+            ${{ env.APP_DIR }}/.lake
+          key: example-${{ matrix.example }}-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', format('{0}/lake-manifest.json', env.APP_DIR)) }}-${{ hashFiles('framework/lean/**/*.lean', format('{0}/**/*.lean', env.APP_DIR)) }}
+          restore-keys: example-${{ matrix.example }}-${{ hashFiles('framework/lean/lean-toolchain', 'framework/lean/lake-manifest.json', format('{0}/lake-manifest.json', env.APP_DIR)) }}-
+      - name: elan and the Lean toolchain
+        run: |
+          set -euo pipefail
+          if [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/v4.1.2/elan-init.sh \
+              | sh -s -- -y --default-toolchain none --no-modify-path
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/elan" toolchain install "$(cat framework/lean/lean-toolchain)"
+      - name: The journeys against the app itself, headless (no simulator)
+        run: |
+          set -euo pipefail
+          (cd "$APP_DIR" && lake build journeys)
+          UI_OUT="$RUNNER_TEMP/journeys-wire" framework/native/ci/wire-journeys journeys
+      - name: Save the Lean builds (on main only)
+        if: github.event_name != 'pull_request' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            framework/lean/.lake
+            ${{ env.APP_DIR }}/.lake
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - name: The simulator build, Debug, and the frameworks it links
+        env:
+          FRAMEWORKS: ${{ matrix.frameworks }}
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/dd/Build/Products/Debug-iphonesimulator/$SCHEME.app"
+          DERIVED_DATA="$RUNNER_TEMP/dd" BUILD_LOG="$RUNNER_TEMP/Debug-iossim.log" framework/native/ci/build-ios Debug iossim
+          framework/native/ci/check-no-swift "$RUNNER_TEMP/Debug-iossim.log" "$app"
+          # shellcheck disable=SC2086 # FRAMEWORKS are words
+          framework/native/ci/check-frameworks $FRAMEWORKS "$app"
+      - name: The journeys on a simulator (Lean on the host, the kit's driver in the app)
+        run: |
+          set -euo pipefail
+          UI_OUT="$RUNNER_TEMP/journeys" UI_NAME=journey UI_PREPARED=1 DERIVED_DATA="$RUNNER_TEMP/dd" \
+            UI_JOURNEY="$PWD/$APP_DIR/.lake/build/bin/journeys" framework/native/ci/ui-tests
+      - name: Their evidence and media
+        run: |
+          set -euo pipefail
+          python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/journeys" "$RUNNER_TEMP/evidence" --require-passed
+          for ((i = 0; i < 1200; i++)); do [ -f "$RUNNER_TEMP/ffmpeg.done" ] && break; sleep 0.5; done
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            cat "$RUNNER_TEMP/ffmpeg.log" 2>/dev/null || true
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install ffmpeg >/dev/null
+          fi
+          python3 -I framework/native/ci/journey-media "$RUNNER_TEMP/journeys" "$RUNNER_TEMP/journey-media" \
+            --video "videos/$EXAMPLE.mp4" --journeys "$APP_DIR/$APP_ROOT/Journeys.lean" --test-prefix test --field "app=$EXAMPLE"
+      - name: Publish the media (leannative.com takes them from main's runs)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: journey-media-${{ matrix.example }}
+          path: ${{ runner.temp }}/journey-media/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Preserve the run and its evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: example-${{ matrix.example }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/journeys-wire/
+            ${{ runner.temp }}/journeys/
+            ${{ runner.temp }}/evidence/
+            ${{ runner.temp }}/*.log
+            !${{ runner.temp }}/journeys/*.xcresult/**/private/
           if-no-files-found: warn
           retention-days: 14

@@ -1,0 +1,24 @@
+# A heart-rate monitor behind Face ID: `auth` unlocks it, Bluetooth LE (`ble.*`) connects to a heart-rate sensor
+# and reads it, the keychain remembers the last one. Its manifest lists those, so the shell links
+# LocalAuthentication and CoreBluetooth (ios/release-check checks it); Debug builds can stand a scripted
+# peripheral in for the hardware (BluetoothAuth/Fake.lean), which the journey uses.
+name = "bluetoothauth"
+defaultTargets = ["BluetoothAuth"]
+
+[[require]]
+name = "leannative"
+path = "../../framework/lean"
+
+[[lean_lib]]
+name = "BluetoothAuth"
+
+# The Xcode project's spec, from BluetoothAuth/Project.lean (framework/native/ci/build-ios runs it)
+[[lean_exe]]
+name = "ios-project"
+root = "BluetoothAuth.Project"
+
+# The UI journey (BluetoothAuth/Journeys.lean), run on the Mac by framework/native/ci/ui-tests as UI_JOURNEY, or
+# headless by framework/native/ci/wire-journeys
+[[lean_exe]]
+name = "journeys"
+root = "BluetoothAuth.Journeys"

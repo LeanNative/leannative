@@ -1,0 +1,39 @@
+#!/bin/bash
+# Which system frameworks a built app links: each --links must be there and each --lacks must not, in every app.
+#
+#   framework/native/ci/check-frameworks [--links NAME]… [--lacks NAME]… <App.app>…
+#
+# A manifest's `uses` decides the shell's capabilities, and so its frameworks (Bluetooth: CoreBluetooth, `auth`:
+# LocalAuthentication): this checks the binary, not the manifest. ios-app.yml's `release-check` passes the Release
+# and the Debug simulator builds after the options (examples/simple and examples/bluetooth-auth use it so).
+set -euo pipefail
+links=(); lacks=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --links) links+=("${2:?--links NAME}"); shift 2 ;;
+    --lacks) lacks+=("${2:?--lacks NAME}"); shift 2 ;;
+    *) break ;;
+  esac
+done
+[ $# -gt 0 ] || { echo "usage: check-frameworks [--links NAME]… [--lacks NAME]… <App.app>…" >&2; exit 2; }
+fail=0
+for app in "$@"; do
+  # an iOS bundle is flat; a Mac Catalyst bundle keeps Info.plist under Contents/ and its executable in MacOS/
+  if [ -f "$app/Contents/Info.plist" ]; then
+    bin="$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+  else
+    bin="$app/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")"
+  fi
+  # a Debug build's code is in <name>.debug.dylib beside a stub executable (Xcode's ENABLE_DEBUG_DYLIB)
+  bins=("$bin"); [ -f "$bin.debug.dylib" ] && bins+=("$bin.debug.dylib")
+  linked=$(otool -L "${bins[@]}" | sed -n 's#.*/\([A-Za-z0-9_]*\)\.framework/.*#\1#p' | sort -u)
+  for f in ${links[@]+"${links[@]}"}; do
+    grep -qx "$f" <<< "$linked" || { echo "$app does not link $f"; fail=1; }
+  done
+  for f in ${lacks[@]+"${lacks[@]}"}; do
+    if grep -qx "$f" <<< "$linked"; then echo "$app links $f"; fail=1; fi
+  done
+  echo "$(basename "$app") ($(dirname "$app" | xargs basename)): $(tr '\n' ' ' <<< "$linked")"
+done
+[ "$fail" = 0 ] && echo "frameworks as expected: links ${links[*]:-nothing asked}; lacks ${lacks[*]:-nothing asked}"
+exit "$fail"

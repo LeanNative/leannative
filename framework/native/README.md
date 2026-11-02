@@ -212,6 +212,13 @@ Where each key comes from:
   (`"ble." ++ op`) is not seen. `unlisted` names families the app calls on purpose without their
   requirements: native-demo calls `cloudkit.*` with no iCloud container, to show the shell's
   `missingEntitlement` answer.
+
+  `uses` (with `unlisted`) also decides what the shell can do. When it is not empty, generation prints
+  `build/native-shell/LNCapabilities.m` again with only those capabilities (`capsFileFor`): without `auth`
+  there is no LocalAuthentication, and without a `ble.*` capability no CoreBluetooth, so the app does not
+  link a framework it never calls, and App Store Connect does not ask for its purpose string (ITMS-90683).
+  Any other request answers `unknown capability`, which is why a name built at run time needs its entry
+  in `uses`. An empty `uses` keeps every capability, as `leannative-shell` prints them.
 - **The app**: `name`, `displayName`, `bundleId`, `team` (`DEVELOPMENT_TEAM`, signed automatically),
   `version` (`.fixed short build` into Info.plist, or `.settings marketing current`: `MARKETING_VERSION` and
   `CURRENT_PROJECT_VERSION`, which a release overrides with xcodebuild arguments), `deploymentTarget`

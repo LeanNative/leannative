@@ -16,8 +16,8 @@
 #   MARKER_SECONDS    how long a launch has to write its marker (default 30)
 #
 # Both builds share a bundle identifier and each launch starts from a fresh install, so this runs on a
-# simulator it creates and deletes: never on one that may hold a real install of the app. ios-app.yml runs it
-# on the simulator builds when the app sets `test-mode-env`.
+# simulator it creates and deletes: never on one that may hold a real install of the app.
+# ios-app.yml's `release` job runs it on the simulator builds when the app sets `test-mode-env`.
 set -euo pipefail
 RELEASE="${1:?the Release .app (iphonesimulator)}"; DEBUG="${2:?the Debug .app (iphonesimulator)}"
 : "${TEST_MODE_ENV:?set TEST_MODE_ENV to the KEY=VALUE lines that switch test mode on}"
@@ -29,9 +29,10 @@ while IFS= read -r line; do
   [[ $line == [A-Za-z_]*=* ]] || { echo "test-mode-check: TEST_MODE_ENV: not KEY=VALUE: $line" >&2; exit 2; }
   ENV_ARGS+=("SIMCTL_CHILD_$line")
 done <<< "$TEST_MODE_ENV"
-UDID=$(xcrun simctl create "LeanNative test-mode check $$" "${UI_DEVICE_TYPE:-iPhone 17 Pro}")
+CI="$(cd "$(dirname "$0")" && pwd)"
+UDID="$("$CI/simulator" create "LeanNative test-mode check $$")"
 trap 'xcrun simctl shutdown "$UDID" >/dev/null 2>&1; xcrun simctl delete "$UDID" >/dev/null 2>&1 || true' EXIT
-xcrun simctl boot "$UDID"
+xcrun simctl boot "$UDID" 2>/dev/null || true
 xcrun simctl bootstatus "$UDID" -b >/dev/null
 
 # launch <app>: a fresh install started with test mode's environment; prints its data container

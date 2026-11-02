@@ -19,7 +19,9 @@ else
   bin="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
   frameworks="$APP/Frameworks"
 fi
-if otool -L "$bin" | grep -i swift; then echo "the app links Swift libraries"; fail=1; fi
+# a Debug build's code is in <name>.debug.dylib beside a stub executable (Xcode's ENABLE_DEBUG_DYLIB)
+bins=("$bin"); [ -f "$bin.debug.dylib" ] && bins+=("$bin.debug.dylib")
+if otool -L "${bins[@]}" | grep -v ':$' | grep -i swift; then echo "the app links Swift libraries"; fail=1; fi
 if [ -d "$frameworks" ] && ls "$frameworks" | grep -i swift; then echo "the app bundles Swift libraries"; fail=1; fi
 [ "$fail" = 0 ] && echo "no Swift: 0 sources, 0 compile steps, no Swift library linked or bundled"
 exit "$fail"

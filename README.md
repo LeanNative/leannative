@@ -26,8 +26,16 @@ or written per app.
   signing requirements differ by platform; see the [native platform guide](framework/native/README.md).
 
 LeanNative is being developed alongside [Winnow](https://github.com/winnowwallet/winnow-lean), a Bitcoin
-wallet written in Lean. Start with [`examples/native-demo`](examples/native-demo) for a smaller app that
-exercises the framework's controls and capabilities.
+wallet written in Lean. Three examples are smaller:
+
+| Example | Shows |
+|---|---|
+| [`examples/simple`](examples/simple) | the smallest useful app: a counter, a greeting, a list, and one capability (`open`); its manifest lists only that, so it links neither CoreBluetooth nor LocalAuthentication |
+| [`examples/bluetooth-auth`](examples/bluetooth-auth) | a heart-rate monitor behind Face ID: `auth`, Bluetooth LE (connect, subscribe, read, write), the keychain; in test mode a scripted sensor stands in for the hardware, so its journey runs on a simulator and headless |
+| [`examples/native-demo`](examples/native-demo) | every control and capability in one app, with the framework's own UI tests |
+
+CI runs each one's journeys headless and on a simulator (`check.yml`), and leannative.com shows their
+screenshots and recordings.
 
 ## Current scope and limits
 
@@ -174,13 +182,19 @@ unavailable on macOS.
 ## Continuous integration for an app
 
 `.github/workflows/ios-app.yml` is a reusable workflow that builds and tests a LeanNative app on GitHub
-Actions in two jobs that start at once. Each builds the app's Lean itself, on top of the latest build cached
-from main, so nothing passes between them and either can be rerun alone:
+Actions in three jobs that start at once. Each builds the app's Lean itself, on top of the latest build cached
+from main, so nothing passes between them and any can be rerun alone:
 
 | Job | Runs |
 |---|---|
 | `lean` | elan and the toolchain, `lake build` of the app's packages and test executables, the app's `prepare` command, then every line of `tests` at the same time (`framework/native/ci/run-tests`: the longest one sets the time); the only job that saves the cache, and only on main (a pull request's run restores main's build and adds no entry) |
-| `app` | the same build and `prepare`, then the iOS app: Debug and Release for the simulator, Release for devices (unsigned), each checked for Swift (`check-no-swift`); the app's `release-check` (with `release-builds: false`, Debug for the simulator only, which a pull request may want); the UI tests on a throwaway simulator with a screen recording and a record of the tested revision, `run.json` (`ui-tests`) |
+| `app` | the same build and `prepare`, then the iOS app, Debug for the simulator, checked for Swift (`check-no-swift`); the UI tests on a throwaway simulator with a screen recording and a record of the tested revision, `run.json` (`ui-tests`); the journeys' media |
+| `release` | (unless `release-builds: false`, which a pull request may want) the same build and `prepare`, then Release for the simulator and for devices (unsigned), each checked for Swift; with a `release-check` or `test-mode-env`, a Debug simulator build too and those checks on the pair |
+
+A simulator is created only when the iOS build it needs is done (`ui-tests`, `test-mode-check`): on a
+hosted runner (three cores) a cold boot and the first launch after it are minutes of CPU, so booting one under
+a build slows the build by about as much as it saves (the Debug build took 532 s beside a booting simulator,
+about 150 s without). `app` installs ffmpeg for the media in the background from its first step.
 
 Every long step prints its output as it comes, and a line at least every 30 seconds while a step is
 quiet (`framework/native/ci/progress`). An app calls it with its own paths and hooks:
@@ -200,6 +214,11 @@ jobs:
 ```
 
 The inputs are documented at the top of the workflow.
+
+`framework/native/ci/check-frameworks [--links NAME]… [--lacks NAME]… <App.app>…` checks the system
+frameworks a built app links (a Debug build's `.debug.dylib` included), for instance as a `release-check`. It
+holds what the manifest's `uses` decides: `examples/simple` lacks CoreBluetooth and LocalAuthentication, and
+`examples/bluetooth-auth` links both.
 
 **UI-test evidence.** `framework/native/ci/export-evidence <run> <out>` turns one `ui-tests` run into
 evidence an app can keep or publish: the screenshots the tests attached (each attributed to the tests
@@ -221,6 +240,7 @@ test mode otherwise writes for itself; the app keeps only its fixture, the `ui-b
 |---|---|
 | `wire-journey: journeys` | the journeys headless against the app itself (`framework/native/ci/wire-journeys`, `LEANNATIVE_DRIVER=wire`: no simulator, no XCTest), one more line of `lean`'s tests, with the same hooks as the simulator run; evidence in `wire-journeys/` |
 | `test-mode-env`, `test-mode-marker`, `release-marker` | `framework/native/ci/test-mode-check` on the simulator builds: launched fresh on a throwaway simulator with `test-mode-env`, the Debug build must write `test-mode-marker` in its data container and the Release build must not (and must write `release-marker`, its ordinary storage) |
+| `ui-journey-shards: '["a b", "c d e"]'` | the journeys split across runners: one `app` for each string, at the same time, each running those journeys on its own simulator; then a `media` job joins the parts' evidence (`journey-media` with each part's directory: one video, the parts one after another, the journeys in the parts' order) and runs `after-ui` and `publish-name` there. Hosted runners are free for a public repository, and a split is what makes the journeys' minutes shorter: two simulators on one three-core runner only slow each other |
 | `journey-media: build/media`, `journey-media-args` | once the UI tests pass, `framework/native/ci/journey-media`: the screenshots, a browser copy of the recording (ffmpeg, at most 25 MiB) and `journey-provenance.json` (version 2: the run, source, device, each journey's result and seconds, each file's SHA-256), from `export-evidence`; only a run whose every test passed is published. `--video`, `--journeys`, `--test-prefix` and `--field KEY=VALUE` shape it for its reader |
 
 Locally, the same scripts run with the app's variables: `APP_DIR=… framework/native/ci/wire-journeys
@@ -302,7 +322,8 @@ docs/ISSUES.md              issues moved from posix4e/elmlean
 .github/workflows/
   ios-app.yml               the reusable CI workflow for an app
   ios-release.yml           the reusable release workflow for an app (TestFlight, GitHub release)
-  check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst, its UI tests on both)
+  check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst, its UI tests on both,
+                            simple and bluetooth-auth one job each: five macOS jobs, GitHub's limit at once)
 framework/
   lean/                     Lake package `leannative`
     LeanNative/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,
@@ -317,6 +338,8 @@ framework/
   scripts/                  check-axioms.sh, protocol_test.py, fake_cli.py
   Makefile                  the framework's own checks
 examples/
+  simple/                   the smallest useful app, one capability
+  bluetooth-auth/           Face ID, Bluetooth LE and the keychain, with a scripted sensor for test mode
   native-demo/              every capability in one app, no Swift
 ```
 
