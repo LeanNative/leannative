@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Turn one UI-journeys run into media to publish (a website's, say), with its provenance.
+"""Turn a UI-journeys run, or the parts of one split across runners, into media to publish (a website's,
+say), with its provenance.
 
-  framework/native/ci/journey-media <journey-out> <media-out> [--video PATH] [--journeys NAME]
+  framework/native/ci/journey-media <journey-out>… <media-out> [--video PATH] [--journeys NAME]
                                     [--test-prefix PREFIX] [--field KEY=VALUE]… [--run-url URL] [--sha SHA] [--branch NAME]
 
 <journey-out> is a UI-tests output directory as ui-tests writes it ($UI_OUT; ios-app.yml's
@@ -21,6 +22,13 @@ journey a test's name (`test`: createReceive is testCreateReceive); --field KEY=
 Only a run whose every test passed is published: anything else (failed, skipped, incomplete, or the result
 bundle and the log disagreeing) fails with the exporter's reasons. The tested commit is the one ui-tests
 recorded as the journeys ran (run.json); --sha must match it, and this checkout's HEAD is never used.
+
+Several <journey-out> directories are the parts of one journeys run (ios-app.yml's ui-journey-shards: each
+runner ran some of the journeys), published as if one run had made them: every part must have passed, at
+the same commit, in the same CI run, on the same simulator model and OS. The journeys are listed in the
+order of the parts, test_seconds is their sum, a screenshot two parts took (01-onboarding) is the first
+part's, and the video is the parts' recordings one after another, transcoded together (ffmpeg is required)
+within the same 25 MiB. `parts` lists each part's journeys, seconds and original recording.
 """
 import argparse
 import importlib.machinery
@@ -30,6 +38,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import tempfile
 
 EXPORTER = Path(__file__).resolve().parent / "export-evidence"
@@ -38,7 +47,7 @@ MANIFEST = "journey-provenance.json"
 MAX_BYTES = 25 * 1024 * 1024
 NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 RESERVED = {"version", "source_sha", "run_url", "branch", "test", "result", "test_seconds", "device", "tests",
-            "screenshots", "video", "original_video", "normalized_at", "video_omitted"}
+            "screenshots", "video", "original_video", "normalized_at", "video_omitted", "parts"}
 
 
 class Failure(Exception):
@@ -103,7 +112,14 @@ def identity(args, run):
 
 
 def prepare(journey, media, args, exporter=None):
-    journey, media = Path(journey), Path(media)
+    """journey: one UI-tests output directory, or a list of the parts of one run."""
+    runs = [Path(j) for j in journey] if isinstance(journey, (list, tuple)) else [Path(journey)]
+    if len(runs) > 1:
+        return prepare_parts(runs, Path(media), args, exporter)
+    return prepare_one(runs[0], Path(media), args, exporter)
+
+
+def prepare_one(journey, media, args, exporter=None):
     video = args.video or VIDEO
     if Path(video).is_absolute() or ".." in Path(video).parts or not video.endswith(".mp4"):
         raise Failure(f"--video {video}: a relative .mp4 path inside the media directory")
@@ -124,14 +140,7 @@ def prepare(journey, media, args, exporter=None):
             evidence = ex.export(journey, out, options)
         except ex.Failure as error:
             raise Failure(str(error))
-        if evidence["result"] != "passed":
-            raise Failure(f"not every test passed ({evidence['result']}): " + "; ".join(evidence["result_reasons"]))
-        if not evidence["screenshots"]:
-            raise Failure("no screenshots in the result bundle")
-        if bad := [s["name"] for s in evidence["screenshots"] if not NAME.fullmatch(s["name"])]:
-            raise Failure("screenshot names must be lowercase letters, digits and hyphens: " + ", ".join(bad))
-        if big := [s["name"] for s in evidence["screenshots"] if s["bytes"] > MAX_BYTES]:
-            raise Failure("screenshots over 25 MiB: " + ", ".join(big))
+        checked(evidence, "")
         media.mkdir(parents=True, exist_ok=True)
         shutil.copytree(out / "screenshots", media / "screenshots")
         if evidence["video"]:
@@ -142,15 +151,7 @@ def prepare(journey, media, args, exporter=None):
     shots = [{k: s[k] for k in ("name", "test", "width", "height", "bytes", "sha256")} for s in evidence["screenshots"]]
     if journeys:
         journeys = [dict(j, name=test_name(j["name"], args.test_prefix or "")) for j in journeys]
-        # each screenshot under the journey that took it; one every journey takes (01-onboarding) is the first's,
-        # as the exporter attributes it
-        taken_by = {}
-        for j in journeys:
-            for shot in j.get("screenshots", []):
-                taken_by.setdefault(shot, j["name"])
-        for shot in shots:
-            shot["test"] = taken_by.get(shot["name"])
-    os_name = device.get("os") or (f"iOS {device['os_version']}" if device.get("os_version") else None)
+        attribute(shots, journeys)
     manifest = {
         "version": 2,
         "source_sha": sha,
@@ -162,7 +163,7 @@ def prepare(journey, media, args, exporter=None):
                 else ", ".join(sorted({t["class"] for t in evidence["tests"] if t.get("class")})) or "UI tests",
         "result": "passed",
         "test_seconds": evidence["test_seconds"],
-        "device": {k: v for k, v in {"name": device.get("name"), "os": os_name, "type": device.get("type")}.items() if v},
+        "device": device_of(device),
         "tests": [{"name": t["name"], "result": t["result"], "seconds": t["seconds"]} for t in (journeys or evidence["tests"])],
         "screenshots": shots,
         "video": evidence["video"],
@@ -175,9 +176,152 @@ def prepare(journey, media, args, exporter=None):
     return manifest
 
 
+def attribute(shots, journeys):
+    """Each screenshot under the journey that took it; one several journeys take (01-onboarding) is the first's,
+    as the exporter attributes it."""
+    taken_by = {}
+    for j in journeys:
+        for shot in j.get("screenshots", []):
+            taken_by.setdefault(shot, j["name"])
+    for shot in shots:
+        shot["test"] = taken_by.get(shot["name"])
+
+
+def device_of(device):
+    os_name = device.get("os") or (f"iOS {device['os_version']}" if device.get("os_version") else None)
+    return {k: v for k, v in {"name": device.get("name"), "os": os_name, "type": device.get("type")}.items() if v}
+
+
+def checked(evidence, where):
+    if evidence["result"] != "passed":
+        raise Failure(f"{where}not every test passed ({evidence['result']}): " + "; ".join(evidence["result_reasons"]))
+    if not evidence["screenshots"]:
+        raise Failure(f"{where}no screenshots in the result bundle")
+    if bad := [s["name"] for s in evidence["screenshots"] if not NAME.fullmatch(s["name"])]:
+        raise Failure(f"{where}screenshot names must be lowercase letters, digits and hyphens: " + ", ".join(bad))
+    if big := [s["name"] for s in evidence["screenshots"] if s["bytes"] > MAX_BYTES]:
+        raise Failure(f"{where}screenshots over 25 MiB: " + ", ".join(big))
+
+
+def join_recordings(recordings, destination, ex):
+    """The parts' recordings, [(path, original)], one after another as one H.264 copy at most 720 wide at
+    24 fps within MAX_BYTES: export-evidence's transcode, over all of them."""
+    total = sum(original["duration_seconds"] for _, original in recordings)
+    bitrate = min(int(max(MAX_BYTES - (1 << 20), 1) * 8 / total), ex.MAX_BITRATE)
+    if bitrate < 150_000:
+        raise Failure(f"{total:.0f} s of recordings cannot fit {MAX_BYTES:,} bytes at a readable bitrate")
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
+    for path, original in recordings:
+        # as export-evidence: simctl can give the last frame a long duration; -t keeps each part's timeline
+        command += ["-fflags", "+igndts", "-t", str(original["duration_seconds"]), "-i", str(path)]
+    scaled = ";".join(f"[{i}:v:0]scale=w='min(720,iw)':h=-2,fps=24,setsar=1,format=yuv420p[v{i}]"
+                      for i in range(len(recordings)))
+    joined = "".join(f"[v{i}]" for i in range(len(recordings))) + f"concat=n={len(recordings)}:v=1:a=0[out]"
+    command += ["-filter_complex", f"{scaled};{joined}", "-map", "[out]", "-an", "-c:v", "libx264",
+                "-preset", "medium", "-b:v", str(bitrate), "-maxrate", str(bitrate), "-bufsize", str(bitrate * 2),
+                "-pix_fmt", "yuv420p", "-map_metadata", "-1", "-movflags", "+faststart", str(destination)]
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as error:
+        raise Failure(f"joining the recordings failed: {error}")
+    video = ex.probe(destination)
+    if abs(video["duration_seconds"] - total) > 0.5 * len(recordings):
+        raise Failure(f"joining changed the duration: {total:.3f} s of parts to {video['duration_seconds']} s")
+    if video["bytes"] > MAX_BYTES:
+        raise Failure(f"the joined video is {video['bytes']:,} bytes, over {MAX_BYTES:,}")
+    video["transcoded"] = True
+    return video
+
+
+def prepare_parts(runs, media, args, exporter=None):
+    video_rel = args.video or VIDEO
+    if Path(video_rel).is_absolute() or ".." in Path(video_rel).parts or not video_rel.endswith(".mp4"):
+        raise Failure(f"--video {video_rel}: a relative .mp4 path inside the media directory")
+    fields = fields_of(args.field)
+    if media.exists() and any(media.iterdir()):
+        raise Failure(f"{media} is not empty")
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        raise Failure("joining several parts' recordings needs ffmpeg and ffprobe")
+    ex = exporter or load_exporter()
+    with tempfile.TemporaryDirectory() as scratch:
+        parts = []
+        for index, run_dir in enumerate(runs):
+            where = f"{run_dir}: "
+            if not run_dir.is_dir():
+                raise Failure(f"no journey output at {run_dir}")
+            run = json.loads((run_dir / "run.json").read_text()) if (run_dir / "run.json").is_file() else {}
+            sha, run_url, branch = identity(args, run)
+            out = Path(scratch) / f"part-{index}"
+            # the recording is only probed here (none, and no room): the parts are transcoded together below
+            options = argparse.Namespace(name=run.get("name") or run_dir.name, screenshots=None,
+                                         video_out="video/part.mp4", max_video_bytes=0, transcode="none",
+                                         app_metadata=None, source_revision=sha, require_passed=False)
+            try:
+                evidence = ex.export(run_dir, out, options)
+            except ex.Failure as error:
+                raise Failure(where + str(error))
+            checked(evidence, where)
+            if not evidence.get("journeys"):
+                raise Failure(where + "not a journeys run (no journeys.json): only a journeys run is split in parts")
+            original = evidence["original_video"]
+            if original is None:
+                raise Failure(where + str(evidence.get("video_omitted") or "no screen recording"))
+            seconds = original["duration_seconds"]
+            if seconds < ex.MIN_VIDEO_SECONDS or seconds < ex.MIN_VIDEO_SHARE * evidence["test_seconds"]:
+                raise Failure(f"{where}the screen recording is truncated: {seconds:g} s for "
+                              f"{evidence['test_seconds']:g} s of tests")
+            parts.append({"dir": run_dir, "out": out, "sha": sha, "run_url": run_url, "branch": branch,
+                          "evidence": evidence, "original": original})
+        first = parts[0]
+        for part in parts[1:]:
+            if part["sha"] != first["sha"]:
+                raise Failure(f"the parts ran at different commits: {first['sha']} and {part['sha']}")
+            if part["run_url"] != first["run_url"]:
+                raise Failure(f"the parts are from different runs: {first['run_url']} and {part['run_url']}")
+            if device_of(part["evidence"]["device"]) != device_of(first["evidence"]["device"]):
+                raise Failure(f"the parts ran on different devices: {device_of(first['evidence']['device'])} and "
+                              f"{device_of(part['evidence']['device'])}")
+        media.mkdir(parents=True, exist_ok=True)
+        (media / "screenshots").mkdir()
+        shots, journeys = [], []
+        for part in parts:
+            for shot in part["evidence"]["screenshots"]:
+                if any(s["name"] == shot["name"] for s in shots):
+                    continue
+                shutil.copyfile(part["out"] / "screenshots" / f"{shot['name']}.png",
+                                media / "screenshots" / f"{shot['name']}.png")
+                shots.append({k: shot[k] for k in ("name", "test", "width", "height", "bytes", "sha256")})
+            journeys += [dict(j, name=test_name(j["name"], args.test_prefix or "")) for j in part["evidence"]["journeys"]]
+        attribute(shots, journeys)
+        recording = join_recordings([(p["dir"] / p["original"]["path_in_run"], p["original"]) for p in parts],
+                                    media / video_rel, ex)
+        recording["path"] = video_rel
+    manifest = {
+        "version": 2,
+        "source_sha": first["sha"],
+        "run_url": first["run_url"],
+        "branch": first["branch"],
+        **fields,
+        "test": args.journeys or "journeys",
+        "result": "passed",
+        "test_seconds": round(sum(p["evidence"]["test_seconds"] for p in parts), 3),
+        "device": device_of(first["evidence"]["device"]),
+        "tests": [{"name": j["name"], "result": j["result"], "seconds": j["seconds"]} for j in journeys],
+        "screenshots": shots,
+        "video": recording,
+        "parts": [{"tests": [test_name(j["name"], args.test_prefix or "") for j in p["evidence"]["journeys"]],
+                   "test_seconds": p["evidence"]["test_seconds"], "original_video": p["original"]} for p in parts],
+        "normalized_at": max(p["evidence"]["exported"]["at"] for p in parts),
+    }
+    (media / MANIFEST).write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("journey", type=Path, help="a UI-tests output directory (ui-tests' UI_OUT)")
+    parser.add_argument("journey", type=Path, nargs="+",
+                        help="a UI-tests output directory (ui-tests' UI_OUT), or each part of one run")
     parser.add_argument("media", type=Path, help="where the media and manifest go")
     parser.add_argument("--video", default=VIDEO, help=f"the recording's path in the media (default {VIDEO})")
     parser.add_argument("--journeys", help="the journeys' source, the manifest's `test` (default: journeys)")

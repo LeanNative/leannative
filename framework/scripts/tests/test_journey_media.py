@@ -64,7 +64,9 @@ def log(tests, succeeded=True):
     return "\n".join(lines) + "\n"
 
 
-class PrepareTests(unittest.TestCase):
+class Fixture(unittest.TestCase):
+    """One journeys run on disk, its result bundle faked at xcresulttool."""
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -145,6 +147,8 @@ class PrepareTests(unittest.TestCase):
     def manifest(self):
         return json.loads((self.out / media.MANIFEST).read_text())
 
+
+class PrepareTests(Fixture):
     def test_a_journeys_run_lists_the_journeys(self):
         # LeanApp/Journeys.lean through LeanNative's driver: one XCTest, the journeys in journeys.json
         (self.journey / "journeys.json").write_text(json.dumps([
@@ -337,10 +341,6 @@ class PrepareTests(unittest.TestCase):
         self.assertAlmostEqual(video["duration_seconds"], 50.0, delta=1.0)
         self.assertEqual(self.manifest()["original_video"]["width"], 1206)
 
-
-if __name__ == "__main__":
-    unittest.main()
-
     def journeys(self):
         (self.journey / "journeys.json").write_text(json.dumps([
             {"name": "createReceiveSendConfirm", "passed": True, "seconds": 47.1, "screenshots": ["01-onboarding", "03-receive"]},
@@ -373,3 +373,114 @@ if __name__ == "__main__":
         with self.assertRaisesRegex(media.Failure, "the manifest's own field"):
             self.run_prepare(field=["source_sha=0"])
         self.assertFalse(self.out.exists())
+
+
+class PartsTests(Fixture):
+    """A journeys run split across runners (ios-app.yml's ui-journey-shards): each part a UI-tests output
+    directory of its own, published as one run."""
+
+    def setUp(self):
+        super().setUp()
+        self.tools.update({"ffmpeg", "ffprobe"})
+        # the fake result bundle answers for each part's bundle by its path
+        self.bundles = {}
+        self.part_a = self.part("a", [("createReceiveSendConfirm", 40.0, ["01-onboarding", "03-receive"])], 42.0)
+        self.part_b = self.part("b", [("silentPaymentSend", 30.0, ["01-onboarding", "40-silent-review"])], 32.0,
+                                onboarding=png(4, 8, b"second part"))
+
+    def part(self, name, journeys, video_seconds, sha=SHA, run_id="42", onboarding=None, passed=True):
+        directory = self.base / name
+        (directory / "screenshots").mkdir(parents=True)
+        (directory / "journey.xcresult").mkdir()
+        shots = {"01-onboarding": onboarding or self.shots["01-onboarding"]}
+        for _, _, names in journeys:
+            for shot in names:
+                shots.setdefault(shot, self.shots.get(shot) or png(4, 8, shot.encode()))
+        for shot, data in shots.items():
+            (directory / "screenshots" / f"{shot}.png").write_bytes(data)
+        tests = [("testDrive", "passed" if passed else "failed", f"{sum(s for _, s, _ in journeys):.3f}")]
+        (directory / "xcodebuild.log").write_text(log(tests, passed))
+        (directory / "device.json").write_text((self.journey / "device.json").read_text())
+        run = json.loads((self.journey / "run.json").read_text())
+        run["source"]["revision"] = sha
+        run["ci"]["run_id"] = run_id
+        (directory / "run.json").write_text(json.dumps(run))
+        (directory / "journeys.json").write_text(json.dumps(
+            [{"name": j, "passed": passed, "seconds": s, "screenshots": n} for j, s, n in journeys]))
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=1206x2622:rate=4",
+                        "-t", str(video_seconds), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        str(directory / "journey.mp4")], check=True)
+        self.bundle(tests)
+        captures = [("testDrive", shot, 1.0 + i, data) for i, (shot, data) in enumerate(shots.items())]
+        self.bundles[str(directory / "journey.xcresult")] = (self.results, captures)
+        return directory
+
+    def xcresulttool(self, *arguments):
+        path = arguments[arguments.index("--path") + 1]
+        if path in getattr(self, "bundles", {}):
+            self.results, self.captures = self.bundles[path]
+        return super().xcresulttool(*arguments)
+
+    def run_parts(self, *parts, **overrides):
+        values = dict(sha=None, run_url=None, branch=None, video=media.VIDEO, journeys=JOURNEYS,
+                      test_prefix="test", field=["network=regtest"])
+        values.update(overrides)
+        return media.prepare(list(parts), self.out, argparse.Namespace(**values), exporter=exporter)
+
+    def test_the_parts_are_published_as_one_run(self):
+        self.run_parts(self.part_a, self.part_b)
+        evidence = self.manifest()
+        self.assertEqual((evidence["version"], evidence["source_sha"], evidence["run_url"], evidence["result"]),
+                         (2, SHA, RUN, "passed"))
+        # the journeys in the parts' order, their seconds summed
+        self.assertEqual([t["name"] for t in evidence["tests"]], ["testCreateReceiveSendConfirm", "testSilentPaymentSend"])
+        self.assertAlmostEqual(evidence["test_seconds"], 70.0)
+        # a screenshot both parts took is the first part's, once (the website refuses a duplicate)
+        names = [s["name"] for s in evidence["screenshots"]]
+        self.assertEqual(sorted(names), ["01-onboarding", "03-receive", "40-silent-review"])
+        self.assertEqual((self.out / "screenshots" / "01-onboarding.png").read_bytes(), self.shots["01-onboarding"])
+        self.assertEqual({s["name"]: s["test"] for s in evidence["screenshots"]},
+                         {"01-onboarding": "testCreateReceiveSendConfirm", "03-receive": "testCreateReceiveSendConfirm",
+                          "40-silent-review": "testSilentPaymentSend"})
+        for shot in evidence["screenshots"]:
+            data = (self.out / "screenshots" / f"{shot['name']}.png").read_bytes()
+            self.assertEqual((shot["bytes"], shot["sha256"]), (len(data), hashlib.sha256(data).hexdigest()))
+        # one video: the recordings one after another, at most 720 wide, its hash the file's
+        video = evidence["video"]
+        self.assertEqual((video["path"], video["width"], video["codec"]), (media.VIDEO, 720, "h264"))
+        self.assertAlmostEqual(video["duration_seconds"], 74.0, delta=1.0)
+        self.assertEqual(video["sha256"], hashlib.sha256((self.out / media.VIDEO).read_bytes()).hexdigest())
+        self.assertEqual([(p["tests"], p["test_seconds"]) for p in evidence["parts"]],
+                         [(["testCreateReceiveSendConfirm"], 40.0), (["testSilentPaymentSend"], 30.0)])
+        self.assertEqual([round(p["original_video"]["duration_seconds"]) for p in evidence["parts"]], [42, 32])
+        self.assertEqual(sorted(p.relative_to(self.out).as_posix() for p in self.out.rglob("*") if p.is_file()),
+                         sorted([media.MANIFEST, media.VIDEO] + [f"screenshots/{n}.png" for n in names]))
+
+    def test_parts_at_different_commits_are_refused(self):
+        other = self.part("c", [("shippedCensus", 20.0, ["50-census"])], 22.0, sha="f" * 40)
+        with self.assertRaisesRegex(media.Failure, "different commits"):
+            self.run_parts(self.part_a, other)
+
+    def test_parts_of_different_runs_are_refused(self):
+        other = self.part("c", [("shippedCensus", 20.0, ["50-census"])], 22.0, run_id="43")
+        with self.assertRaisesRegex(media.Failure, "different runs"):
+            self.run_parts(self.part_a, other)
+
+    def test_a_failed_part_fails_the_whole(self):
+        other = self.part("c", [("shippedCensus", 20.0, ["50-census"])], 22.0, passed=False)
+        with self.assertRaisesRegex(media.Failure, "not every test passed"):
+            self.run_parts(self.part_a, other)
+
+    def test_a_part_with_a_truncated_recording_fails(self):
+        other = self.part("c", [("shippedCensus", 20.0, ["50-census"])], 5.0)
+        with self.assertRaisesRegex(media.Failure, "truncated"):
+            self.run_parts(self.part_a, other)
+
+    def test_joining_needs_ffmpeg(self):
+        self.tools.clear()
+        with self.assertRaisesRegex(media.Failure, "needs ffmpeg"):
+            self.run_parts(self.part_a, self.part_b)
+
+
+if __name__ == "__main__":
+    unittest.main()
