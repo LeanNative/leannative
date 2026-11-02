@@ -214,6 +214,61 @@ disagree), never as `passed`; `--require-passed` makes such a run exit 3 once th
 Publishing the output is the app's: an `after-ui` hook can call the exporter and the workflow's
 `publish-path` upload it.
 
+## Releasing an app
+
+`.github/workflows/ios-release.yml` is the reusable release workflow: it signs the app, checks it, uploads it
+to App Store Connect, hands it to TestFlight's internal group and publishes a GitHub release. Its steps are
+LeanNative's release tool, `leannative-release` (`framework/lean/LeanNativeRelease`), which drives
+xcodebuild, codesign, altool, openssl and curl:
+
+| Command | Does |
+|---|---|
+| `policy <notes> [tag]` | a stable `vMAJOR.MINOR.PATCH` tag, and What to Test present and at most 4,000 characters (App Store Connect refuses more only after the upload) |
+| `append-notes <notes> <line>` | a last paragraph for What to Test (what the build bundles, say), on the runner only |
+| `verify-app <app> [--distribution]` | the bundle identifier, team, version and build number asked for; export compliance declared; the asset-catalog icon; the signature and its application identifier; the iCloud container when there is one (production for distribution); debugging off; arm64 only; no Swift |
+| `verify-ipa <ipa>` | the exported package's one app, for distribution, and its SHA-256 recorded for the upload to check |
+| `testflight <step>` | App Store Connect: `wait-processing`, `notes`, `internal`, `check` (read only), `status`, `external` (beta review, a person's step), `register-bundle-id`, `create-app`, `upload`, and the App Store version's `appstore-status`, `appstore-attach`, `appstore-notes`, `appstore-submit` |
+| `jwt` | an App Store Connect API token (ES256, 20 minutes) for a person's own requests |
+
+A release needs a successful run of the app's CI workflow (not a pull request's) on the tagged tree. A
+manual run (`upload: false`) does everything up to the upload, signing included, and reads App Store
+Connect with the key, so a change to the release can be tried without publishing anything:
+
+```yaml
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+jobs:
+  release:
+    uses: LeanNative/leannative/.github/workflows/ios-release.yml@<commit>
+    with:
+      leannative: <commit>
+      lean-packages: Lean LeanApp
+      app-dir: LeanApp
+      app-root: MyApp
+      scheme: MyApp
+      bundle-id: com.example.myapp
+      team-id: ABCDE12345
+      what-to-test: docs/testflight-what-to-test.txt
+      upload: ${{ github.event_name == 'push' }}
+    secrets:   # named: `secrets: inherit` reaches only a workflow in the caller's own organization
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+      DEV_CERT_P12: ${{ secrets.DEV_CERT_P12 }}
+      DEV_CERT_P12_PASSWORD: ${{ secrets.DEV_CERT_P12_PASSWORD }}
+```
+
+On a Mac, `lake build leannative/leannative-release` in the app's directory builds the tool into
+`.lake/packages/leannative/framework/lean/.lake/build/bin/`; with `ASC_KEY_ID`, `ASC_ISSUER_ID`,
+`APP_BUNDLE_ID` and the key in `~/.appstoreconnect/private_keys/` its `testflight` steps run there too.
+`make check` runs `release-test`: a token minted with a key openssl made, verified by openssl; the policy;
+and a small app, signed ad hoc, through the bundle checks.
+
 ## What is trusted
 
 | Layer | Status | How it is checked |
@@ -234,6 +289,7 @@ Makefile                    check: the framework's checks
 docs/ISSUES.md              issues moved from posix4e/elmlean
 .github/workflows/
   ios-app.yml               the reusable CI workflow for an app
+  ios-release.yml           the reusable release workflow for an app (TestFlight, GitHub release)
   check.yml                 this repository's own CI (make check, native-demo for iOS and Mac Catalyst, its UI tests on both)
 framework/
   lean/                     Lake package `leannative`
@@ -241,6 +297,7 @@ framework/
                             Native (trusted shell); Gate; Proofs/ and Proofs.lean (the framework's gate);
                             Native/ (optional native support: BackgroundRun, the typed capability clients, EffectScope)
     LeanNativeTest/            the native support modules' tests and fixtures (`make check`)
+    LeanNativeRelease/         the release tool, `leannative-release` (ios-release.yml's steps)
     LeanNativeShell/               the native shell as Lean data; `lake exe leannative-shell <dir>` prints its Objective-C
   native/                   README (the shell, capabilities, Mac Catalyst, UI tests), c/ (the C shim), scripts/
                             (ios_lean_sources.sh, retarget_ar.py, …), ci/ (the workflow's scripts),

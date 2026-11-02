@@ -1,0 +1,368 @@
+name: LeanNative iOS release
+
+# Signs a LeanNative app, sends it to App Store Connect and TestFlight's internal group, and publishes a GitHub
+# release (README.md, "Releasing an app"). An app calls it from its tag workflow:
+#
+#   on: { push: { tags: ["v*.*.*"] }, workflow_dispatch: }
+#   permissions: { contents: write, actions: read }
+#   jobs:
+#     release:
+#       uses: LeanNative/leannative/.github/workflows/ios-release.yml@<commit>
+#       with: { leannative: <commit>, lean-packages: …, app-dir: …, app-root: …, scheme: …, bundle-id: …,
+#               team-id: …, what-to-test: …, upload: "${{ github.event_name == 'push' }}" }
+#       secrets: inherit
+#
+# A release (`upload`) needs a successful run of the app's CI workflow (`ci-workflow`, not a pull request's)
+# on the tagged tree, so it does not test again. Without `upload` (a manual run, on any branch) it does
+# everything up to the upload: the build, signing, the archive and export with their checks, and a read-only
+# call to App Store Connect with the key; nothing is published.
+#
+# The steps are LeanNative's release tool (framework/lean/LeanNativeRelease, `leannative-release`), built from
+# the app's resolved LeanNative package, so they are the commit the app pins. Secrets: ASC_KEY_ID,
+# ASC_ISSUER_ID, ASC_PRIVATE_KEY (the App Store Connect API key's .p8 text), DEV_CERT_P12 (base64) and
+# DEV_CERT_P12_PASSWORD (a persistent Apple Development certificate: with it, automatic signing reuses one
+# certificate instead of making one on every runner). External TestFlight review is never requested here: a
+# review request cannot be withdrawn, so it is a person's step (`leannative-release testflight external`).
+
+on:
+  workflow_call:
+    inputs:
+      leannative:
+        description: The LeanNative commit this workflow is called at; must equal the app's lake-manifest.json pin
+        type: string
+        required: true
+      runs-on:
+        description: The macOS runner label
+        type: string
+        default: macos-26
+      timeout-minutes:
+        type: number
+        default: 120
+      lean-packages:
+        description: The app's Lake packages, space-separated, in build order
+        type: string
+        required: true
+      app-dir:
+        description: The Lake package of the app (it requires leannative)
+        type: string
+        required: true
+      app-root:
+        description: The root module that registers the app
+        type: string
+        required: true
+      scheme:
+        description: The Xcode scheme; the app is <scheme>.app
+        type: string
+        required: true
+      ios-dir:
+        description: The app's ios directory (default <app-dir>/ios)
+        type: string
+        default: ''
+      bundle-id:
+        description: The app's bundle identifier
+        type: string
+        required: true
+      team-id:
+        description: The Apple developer team that signs it
+        type: string
+        required: true
+      icloud-container:
+        description: The app's iCloud container (iCloud.…), checked in the signed app; empty for an app without iCloud
+        type: string
+        default: ''
+      what-to-test:
+        description: The TestFlight What to Test file (at most 4,000 characters)
+        type: string
+        required: true
+      prepare:
+        description: A command run after the Lean build, before the app is built (data the app bundles, say)
+        type: string
+        default: ''
+      notes-line:
+        description: A command whose output is added to What to Test as its last paragraph, on the runner only
+        type: string
+        default: ''
+      keep-path:
+        description: Files kept as the release-<run> artifact for 90 days (what the build bundled, say)
+        type: string
+        default: ''
+      ci-workflow:
+        description: The app's CI workflow file, whose successful run on the tagged tree a release needs
+        type: string
+        default: ci.yml
+      upload:
+        description: Upload, hand the build to TestFlight's internal group and publish the GitHub release
+        type: boolean
+        default: false
+
+    secrets:
+      ASC_KEY_ID:
+        required: true
+      ASC_ISSUER_ID:
+        required: true
+      ASC_PRIVATE_KEY:
+        required: true
+      DEV_CERT_P12:
+        required: true
+      DEV_CERT_P12_PASSWORD:
+        required: true
+
+env:
+  LEAN_PACKAGES: ${{ inputs.lean-packages }}
+  APP_DIR: ${{ inputs.app-dir }}
+  APP_ROOT: ${{ inputs.app-root }}
+  SCHEME: ${{ inputs.scheme }}
+  APP_BUNDLE_ID: ${{ inputs.bundle-id }}
+  APP_TEAM_ID: ${{ inputs.team-id }}
+  APP_ICLOUD_CONTAINER: ${{ inputs.icloud-container }}
+  LEANNATIVE_CI: ${{ github.workspace }}/${{ inputs.app-dir }}/.lake/packages/leannative/framework/native/ci
+  RELEASE_TOOL: ${{ github.workspace }}/${{ inputs.app-dir }}/.lake/packages/leannative/framework/lean/.lake/build/bin/leannative-release
+  TESTFLIGHT_WHATS_NEW_FILE: ${{ github.workspace }}/${{ inputs.what-to-test }}
+
+jobs:
+  # A pull request's run does not count: it tests the merge of the pull request into main as it was, whose
+  # tree need not be the tag's. With none, run CI on the default branch by hand and rerun the release.
+  tested:
+    if: inputs.upload
+    runs-on: ubuntu-24.04
+    steps:
+      - name: A successful CI run on this tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+        run: |
+          set -euo pipefail
+          want=$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$SHA" --jq .tree.sha)
+          echo "$GITHUB_REF_NAME: commit $SHA, tree $want"
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$CI_WORKFLOW/runs?status=success&per_page=100" \
+            --jq '.workflow_runs[] | select(.event != "pull_request") | "\(.head_sha) \(.html_url)"')
+          seen=" "
+          while read -r sha url; do
+            [ -n "$sha" ] || continue
+            case "$seen" in *" $sha "*) continue ;; esac
+            seen="$seen$sha "
+            tree=$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$sha" --jq .tree.sha 2>/dev/null || true)
+            if [ "$tree" = "$want" ]; then
+              echo "CI passed on this tree: $url (commit $sha)" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done <<< "$runs"
+          echo "::error::no $CI_WORKFLOW run outside a pull request has passed on tree $want: run CI by hand, then rerun this release"
+          exit 1
+
+  testflight:
+    needs: tested
+    if: ${{ !cancelled() && (needs.tested.result == 'success' || (needs.tested.result == 'skipped' && !inputs.upload)) }}
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    env:
+      IOS_DIR: ${{ github.workspace }}/${{ inputs.ios-dir || format('{0}/ios', inputs.app-dir) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The app pins this LeanNative
+        env:
+          WANT: ${{ inputs.leannative }}
+        run: |
+          found=$(jq -r '.packages[] | select(.name == "leannative") | .rev' "$APP_DIR/lake-manifest.json")
+          echo "lake-manifest.json: leannative $found; workflow: leannative $WANT"
+          [ "$found" = "$WANT" ] || { echo "::error::$APP_DIR/lake-manifest.json pins LeanNative at '$found', but the workflow is called with leannative: $WANT"; exit 1; }
+      - name: The version
+        env:
+          UPLOAD: ${{ inputs.upload }}
+        run: |
+          # a release is its tag's version; a run without upload archives as 0.0.0
+          if [ "$UPLOAD" = true ]; then version="${GITHUB_REF_NAME#v}"; tag="$GITHUB_REF_NAME"; else version=0.0.0; tag=; fi
+          {
+            echo "TESTFLIGHT_MARKETING_VERSION=$version"
+            echo "TESTFLIGHT_BUILD_NUMBER=$GITHUB_RUN_NUMBER"
+            echo "RELEASE_TAG=$tag"
+            echo "SIGNING=$RUNNER_TEMP/leannative-signing"
+          } >> "$GITHUB_ENV"
+          echo "version $version, build $GITHUB_RUN_NUMBER"
+      - name: The cache key (the same as the CI workflow's)
+        id: key
+        env:
+          RUNS_ON: ${{ inputs.runs-on }}
+        run: |
+          set -euo pipefail
+          paths=()
+          deps=()
+          specs=()
+          for p in $LEAN_PACKAGES; do
+            paths+=("$p/.lake")
+            deps+=("$p/lean-toolchain" "$p/lake-manifest.json")
+            specs+=("$p/*.lean")
+          done
+          deps_hash=$(cat "${deps[@]}" 2>/dev/null | shasum -a 256 | cut -c1-20)
+          src_hash=$(git ls-files -z -- "${specs[@]}" | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-20)
+          {
+            echo "key=leannative-$RUNS_ON-$deps_hash-$src_hash"
+            echo 'restore-keys<<KEYS'; echo "leannative-$RUNS_ON-$deps_hash-"; echo "leannative-$RUNS_ON-"; echo KEYS
+            echo 'paths<<PATHS'; printf '%s\n' "${paths[@]}"; echo PATHS
+          } >> "$GITHUB_OUTPUT"
+      - name: Restore the Lean builds (main's latest; CI saves them)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.key.outputs.paths }}
+          key: ${{ steps.key.outputs.key }}
+          restore-keys: ${{ steps.key.outputs.restore-keys }}
+      - name: elan and the Lean toolchain
+        run: |
+          set -euo pipefail
+          if ! command -v elan >/dev/null && [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/v4.1.2/elan-init.sh \
+              | sh -s -- -y --default-toolchain none --no-modify-path
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          for p in $LEAN_PACKAGES; do
+            t=$(cat "$p/lean-toolchain")
+            "$HOME/.elan/bin/elan" toolchain list | awk '{print $1}' | grep -qxF "$t" || "$HOME/.elan/bin/elan" toolchain install "$t"
+          done
+          echo "CI_RESULTS=$RUNNER_TEMP/leannative-ci/release" >> "$GITHUB_ENV"
+      - name: lake build, and the release tool
+        run: |
+          (cd "$APP_DIR" && lake env true)
+          "$LEANNATIVE_CI/lake-build"
+          (cd "$APP_DIR" && lake build leannative/leannative-release)
+      - name: Prepare
+        if: inputs.prepare != ''
+        env:
+          COMMAND: ${{ inputs.prepare }}
+        run: bash -c "$COMMAND"
+      - name: The Xcode project for devices
+        run: PREPARE_ONLY=1 "$LEANNATIVE_CI/build-ios" Release ios
+      - name: What to Test, and the tag
+        env:
+          NOTES_LINE: ${{ inputs.notes-line }}
+        run: |
+          set -euo pipefail
+          if [ -n "$NOTES_LINE" ]; then "$RELEASE_TOOL" append-notes "$TESTFLIGHT_WHATS_NEW_FILE" "$(bash -c "$NOTES_LINE")"; fi
+          "$RELEASE_TOOL" policy "$TESTFLIGHT_WHATS_NEW_FILE" "$RELEASE_TAG"
+      - name: Keep what the build bundled
+        if: inputs.keep-path != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ inputs.keep-path }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: The App Store Connect key, and the development certificate
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          DEV_CERT_P12: ${{ secrets.DEV_CERT_P12 }}
+          DEV_CERT_P12_PASSWORD: ${{ secrets.DEV_CERT_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # The key lets xcodebuild use Apple's cloud-managed distribution certificate: no disposable
+          # distribution certificate is made (they outlive the runner and use up the account's limit).
+          (umask 077 && mkdir -p "$SIGNING" && printf '%s\n' "$ASC_PRIVATE_KEY" > "$SIGNING/AuthKey.p8")
+          KC="$RUNNER_TEMP/leannative-release.keychain-db"
+          KCPW="$(uuidgen)"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          printf '%s' "$DEV_CERT_P12" | base64 -D > "$SIGNING/dev.p12"
+          security import "$SIGNING/dev.p12" -k "$KC" -P "$DEV_CERT_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm "$SIGNING/dev.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" login.keychain
+          security find-identity -p codesigning "$KC" | head -3
+      - name: App Store Connect answers with the key (read only)
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: ASC_KEY_PATH="$SIGNING/AuthKey.p8" "$RELEASE_TOOL" testflight check
+      - name: Archive
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          xcodebuild -project "$IOS_DIR/$SCHEME.xcodeproj" -scheme "$SCHEME" \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath "build/$SCHEME.xcarchive" -derivedDataPath build/DerivedData \
+            -allowProvisioningUpdates -authenticationKeyPath "$SIGNING/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            MARKETING_VERSION="$TESTFLIGHT_MARKETING_VERSION" CURRENT_PROJECT_VERSION="$TESTFLIGHT_BUILD_NUMBER" \
+            archive 2>&1 | tee build/archive.log
+      - name: The archive's identity and signature, and no Swift
+        run: |
+          app="build/$SCHEME.xcarchive/Products/Applications/$SCHEME.app"
+          "$LEANNATIVE_CI/check-no-swift" build/archive.log "$app"
+          "$RELEASE_TOOL" verify-app "$app"
+      - name: Export the App Store package
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          plutil -create xml1 build/ExportOptions.plist
+          plutil -insert method -string app-store-connect build/ExportOptions.plist
+          plutil -insert destination -string export build/ExportOptions.plist
+          plutil -insert signingStyle -string automatic build/ExportOptions.plist
+          plutil -insert teamID -string "$APP_TEAM_ID" build/ExportOptions.plist
+          plutil -insert manageAppVersionAndBuildNumber -bool NO build/ExportOptions.plist
+          xcodebuild -exportArchive -archivePath "build/$SCHEME.xcarchive" \
+            -exportOptionsPlist build/ExportOptions.plist -exportPath build/export -allowProvisioningUpdates \
+            -authenticationKeyPath "$SIGNING/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+      - name: The exported package
+        run: '"$RELEASE_TOOL" verify-ipa "build/export/$SCHEME.ipa"'
+      - name: Upload the verified package
+        if: inputs.upload
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          shasum -a 256 -c "build/export/$SCHEME.ipa.verified.sha256"
+          ln -sf AuthKey.p8 "$SIGNING/AuthKey_$ASC_KEY_ID.p8"
+          API_PRIVATE_KEYS_DIR="$SIGNING" xcrun altool --upload-app -f "build/export/$SCHEME.ipa" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+      - name: TestFlight's internal group
+        if: inputs.upload
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          export ASC_KEY_PATH="$SIGNING/AuthKey.p8"
+          "$RELEASE_TOOL" testflight wait-processing
+          "$RELEASE_TOOL" testflight notes
+          "$RELEASE_TOOL" testflight internal
+      - name: Remove the key and the certificate
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/leannative-release.keychain-db" 2>/dev/null || true
+          rm -rf "$SIGNING"
+
+  github-release:
+    needs: testflight
+    if: ${{ !cancelled() && inputs.upload && needs.testflight.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Is the tagged commit on the default branch?
+        id: placement
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # a tag on another branch is an internal TestFlight build, published as a pre-release so it never
+          # becomes "latest"; a tag on the default branch is a full release
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...$DEFAULT_BRANCH" --jq .status)
+          on_main=false
+          if [ "$status" = identical ] || [ "$status" = ahead ]; then on_main=true; fi
+          echo "on_main=$on_main" >> "$GITHUB_OUTPUT"
+          echo "$GITHUB_SHA against $DEFAULT_BRANCH: $status; on_main=$on_main"
+      - name: GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          generate_release_notes: true
+          prerelease: ${{ steps.placement.outputs.on_main != 'true' }}
