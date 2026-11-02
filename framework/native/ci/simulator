@@ -9,11 +9,9 @@
 #   UI_DEVICE_TYPE  the iPhone model (default iPhone 17 Pro), so screenshots keep their size from run to run;
 #                   a runtime without it fails
 #
-# `create` returns once the boot is asked for, not once it is done. A cold boot and the first launch after it
-# take minutes on a hosted runner (four, measured on macos-26), so ios-app.yml creates its simulators before
-# the iOS builds (after `lake build`, which a booting simulator slows from 3 minutes to 8) and the step that
-# uses one waits for it (`xcrun simctl bootstatus <udid> -b`). ui-tests
-# (UI_THROWAWAY) and test-mode-check (CHECK_SIMULATOR) take such a simulator and delete it when they end.
+# `create` returns once the boot is asked for, not once it is done: the caller waits for it
+# (`xcrun simctl bootstatus <udid> -b`) and deletes it when it ends (ui-tests, test-mode-check). Neither is
+# started under a build: on a hosted runner the boot is minutes of CPU, and a build beside it slows by as much.
 set -euo pipefail
 CI="$(cd "$(dirname "$0")" && pwd)"
 

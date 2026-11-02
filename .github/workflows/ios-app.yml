@@ -5,9 +5,9 @@ name: LeanNative iOS app
 # simulator and device, and checks them. Each builds the Lean itself, on top of the latest build cached from
 # main (`lean` saves it there: a pull request restores main's and adds no entry of its own; the toolchain is
 # not cached, elan installs it in half a minute), so nothing passes between them and a rerun of any works
-# alone. A simulator a job needs is created after `lake build` and boots while the iOS builds run: a cold boot
-# and the first launch after it take minutes on a hosted runner, and a new simulator keeps the runner's three
-# cores busy for minutes after, so started before `lake build` it made a cold Lean build take 8 minutes, not 3. The scripts it runs are LeanNative's own, from the
+# alone. A simulator a job needs is created once the iOS build it tests is done: a cold boot and the first
+# launch after it are minutes of CPU on a hosted runner's three cores, so a build beside it slows by about as
+# much as it would save (README.md). The scripts it runs are LeanNative's own, from the
 # app's resolved LeanNative package (<app-dir>/.lake/packages/leannative/framework/native/ci), so they are the
 # commit the app pins; `leannative` must name that commit, and both jobs fail if the app's lake-manifest.json
 # pins another.
@@ -336,13 +336,6 @@ jobs:
         env:
           COMMAND: ${{ inputs.prepare }}
         run: *prepare
-      - name: A simulator for the UI tests, booting while the iOS app builds
-        if: inputs.ui-tests
-        env:
-          UI_DEVICE_TYPE: ${{ inputs.ui-device-type }}
-        run: |
-          set -euo pipefail
-          echo "UI_THROWAWAY=$("$LEANNATIVE_CI/simulator" create "$SCHEME UI tests $GITHUB_RUN_ID")" >> "$GITHUB_ENV"
       - name: The simulator build, Debug
         run: |
           set -euo pipefail
@@ -523,13 +516,6 @@ jobs:
         env:
           COMMAND: ${{ inputs.prepare }}
         run: *prepare
-      - name: A simulator for the test-mode check, booting while the iOS app builds
-        if: inputs.test-mode-env != ''
-        env:
-          UI_DEVICE_TYPE: ${{ inputs.ui-device-type }}
-        run: |
-          set -euo pipefail
-          echo "CHECK_SIMULATOR=$("$LEANNATIVE_CI/simulator" create "LeanNative test-mode check $GITHUB_RUN_ID")" >> "$GITHUB_ENV"
       - name: The simulator builds, Release (and Debug, for the checks)
         env:
           RELEASE_CHECK: ${{ inputs.release-check }}
