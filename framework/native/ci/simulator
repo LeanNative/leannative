@@ -4,6 +4,10 @@
 #   framework/native/ci/simulator pick            the runtime and model a new one gets, as device.json's record
 #   framework/native/ci/simulator create <name>   a new one, already booting: prints its UDID
 #   framework/native/ci/simulator record <udid>   an existing one's record (a UDID or a name)
+#   framework/native/ci/simulator keyboard <udid> a booted one's keyboard made for typing by a test: no
+#                                                 autocorrection, prediction or slide to type, and no slide-to-type
+#                                                 introduction (on a hosted runner, a fresh keyboard with them took
+#                                                 100 s to type three letters); after the first boot, which resets them
 #
 #   UI_RUNTIME      the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest)
 #   UI_DEVICE_TYPE  the iPhone model (default iPhone 17 Pro), so screenshots keep their size from run to run;
@@ -63,5 +67,12 @@ for runtime, devices in data["devices"].items():
             sys.exit()
 sys.exit("no simulator " + sys.argv[1])' "${2:?simulator record <udid>}"
     ;;
-  *) echo "usage: $CI/simulator pick | create <name> | record <udid>" >&2; exit 2 ;;
+  keyboard)
+    udid="${2:?simulator keyboard <udid>}"
+    for key in KeyboardAutocorrection KeyboardPrediction KeyboardContinuousPathEnabled; do
+      xcrun simctl spawn "$udid" defaults write com.apple.Preferences "$key" -bool NO
+    done
+    xcrun simctl spawn "$udid" defaults write com.apple.Preferences DidShowContinuousPathIntroduction -bool YES
+    ;;
+  *) echo "usage: $CI/simulator pick | create <name> | record <udid> | keyboard <udid>" >&2; exit 2 ;;
 esac
