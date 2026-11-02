@@ -214,6 +214,18 @@ disagree), never as `passed`; `--require-passed` makes such a run exit 3 once th
 Publishing the output is the app's: an `after-ui` hook can call the exporter and the workflow's
 `publish-path` upload it.
 
+**Journeys and their media.** Three inputs cover what an app with journeys (`LeanNative.Journey`) and a
+test mode otherwise writes for itself; the app keeps only its fixture, the `ui-before` / `ui-after` hooks:
+
+| Input | Runs |
+|---|---|
+| `wire-journey: journeys` | the journeys headless against the app itself (`framework/native/ci/wire-journeys`, `LEANNATIVE_DRIVER=wire`: no simulator, no XCTest), one more line of `lean`'s tests, with the same hooks as the simulator run; evidence in `wire-journeys/` |
+| `test-mode-env`, `test-mode-marker`, `release-marker` | `framework/native/ci/test-mode-check` on the simulator builds: launched fresh on a throwaway simulator with `test-mode-env`, the Debug build must write `test-mode-marker` in its data container and the Release build must not (and must write `release-marker`, its ordinary storage) |
+| `journey-media: build/media`, `journey-media-args` | once the UI tests pass, `framework/native/ci/journey-media`: the screenshots, a browser copy of the recording (ffmpeg, at most 25 MiB) and `journey-provenance.json` (version 2: the run, source, device, each journey's result and seconds, each file's SHA-256), from `export-evidence`; only a run whose every test passed is published. `--video`, `--journeys`, `--test-prefix` and `--field KEY=VALUE` shape it for its reader |
+
+Locally, the same scripts run with the app's variables: `APP_DIR=… framework/native/ci/wire-journeys
+journeys`, and `ui-tests` with `UI_JOURNEY` for the simulator.
+
 ## Releasing an app
 
 `.github/workflows/ios-release.yml` is the reusable release workflow: it signs the app, checks it, uploads it

@@ -1,0 +1,71 @@
+#!/bin/bash
+# The Release build ignores the app's test mode. A LeanNative app compiles its test mode (sample data, a
+# journal, a fixed seed) into every build and switches it on at run time only when the shell's `build`
+# capability answers Debug, so a `strings` check of the binary proves nothing. This checks the behaviour
+# instead: each build is installed fresh on a throwaway simulator and launched with test mode's environment;
+# the Debug build (the control) must write TEST_MODE_MARKER in its data container, and the Release build must
+# not, and must write RELEASE_MARKER (its ordinary storage) instead.
+#
+#   TEST_MODE_ENV=$'MYAPP_E2E=1\nMYAPP_E2E_RUN=check' TEST_MODE_MARKER='Library/Application Support/E2E-check' \
+#   RELEASE_MARKER='Library/Application Support/MyApp' framework/native/ci/test-mode-check <Release .app> <Debug .app>
+#
+#   TEST_MODE_ENV     KEY=VALUE lines: the launch environment that turns test mode on
+#   TEST_MODE_MARKER  a path in the data container that only a build in test mode writes
+#   RELEASE_MARKER    a path in the data container an ordinary launch writes (optional)
+#   UI_DEVICE_TYPE    the simulator's iPhone model (default iPhone 17 Pro)
+#   MARKER_SECONDS    how long a launch has to write its marker (default 30)
+#
+# Both builds share a bundle identifier and each launch starts from a fresh install, so this runs on a
+# simulator it creates and deletes: never on one that may hold a real install of the app. ios-app.yml runs it
+# on the simulator builds when the app sets `test-mode-env`.
+set -euo pipefail
+RELEASE="${1:?the Release .app (iphonesimulator)}"; DEBUG="${2:?the Debug .app (iphonesimulator)}"
+: "${TEST_MODE_ENV:?set TEST_MODE_ENV to the KEY=VALUE lines that switch test mode on}"
+: "${TEST_MODE_MARKER:?set TEST_MODE_MARKER to the path test mode writes}"
+SECONDS_LEFT="${MARKER_SECONDS:-30}"
+ENV_ARGS=()
+while IFS= read -r line; do
+  [ -n "${line// }" ] || continue
+  [[ $line == [A-Za-z_]*=* ]] || { echo "test-mode-check: TEST_MODE_ENV: not KEY=VALUE: $line" >&2; exit 2; }
+  ENV_ARGS+=("SIMCTL_CHILD_$line")
+done <<< "$TEST_MODE_ENV"
+UDID=$(xcrun simctl create "LeanNative test-mode check $$" "${UI_DEVICE_TYPE:-iPhone 17 Pro}")
+trap 'xcrun simctl shutdown "$UDID" >/dev/null 2>&1; xcrun simctl delete "$UDID" >/dev/null 2>&1 || true' EXIT
+xcrun simctl boot "$UDID"
+xcrun simctl bootstatus "$UDID" -b >/dev/null
+
+# launch <app>: a fresh install started with test mode's environment; prints its data container
+launch() {
+  local app="$1" id data
+  id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")
+  xcrun simctl terminate "$UDID" "$id" >/dev/null 2>&1 || true
+  xcrun simctl uninstall "$UDID" "$id" >/dev/null 2>&1 || true
+  xcrun simctl install "$UDID" "$app"
+  env "${ENV_ARGS[@]}" xcrun simctl launch "$UDID" "$id" >/dev/null
+  data=$(xcrun simctl get_app_container "$UDID" "$id" data)
+  # boot writes one marker or the other; give it its time, then a moment for the rest of the launch
+  for ((i = 0; i < SECONDS_LEFT * 2; i++)); do
+    [ -e "$data/$TEST_MODE_MARKER" ] || { [ -n "${RELEASE_MARKER:-}" ] && [ -e "$data/$RELEASE_MARKER" ]; } && break
+    sleep 0.5
+  done
+  sleep 2
+  xcrun simctl terminate "$UDID" "$id" >/dev/null 2>&1 || true
+  printf '%s' "$data"
+}
+
+fail=0
+debug=$(launch "$DEBUG")
+if [ -e "$debug/$TEST_MODE_MARKER" ]; then
+  echo "control: the Debug build started test mode ($TEST_MODE_MARKER)"
+else
+  echo "control failed: the Debug build did not write $TEST_MODE_MARKER, so this check would prove nothing"; fail=1
+fi
+release=$(launch "$RELEASE")
+if [ -e "$release/$TEST_MODE_MARKER" ]; then
+  echo "the Release build started test mode ($TEST_MODE_MARKER)"; fail=1
+elif [ -n "${RELEASE_MARKER:-}" ] && [ ! -e "$release/$RELEASE_MARKER" ]; then
+  echo "the Release build did not boot into its ordinary storage ($RELEASE_MARKER)"; fail=1
+else
+  echo "the Release build ignored test mode's environment${RELEASE_MARKER:+ and booted into its ordinary storage}"
+fi
+exit "$fail"

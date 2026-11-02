@@ -130,13 +130,19 @@ jobs:
       - name: native-demo journeys against the app itself, headless (no simulator)
         run: |
           set -euo pipefail
-          LEANNATIVE_DRIVER=wire examples/native-demo/.lake/build/bin/journeys "$RUNNER_TEMP/journeys-wire"
+          UI_OUT="$RUNNER_TEMP/journeys-wire" framework/native/ci/wire-journeys journeys
           test -s "$RUNNER_TEMP/journeys-wire/screenshots/journey-widgets.wire.json"
       - name: Their evidence
         if: always()
         run: |
           python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/ui" "$RUNNER_TEMP/evidence" --require-passed
           python3 -I framework/native/ci/export-evidence "$RUNNER_TEMP/journeys" "$RUNNER_TEMP/evidence-journeys" --require-passed
+      - name: The journeys' media (journey-media, as ios-app.yml's journey-media input makes it)
+        run: |
+          set -euo pipefail
+          python3 -I framework/native/ci/journey-media "$RUNNER_TEMP/journeys" "$RUNNER_TEMP/journey-media" \
+            --journeys examples/native-demo/NativeDemo/Journeys.lean --test-prefix test --field app=native-demo
+          test -s "$RUNNER_TEMP/journey-media/screenshots/journey-widgets.png"
       - name: Preserve the run and its evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -148,6 +154,7 @@ jobs:
             ${{ runner.temp }}/journeys/
             ${{ runner.temp }}/evidence-journeys/
             ${{ runner.temp }}/journeys-wire/
+            ${{ runner.temp }}/journey-media/
             !${{ runner.temp }}/ui/*.xcresult/**/private/
             !${{ runner.temp }}/journeys/*.xcresult/**/private/
           if-no-files-found: warn
