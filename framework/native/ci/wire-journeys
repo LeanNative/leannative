@@ -1,0 +1,43 @@
+#!/bin/bash
+# A LeanNative app's journeys (LeanNative.Journey) against the app itself, headless: no simulator, no XCTest.
+# The journeys executable runs the app as a child of itself (LEANNATIVE_DRIVER=wire: the app's Lean, a fake
+# shell for the Keychain, paths and clipboard, the view tree in place of a screen), with the same hooks
+# ui-tests takes, so one fixture serves both. What this does not test is the renderer and the shell; ui-tests
+# with UI_JOURNEY still does.
+#
+#   APP_DIR=… framework/native/ci/wire-journeys <journeys executable> [journey names]
+#
+#   APP_DIR    the app's Lake package, where the executable is built (`lake build <executable>`)
+#   UI_OUT     the evidence directory (default $CI_RESULTS/wire-journeys, else $APP_DIR/build/wire-journeys),
+#              emptied first: journeys.json, journey.log, the app's files under wire/, each `shot` as
+#              screenshots/<name>.wire.json (the visible tree), and whatever the hooks leave
+#   UI_BEFORE  run as `$UI_BEFORE <UI_OUT>` first: the app's fixture. Each KEY=VALUE line it leaves in
+#              <UI_OUT>/test-env is in the journeys' environment, as ui-tests passes it.
+#   UI_AFTER   run as `$UI_AFTER <UI_OUT> ''` when the journeys end, passed or not (no simulator: the app's
+#              files are under <UI_OUT>/wire)
+#
+# ios-app.yml runs it as one line of the `lean` job's tests when the app sets `wire-journey`.
+set -euo pipefail
+EXE="${1:?the journeys executable (a Lake target of APP_DIR)}"; shift
+APP_DIR="$(cd "${APP_DIR:?set APP_DIR to the app Lake package}" && pwd)"
+OUT="${UI_OUT:-${CI_RESULTS:-$APP_DIR/build}/wire-journeys}"
+rm -rf "$OUT"
+mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
+(cd "$APP_DIR" && lake build "$EXE" >/dev/null)
+status=0
+# shellcheck disable=SC2086,SC2329 # the hooks are commands with their words; `after` runs on EXIT
+after() { [ -z "${UI_AFTER:-}" ] || $UI_AFTER "$OUT" '' || echo "wire-journeys: UI_AFTER failed" >&2; }
+# the fixture is stopped however the run ends, a failed start included
+trap after EXIT
+# shellcheck disable=SC2086
+[ -z "${UI_BEFORE:-}" ] || $UI_BEFORE "$OUT"
+if [ -f "$OUT/test-env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$OUT/test-env"
+  set +a
+fi
+LEANNATIVE_DRIVER=wire "$APP_DIR/.lake/build/bin/$EXE" "$@" "$OUT" 2>&1 | tee "$OUT/journey.log" || status=${PIPESTATUS[0]}
+echo "wire journeys: exit $status"
+exit "$status"

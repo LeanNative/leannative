@@ -72,6 +72,20 @@ on:
         description: A command run as `<command> <Release .app> <Debug .app>` on the simulator builds
         type: string
         default: ''
+      test-mode-env:
+        description: >-
+          KEY=VALUE lines that switch the app's test mode on: set, `app` checks that the Release simulator build
+          ignores them and the Debug build does not (framework/native/ci/test-mode-check)
+        type: string
+        default: ''
+      test-mode-marker:
+        description: A path in the app's data container that only a launch in test mode writes
+        type: string
+        default: ''
+      release-marker:
+        description: A path in the app's data container an ordinary launch writes (optional)
+        type: string
+        default: ''
       ui-tests:
         description: Run the scheme's UI tests on a throwaway simulator
         type: boolean
@@ -101,6 +115,23 @@ on:
           A Lake executable of the app's package holding its journeys (LeanNative.Journey), built and run as the
           UI tests' UI_JOURNEY: xcodebuild then runs only the test kit's driver. Journey names may follow it
           (`journeys counting typing`) to run only those
+        type: string
+        default: ''
+      wire-journey:
+        description: >-
+          The journeys executable (and journey names), run headless against the app itself
+          (framework/native/ci/wire-journeys, LEANNATIVE_DRIVER=wire) as one more line of `lean`'s tests, with
+          ui-before and ui-after as its hooks: evidence in wire-journeys/
+        type: string
+        default: ''
+      journey-media:
+        description: >-
+          A directory for the UI journeys' media and provenance (framework/native/ci/journey-media), made once
+          the UI tests have passed, before after-ui; publish-path can name it
+        type: string
+        default: ''
+      journey-media-args:
+        description: "journey-media's options: `--video`, `--journeys`, `--test-prefix`, `--field KEY=VALUE`"
         type: string
         default: ''
       release-builds:
@@ -208,10 +239,20 @@ jobs:
           COMMAND: ${{ inputs.prepare }}
         run: &prepare bash -c "$COMMAND" 2>&1 | "$LEANNATIVE_CI/progress" "$CI_RESULTS/prepare.log" .
       - name: Tests, all at once
-        if: inputs.tests != ''
+        if: inputs.tests != '' || inputs.wire-journey != ''
         env:
           TESTS: ${{ inputs.tests }}
-        run: '"$LEANNATIVE_CI/run-tests"'
+          WIRE_JOURNEY: ${{ inputs.wire-journey }}
+          UI_BEFORE: ${{ inputs.ui-before }}
+          UI_AFTER: ${{ inputs.ui-after }}
+        run: |
+          set -euo pipefail
+          # the headless journeys are one more line, so they run alongside the rest
+          if [ -n "$WIRE_JOURNEY" ]; then
+            TESTS+=$'\n'". \$LEANNATIVE_CI/wire-journeys $WIRE_JOURNEY"
+          fi
+          export TESTS
+          "$LEANNATIVE_CI/run-tests"
       - name: Preserve the evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -258,6 +299,10 @@ jobs:
       - name: The simulator builds
         env:
           RELEASE_CHECK: ${{ inputs.release-check }}
+          TEST_MODE_ENV: ${{ inputs.test-mode-env }}
+          TEST_MODE_MARKER: ${{ inputs.test-mode-marker }}
+          RELEASE_MARKER: ${{ inputs.release-marker }}
+          UI_DEVICE_TYPE: ${{ inputs.ui-device-type }}
           CONFIGS: ${{ inputs.release-builds && 'Debug Release' || 'Debug' }}
         run: |
           set -euo pipefail
@@ -270,6 +315,9 @@ jobs:
           done
           if [ -n "$RELEASE_CHECK" ] && [ "$CONFIGS" != Debug ]; then
             $RELEASE_CHECK "$P/Release-iphonesimulator/$SCHEME.app" "$P/Debug-iphonesimulator/$SCHEME.app"
+          fi
+          if [ -n "$TEST_MODE_ENV" ] && [ "$CONFIGS" != Debug ]; then
+            "$LEANNATIVE_CI/test-mode-check" "$P/Release-iphonesimulator/$SCHEME.app" "$P/Debug-iphonesimulator/$SCHEME.app"
           fi
       - name: UI tests
         if: inputs.ui-tests
@@ -290,6 +338,22 @@ jobs:
           fi
           # shellcheck disable=SC2086 # UI_ARGS are words
           DERIVED_DATA="$CI_RESULTS/DerivedData" UI_OUT="$CI_RESULTS/$UI_NAME" "$LEANNATIVE_CI/ui-tests" $UI_ARGS
+      - name: The journeys' media
+        if: inputs.ui-tests && inputs.journey-media != ''
+        env:
+          MEDIA: ${{ inputs.journey-media }}
+          MEDIA_ARGS: ${{ inputs.journey-media-args }}
+          UI_NAME: ${{ inputs.ui-name }}
+        run: |
+          set -euo pipefail
+          # the recording is well over 25 MiB: its browser copy needs ffmpeg, and media without it is a failure
+          command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 brew install ffmpeg >/dev/null
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            echo "::error::journey-media needs ffmpeg and ffprobe"; exit 1
+          fi
+          rm -rf "$MEDIA"
+          # shellcheck disable=SC2086 # MEDIA_ARGS are words
+          "$LEANNATIVE_CI/journey-media" "$CI_RESULTS/$UI_NAME" "$MEDIA" $MEDIA_ARGS
       - name: After the UI tests
         if: inputs.ui-tests && inputs.after-ui != ''
         env:
