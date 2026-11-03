@@ -242,7 +242,9 @@ printf '%s\n' "$DEVICE" > "$OUT/device.json"
 # runs: one after another, these took about two and a half minutes of a CI run. `xcodebuild test` then has
 # nothing left to build.
 if [ "$PLATFORM" = iossim ]; then
-  { xcrun simctl boot "$UDID" 2>/dev/null || true; xcrun simctl bootstatus "$UDID" -b >/dev/null; } &
+  # a throwaway's keyboard set for the tests' typing (a simulator UI_SIMULATOR names is left as it is)
+  { xcrun simctl boot "$UDID" 2>/dev/null || true; xcrun simctl bootstatus "$UDID" -b >/dev/null &&
+    { [ -z "$THROWAWAY" ] || "$CI/simulator" keyboard "$UDID"; }; } &
   BOOT_PID=$!
 fi
 [ "${UI_PREPARED:-0}" = 1 ] || PREPARE_ONLY=1 "$CI/build-ios" Debug "$PLATFORM"

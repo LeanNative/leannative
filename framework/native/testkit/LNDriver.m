@@ -25,7 +25,9 @@
 //                          tap (a click on the Mac); `times` more than 1: then that many taps in all, without
 //                          checking again
 //   press {find, seconds}  the same checks, then the element held down for `seconds` (a stepper's autorepeat)
-//   type {find, text}      the same checks, then the field's text replaced and the keyboard closed
+//   type {find, text}      the same checks, then a tap, until the field has the keyboard's focus (tapped again
+//                          every few seconds; refused after LNFocusTimeout), then its text replaced and the
+//                          keyboard closed
 //   text {find, timeout}   {"text": …}: its label or value, without zero-width spaces; an error if it never appears
 //   state {find}           {"exists", "enabled", "hittable"}, now
 //   scroll {find}          {"hittable": bool}: scrolled until it can be tapped
@@ -60,6 +62,9 @@ typedef id<XCUIElementSnapshot> LNNode;
 
 static NSTimeInterval const LNPollInterval = 0.15;
 static NSTimeInterval const LNStillTimeout = 5;
+/// How long a field may take to have the keyboard's focus after its tap, tapped again every LNRefocusInterval
+static NSTimeInterval const LNFocusTimeout = 15;
+static NSTimeInterval const LNRefocusInterval = 3;
 
 static NSString *LNStripped(NSString *text) { return [text stringByReplacingOccurrencesOfString:@"​" withString:@""]; }
 /// A JSON boolean: `@(a && b)` and `@(c ? x : y)` box C's int (`1`), which a JSON reader takes for a number.
@@ -446,14 +451,56 @@ static void LNSleep(NSTimeInterval s) { [NSRunLoop.currentRunLoop runUntilDate:[
 
 // -- the commands -----------------------------------------------------------------------------------------
 
-- (void)replaceText:(LNHit *)field at:(CGPoint)point with:(NSString *)text {
+/// Whether the field has the keyboard's focus, from XCTest's snapshot (its `hasKeyboardFocus`, not in the public
+/// protocol): YES where a snapshot does not say, as before this was checked.
+static BOOL LNHasKeyboardFocus(LNNode n) {
+    id node = n;
+    if (![node respondsToSelector:NSSelectorFromString(@"hasKeyboardFocus")]) {
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{ NSLog(@"journey type: this XCTest's snapshots do not say which element has the keyboard's focus: typing without waiting for it"); });
+        return YES;
+    }
+    return [[node valueForKey:@"hasKeyboardFocus"] boolValue];
+}
+
+/// The field `find` names after a tap at `point`, once it has the keyboard's focus; nil, with `*why`, when it has
+/// not within LNFocusTimeout. A tap can be lost: on a hosted runner, one on a field just as the keyboard closed
+/// from the field before left the second without focus, and XCTest's typing then waited 100 s and failed.
+- (LNHit *)focus:(NSDictionary *)find name:(NSString **)name at:(CGPoint)point why:(NSString **)why {
     [self touch:point];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:LNFocusTimeout];
+    NSDate *again = [NSDate dateWithTimeIntervalSinceNow:LNRefocusInterval];
+    NSUInteger taps = 1;
+    for (;;) {
+        BOOL known;
+        LNHit *h = [self look] ? [self find:find name:name known:&known] : nil;
+        if (h && LNHasKeyboardFocus(h.node)) return h;
+        if (NSDate.date.timeIntervalSince1970 > deadline.timeIntervalSince1970) break;
+        CGPoint p;
+        if (h && NSDate.date.timeIntervalSince1970 > again.timeIntervalSince1970 && [self hitPointOf:h point:&p] && ![self coverOf:h at:p]) {
+            NSLog(@"journey type: %@ has no keyboard focus %.0f s after its tap: tapped again", *name, LNRefocusInterval);
+            [self touch:p];
+            taps++;
+            again = [NSDate dateWithTimeIntervalSinceNow:LNRefocusInterval];
+        }
+        LNSleep(LNPollInterval);
+    }
+    *why = [NSString stringWithFormat:@"%@ does not take the keyboard's focus within %.0f s (%lu taps)", *name, LNFocusTimeout, (unsigned long)taps];
+    return nil;
+}
+
+/// The field's text replaced by `text` and the keyboard closed; NO, with `*why`, when the field never has the
+/// keyboard's focus.
+- (BOOL)replaceText:(NSDictionary *)find name:(NSString **)name at:(CGPoint)point with:(NSString *)text why:(NSString **)why {
 #if TARGET_OS_MACCATALYST
+    [self touch:point];
     // whatever is there, selected, is replaced by what is typed
     [self event:^{ [self.app typeKey:@"a" modifierFlags:XCUIKeyModifierCommand]; }];
     if (text.length) [self event:^{ [self.app typeText:text]; }];
     else [self event:^{ [self.app typeKey:XCUIKeyboardKeyDelete modifierFlags:XCUIKeyModifierNone]; }];
 #else
+    LNHit *field = [self focus:find name:name at:point why:why];
+    if (!field) return NO;
     NSString *current = [field.node.value isKindOfClass:NSString.class] ? field.node.value : @"";
     if (current.length && ![current isEqualToString:field.node.placeholderValue]) {
         NSMutableString *delete = [NSMutableString string];
@@ -465,13 +512,14 @@ static void LNSleep(NSTimeInterval s) { [NSRunLoop.currentRunLoop runUntilDate:[
     if ([self look]) {
         LNHit *done = [self byIdentifier:@"keyboardDone"];
         CGPoint p;
-        if (done && [self hitPointOf:done point:&p]) { [self touch:p]; return; }
+        if (done && [self hitPointOf:done point:&p]) { [self touch:p]; return YES; }
         LNHit *keyboard = [self first:^BOOL(LNHit *h) { return h.node.elementType == XCUIElementTypeKeyboard; }];
         LNHit *ret = keyboard ? [self firstIn:keyboard.node matching:^BOOL(LNHit *h) {
             return h.node.elementType == XCUIElementTypeButton && ([LNLabelOf(h.node) isEqualToString:@"return"] || [LNLabelOf(h.node) isEqualToString:@"Return"] || [LNLabelOf(h.node) isEqualToString:@"Done"]); }] : nil;
         if (ret && [self hitPointOf:ret point:&p]) [self touch:p];
     }
 #endif
+    return YES;
 }
 
 - (NSDictionary *)describe:(LNHit *)h {
@@ -572,7 +620,7 @@ static void LNSleep(NSTimeInterval s) { [NSRunLoop.currentRunLoop runUntilDate:[
         if (!h) return [self refuse:why];
         if ([op isEqualToString:@"type"]) {
             NSString *text = [command[@"text"] isKindOfClass:NSString.class] ? command[@"text"] : @"";
-            [self replaceText:h at:p with:text];
+            if (![self replaceText:find name:&name at:p with:text why:&why]) return [self refuse:why];
             return @{@"ok": @YES};
         }
         if ([op isEqualToString:@"press"]) {
