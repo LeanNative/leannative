@@ -306,7 +306,8 @@ def bleSay (fx : Effects Host) (line : String) : IO Unit := do
 
 def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
   match c with
-  | .ticker => discard <| IO.asTask do
+  -- for the app's life: a thread of its own, not a worker of Lean's task pool (`Native.App.perform`)
+  | .ticker => discard <| IO.asTask (prio := .dedicated) do
       repeat
         IO.sleep 1000
         fx.post .tick

@@ -688,14 +688,14 @@ private partial def readLine (socket : TCP.Socket.Client) (pending : IO.Ref Byte
     pending.set (buf.extract (i + 1) buf.size)
     return String.fromUTF8? (buf.extract 0 i)
   | none =>
-    match ← (socket.recv? 65536).block with
+    match ← awaitSocket (socket.native.recv? 65536) with
     | some more => pending.set (buf ++ more); readLine socket pending
     | none => return none
 
 private partial def connect (port : UInt16) (attempts : Nat) : IO TCP.Socket.Client := do
   let socket ← TCP.Socket.Client.mk
   try
-    (socket.connect (.v4 { addr := Std.Net.IPv4Addr.ofParts 127 0 0 1, port })).block
+    awaitSocket (socket.native.connect (.v4 { addr := Std.Net.IPv4Addr.ofParts 127 0 0 1, port }))
     return socket
   catch e =>
     if attempts == 0 then throw e
@@ -728,7 +728,7 @@ def serve [ToJson Cmd] (app : Native.App Model Msg Cmd Host) (port : UInt16)
       | .ok command =>
         try st.answer command catch e => pure (State.refuse s!"the driver failed: {e}", false)
     ended := answer.2
-    (socket.send (answer.1.compress ++ "\n").toUTF8).block
+    awaitSocket (socket.native.send #[(answer.1.compress ++ "\n").toUTF8])
   -- the app's own tasks (sync loops, timers) must not hold the process open
   IO.Process.exit 0
 

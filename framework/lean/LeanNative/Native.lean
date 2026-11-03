@@ -40,7 +40,10 @@ structure Effects (Host : Type) where
 
 /-- An app in native mode: a `CmdApp` plus the Lean code that runs its commands. -/
 structure App (Model Msg Cmd Host : Type) extends CmdApp Model Msg Cmd Host where
-  /-- Run one command. Called on the shell's main thread: start a task for anything slow. -/
+  /-- Run one command. Called on the shell's main thread: start a task for anything slow. A task that runs
+  for the app's life (a timer, a sync loop) takes `IO.asTask (prio := .dedicated)`, a thread of its own: at
+  the default priority it holds a worker of Lean's shared task pool for good, and in Lean 4.35 a task queued
+  just after it can then wait for ever (native-demo's ticker did that to the headless journeys' socket). -/
   perform : Cmd → Effects Host → IO Unit
   /-- Commands run once, at start. -/
   boot : List Cmd := []
