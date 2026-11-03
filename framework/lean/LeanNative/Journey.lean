@@ -121,12 +121,35 @@ def say (line : String) : IO Unit := do
 /-- Fails the journey with this message. -/
 def failure (message : String) : IO α := throw (IO.userError message)
 
+/-- A socket operation of Std's TCP (its `native` call), waited for on this thread; past `deadline`
+(`IO.monoMsNow`), the journey fails with `late`. Not Std's `Async.block`: that finishes each operation with a
+task in Lean's shared pool, and in Lean 4.35 a pool with one idle worker never runs a task queued just behind one
+that never ends. native-demo's ticker was such a task, and the headless journeys hung in `send`. -/
+def awaitSocket (op : IO (IO.Promise (Except IO.Error α))) (deadline : Option Nat := none)
+    (late : String := "") : IO α := do
+  let done := (← op).result?
+  if let some d := deadline then
+    let mut pause := 1
+    while !(← IO.hasFinished done) do
+      if (← IO.monoMsNow) ≥ d then failure late
+      IO.sleep pause
+      pause := min (pause * 2) 50
+  match ← IO.wait done with
+  | some r => IO.ofExcept r
+  | none => failure "a socket operation was dropped"
+
 private def newline? (b : ByteArray) : Option Nat := Id.run do
   for i in [0:b.size] do
     if b.get! i == 10 then return some i
   return none
 
-private partial def readLine (d : Link) : IO String := do
+/-- How long the host waits for an answer beyond the command's own timeout: a driver or app that stops answering
+fails the journey in minutes, not at the CI job's limit. A cold launch on a busy simulator is the slowest answer
+that is not a stall. -/
+def answerMarginSecs : Nat := 300
+
+/-- The driver's next line, by `deadline` (`IO.monoMsNow`). -/
+private partial def readLine (d : Link) (deadline : Nat) : IO String := do
   let buf ← d.pending.get
   match newline? buf with
   | some i =>
@@ -135,8 +158,10 @@ private partial def readLine (d : Link) : IO String := do
     | some s => return s
     | none => failure "the driver answered with bytes that are not UTF-8"
   | none =>
-    match ← (d.socket.recv? 65536).block with
-    | some more => d.pending.set (buf ++ more); readLine d
+    let more ← awaitSocket (d.socket.native.recv? 65536) deadline
+      "the driver stopped answering (the app or the UI test is stuck: see journey.log, xcodebuild.log)"
+    match more with
+    | some more => d.pending.set (buf ++ more); readLine d deadline
     | none => failure "the driver closed the connection (the UI test ended, or the app: see xcodebuild.log, journey.log)"
 
 private def accept (server : TCP.Socket.Server) (waitMs : Nat) (who : String) : IO TCP.Socket.Client := do
@@ -206,8 +231,11 @@ where
       if let some j ← wireAnswer d dir op fields then return j
     let some l ← d.link.get | failure s!"{op}: the app is not running (launch it first)"
     let line := (Json.mkObj (("op", Json.str op) :: fields)).compress ++ "\n"
-    (l.socket.send line.toUTF8).block
-    let answer ← readLine l
+    awaitSocket (l.socket.native.send #[line.toUTF8])
+    let within := match fields.lookup "timeout" with
+      | some j => ((fromJson? j : Except String Float).toOption.getD 0).ceil.toUInt64.toNat
+      | none => 0
+    let answer ← readLine l ((← IO.monoMsNow) + (within + answerMarginSecs) * 1000)
     let .ok j := Json.parse answer | failure s!"the driver's answer is not JSON: {answer}"
     if j.getObjValAs? Bool "ok" matches .ok true then return j
     failure ((j.getObjValAs? String "error").toOption.getD s!"{op} refused: {answer}")
