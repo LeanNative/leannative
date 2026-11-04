@@ -1,7 +1,8 @@
 # The LeanNative framework's own checks; the root Makefile runs them.
 #   make check         build · axiom gate · protocol harness against the fake CLI and both Lean shells · native
 #                      support tests (the manifest's too) · the journey driver's patterns and Html's
-#                      decorations · the release tool · the CI scripts' tests (export-evidence)
+#                      decorations · the release tool (App Store Connect against a fake) · the CI scripts'
+#                      tests (export-evidence)
 PY   := /opt/homebrew/bin/python3
 FAKE := $(PY) scripts/fake_cli.py
 BIN  := lean/.lake/build/bin
@@ -38,9 +39,10 @@ native-support:
 	  && .lake/build/bin/manifest-test && .lake/build/bin/regex-test && .lake/build/bin/html-test
 
 # The release tool (LeanNativeRelease) against openssl, plutil, codesign and clang on this Mac: tokens, the
-# policy, and a small signed app through the bundle checks.
+# policy, a small signed app through the bundle checks, and every App Store Connect step but `upload` against
+# scripts/fake_asc.py, a local stand-in for the API.
 release:
-	cd lean && lake build leannative-release release-test && .lake/build/bin/release-test
+	cd lean && lake build leannative-release release-test && .lake/build/bin/release-test $(PY) ../scripts/fake_asc.py
 
 # framework/native/ci's Python, against fixtures: export-evidence (scripts/tests).
 scripts:

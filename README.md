@@ -300,7 +300,9 @@ On a Mac, `lake build leannative/leannative-release` in the app's directory buil
 `.lake/packages/leannative/framework/lean/.lake/build/bin/`; with `ASC_KEY_ID`, `ASC_ISSUER_ID`,
 `APP_BUNDLE_ID` and the key in `~/.appstoreconnect/private_keys/` its `testflight` steps run there too.
 `make check` runs `release-test`: a token minted with a key openssl made, verified by openssl; the policy;
-and a small app, signed ad hoc, through the bundle checks.
+every `testflight` step but `upload` against `framework/scripts/fake_asc.py`, a local stand-in for App Store
+Connect; and a small app, signed ad hoc, through the bundle checks. `upload` (`xcrun altool`) runs only in a
+real release.
 
 ## What is trusted
 
@@ -337,7 +339,7 @@ framework/
   native/                   README (the shell, capabilities, Mac Catalyst, UI tests), c/ (the C shim), scripts/
                             (ios_lean_sources.sh, retarget_ar.py, …), ci/ (the workflow's scripts),
                             testkit/ (Objective-C XCTest helpers for an app's UI-test target only)
-  scripts/                  check-axioms.sh, protocol_test.py, fake_cli.py
+  scripts/                  check-axioms.sh, protocol_test.py, fake_cli.py, fake_asc.py
   Makefile                  the framework's own checks
 examples/
   simple/                   the smallest useful app, one capability

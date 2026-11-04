@@ -74,7 +74,8 @@ name = "LeanNativeRelease"
 name = "leannative-release"
 root = "LeanNativeRelease.Main"
 
-# The release tool against openssl, plutil and codesign on this Mac (`make check`; not a default target).
+# The release tool against openssl, plutil and codesign on this Mac, and App Store Connect's steps against
+# scripts/fake_asc.py (`make check`; not a default target).
 [[lean_exe]]
 name = "release-test"
 root = "LeanNativeTest.Release"
