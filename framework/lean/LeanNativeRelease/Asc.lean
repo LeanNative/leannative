@@ -22,7 +22,10 @@ The build is the one `TESTFLIGHT_BUILD_ID` names, else the one with `TESTFLIGHT_
 
 Retries are where App Store Connect was seen to need them: it answers 500 in bursts (a read is retried five
 times, a write never, since a 500 does not say whether it was applied), an upload appears minutes after
-it succeeds, and a build turns VALID a moment before it takes notes or a review submission. -/
+it succeeds, and a build turns VALID a moment before it takes notes or a review submission. The pauses are
+`Config` fields so that `release-test` can run every step but `upload` against a fake App Store Connect
+(`framework/scripts/fake_asc.py`) without waiting; `upload` runs `xcrun altool`, which only a real release
+does. -/
 
 namespace LeanNativeRelease.Asc
 open Lean
@@ -40,6 +43,12 @@ structure Config where
   publicLinkId : Option String := none
   waitAttempts : Nat := 90
   waitSeconds : Nat := 20
+  /-- Between tries of a refused request (`retrying`). -/
+  retrySeconds : Nat := 15
+  processingAttempts : Nat := 60
+  processingSeconds : Nat := 30
+  /-- Between reads of a submitted App Store review submission. -/
+  submitSeconds : Nat := 15
   appStoreVersionId : Option String := none
   appStoreVersionString : Option String := none
   appStoreNotesFile : Option String := none
@@ -104,7 +113,7 @@ partial def retrying {α} (times pause : Nat) (what : String) (act : IO α) (att
 /-- The app record's id. A failed read must not become an empty id: 0.8.6's recovery run looked the app
 up during a burst of 500s and then asked for `/builds?filter[app]=` forty times. -/
 def Config.appId (c : Config) : IO String :=
-  retrying 5 15 s!"app lookup for {c.bundleId}" do
+  retrying 5 c.retrySeconds s!"app lookup for {c.bundleId}" do
     let some row := (rows (← c.get s!"/apps?filter[bundleId]={c.bundleId}"))[0]? | fail "no app record"
     pure (idOf row)
 
@@ -159,12 +168,12 @@ def Config.upload (c : Config) : IO Unit := do
   say s!"uploaded {ipa}"
 
 def Config.waitProcessing (c : Config) (bid : String) : IO Unit := do
-  for _ in [0:60] do
+  for _ in [0:c.processingAttempts] do
     let state ← c.processingState bid
     say s!"build {bid}: {state}"
     if state == "VALID" then return
     if state == "FAILED" || state == "INVALID" then fail s!"build {bid} is {state}"
-    sleepSeconds 30
+    sleepSeconds c.processingSeconds
   fail s!"build {bid} did not finish processing"
 
 /-- The en-US localization of a list, or none; more than one is an error. -/
@@ -193,7 +202,7 @@ def Config.notes (c : Config) (bid : String) : IO Unit := do
   let text ← notesText file
   -- refused for a moment after the build turns VALID (or for good, with the reason in the log); each try
   -- looks the localization up again, since Apple may create it in between
-  retrying 8 15 "notes" do
+  retrying 8 c.retrySeconds "notes" do
     c.setText s!"/builds/{bid}/betaBuildLocalizations?limit=200" "betaBuildLocalizations" "build" "builds" bid text
   say s!"notes: en-US What to Test set for build {bid} ({text.length} characters)"
 
@@ -237,7 +246,7 @@ def Config.external (c : Config) (bid : String) : IO Unit := do
     return
   if state == "REJECTED" then fail s!"external: build {bid} was rejected by beta review"
   -- a build is VALID a few seconds before beta review takes it
-  retrying 12 15 "external: review submission" do
+  retrying 12 c.retrySeconds "external: review submission" do
     discard <| c.call "POST" "/betaAppReviewSubmissions" (Json.mkObj [("data", Json.mkObj [
       ("type", "betaAppReviewSubmissions"),
       ("relationships", Json.mkObj [("build", Json.mkObj [("data", resource "builds" bid)])])])])
@@ -418,7 +427,7 @@ def Config.appStoreSubmit (c : Config) : IO Unit := do
     say s!"appstore: submission {rs} is {state}"
     if state == "WAITING_FOR_REVIEW" || state == "IN_REVIEW" then return
     if state == "UNRESOLVED_ISSUES" then fail "appstore: the submission has unresolved issues"
-    sleepSeconds 15
+    sleepSeconds c.submitSeconds
   fail s!"appstore: submission {rs} did not reach WAITING_FOR_REVIEW"
 
 /-! ## Steps by name -/
