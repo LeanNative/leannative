@@ -457,6 +457,23 @@ class PartsTests(Fixture):
         self.assertEqual(sorted(p.relative_to(self.out).as_posix() for p in self.out.rglob("*") if p.is_file()),
                          sorted([media.MANIFEST, media.VIDEO] + [f"screenshots/{n}.png" for n in names]))
 
+    def test_a_part_ending_on_a_long_frame_keeps_its_length(self):
+        # simctl's shape (winnow-lean run 41680331110): the last frame runs past the recording's duration, here
+        # the frame at 9.5 s until 14.75 s in a 10 s recording. Joined as it was played, it made the video longer.
+        long = self.part("c", [("shippedCensus", 8.0, ["50-census"])], 10.0)
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-t", "10", "-f", "lavfi",
+                        "-i", "testsrc=size=1206x2622:rate=4", "-vf", "setpts='if(eq(N,39),PTS+5/TB,PTS)'",
+                        "-fps_mode", "passthrough", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        str(long / "journey.mp4")], check=True)
+        probe = lambda *entries: subprocess.run(
+            ["ffprobe", "-v", "error", *entries, "-of", "csv=p=0", str(long / "journey.mp4")],
+            check=True, capture_output=True, text=True).stdout.split()
+        self.assertAlmostEqual(float(probe("-show_entries", "format=duration")[0]), 10.0, delta=0.01)
+        self.assertGreater(max(float(t) for t in probe("-select_streams", "v", "-show_entries", "packet=pts_time")),
+                           14.0)
+        self.run_parts(long, self.part_b)
+        self.assertAlmostEqual(self.manifest()["video"]["duration_seconds"], 42.0, delta=1.0)
+
     def test_parts_at_different_commits_are_refused(self):
         other = self.part("c", [("shippedCensus", 20.0, ["50-census"])], 22.0, sha="f" * 40)
         with self.assertRaisesRegex(media.Failure, "different commits"):

@@ -212,10 +212,12 @@ def join_recordings(recordings, destination, ex):
         raise Failure(f"{total:.0f} s of recordings cannot fit {MAX_BYTES:,} bytes at a readable bitrate")
     command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
     for path, original in recordings:
-        # as export-evidence: simctl can give the last frame a long duration; -t keeps each part's timeline
+        # simctl can give the last frame a long duration, past the recording's own: -t stops the read there,
+        # but fps would still play that frame to its end, so trim ends each part's timeline at its duration
         command += ["-fflags", "+igndts", "-t", str(original["duration_seconds"]), "-i", str(path)]
-    scaled = ";".join(f"[{i}:v:0]scale=w='min(720,iw)':h=-2,fps=24,setsar=1,format=yuv420p[v{i}]"
-                      for i in range(len(recordings)))
+    scaled = ";".join(f"[{i}:v:0]scale=w='min(720,iw)':h=-2,fps=24,trim=duration={original['duration_seconds']},"
+                      f"setsar=1,format=yuv420p[v{i}]"
+                      for i, (_, original) in enumerate(recordings))
     joined = "".join(f"[v{i}]" for i in range(len(recordings))) + f"concat=n={len(recordings)}:v=1:a=0[out]"
     command += ["-filter_complex", f"{scaled};{joined}", "-map", "[out]", "-an", "-c:v", "libx264",
                 "-preset", "medium", "-b:v", str(bitrate), "-maxrate", str(bitrate), "-bufsize", str(bitrate * 2),
