@@ -2,9 +2,10 @@
 
 `Find.text` carries an `NSRegularExpression` pattern (the XCTest driver hands it to Foundation). The
 headless driver (`LeanNative.Journey.Wire`) matches it here instead, with the part of the syntax journeys use:
-literals, `.`, `\d \w \s` (and their negations), escaped metacharacters, `[…]` classes with ranges and `^`
-negation, groups `(…)` with `|`, the quantifiers `* + ? {n} {n,} {n,m}` (greedy), and the anchors `^` and `$`.
-A pattern outside that is a parse error, which the driver reports as the step's failure rather than matching
+literals, `.`, `\d \w \s` (and their negations), `\n \t \r`, any other character but a letter or digit escaped
+(`\.`, `\(`, `\\`), `[…]` classes with ranges and `^` negation, groups `(…)` with `|`, the quantifiers
+`* + ? {n} {n,} {n,m}` (greedy), and the anchors `^` and `$`. A pattern outside that (`\b`, a backreference,
+`{3,2}`) is a parse error, which the driver reports as the step's failure rather than matching
 nothing. `search` is `firstMatchInString:` with an empty result or not: whether the pattern matches somewhere. -/
 
 namespace LeanNative.Journey.Regex
@@ -52,18 +53,22 @@ private def digits : List (Char × Char) := [('0', '9')]
 private def word : List (Char × Char) := [('a', 'z'), ('A', 'Z'), ('0', '9'), ('_', '_')]
 private def space : List (Char × Char) := [(' ', ' '), ('\t', '\t'), ('\n', '\n'), ('\r', '\r'), ('\x0c', '\x0c'), ('\x0b', '\x0b')]
 
-/-- An escape's class, or the literal character it stands for. -/
-private def escape (c : Char) : Re :=
+/-- An escape's class, or the literal character it stands for. Any other escaped letter or digit means something
+to NSRegularExpression that this matcher does not do (`\b` a word boundary, `\1` a backreference, `\x41`), so it
+is an error rather than the letter itself. -/
+private def escape (c : Char) : Except String Re :=
   match c with
-  | 'd' => .set false digits
-  | 'D' => .set true digits
-  | 'w' => .set false word
-  | 'W' => .set true word
-  | 's' => .set false space
-  | 'S' => .set true space
-  | 'n' => .char '\n'
-  | 't' => .char '\t'
-  | other => .char other
+  | 'd' => pure (.set false digits)
+  | 'D' => pure (.set true digits)
+  | 'w' => pure (.set false word)
+  | 'W' => pure (.set true word)
+  | 's' => pure (.set false space)
+  | 'S' => pure (.set true space)
+  | 'n' => pure (.char '\n')
+  | 't' => pure (.char '\t')
+  | 'r' => pure (.char '\r')
+  | other =>
+    if other.isAlphanum then throw s!"\\{other} is not supported" else pure (.char other)
 
 private structure P where
   chars : Array Char
@@ -109,7 +114,7 @@ private partial def classBody : PM Re := do
       match ← next? with
       | none => throw "a class ends with a backslash"
       | some e =>
-        match escape e with
+        match ← escape e with
         | .set false rs => ranges := ranges ++ rs
         | .char c => ranges := ranges ++ [(c, c)]
         | _ => throw s!"\\{e} is not allowed inside a class"
@@ -163,7 +168,7 @@ mutual
     | some '\\' =>
       match ← next? with
       | none => throw "a pattern ends with a backslash"
-      | some e => return escape e
+      | some e => escape e
     | some c =>
       if c == '*' || c == '+' || c == '?' then throw s!"'{c}' with nothing to repeat"
       return .char c
@@ -181,6 +186,8 @@ mutual
         | some ',' =>
           let hi ← number
           expect '}'
+          if let some h := hi then
+            if h < lo then throw s!"a count {lo},{h} whose maximum is below its minimum"
           pure hi
         | _ => throw "a malformed {n,m}"
       return .rep a lo hi

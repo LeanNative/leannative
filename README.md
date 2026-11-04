@@ -152,7 +152,8 @@ for `sorry` warnings in definitions.
 **The CLI.** `LeanNative.Cli.main app` / `LeanNative.CmdCli.main app` make an app a command-line program that
 speaks the wire protocol ([PROTOCOL.md](PROTOCOL.md)) on stdin/stdout: `selftest` explores the app from its
 initial model and re-checks at run time what the theorems state, and `framework/scripts/protocol_test.py`
-drives it. It is the same `update`/`view`, run without the phone.
+drives it (`make check` runs both on a small app on each shell, `framework/lean/LeanNativeTest/CliApp.lean`).
+It is the same `update`/`view`, run without the phone.
 
 ## Building an app for iOS and macOS
 
@@ -307,7 +308,7 @@ and a small app, signed ad hoc, through the bundle checks.
 |---|---|---|
 | Framework properties of `Html`, `Wire`, `toWire`, `dispatch`, `Session`, `Spec`, and `CmdSpec` | **Proven** | the framework's proof gate |
 | An app's `update`/`view`/`cmds` | Application-specific | the app's supplied invariants, proofs, and proof gate; using the framework alone does not prove them |
-| JSON codecs, the CLI loop, `LeanNative.Native` (the C entry points), the native support modules (`LeanNative.Native.*`) | Trusted, tested | `selftest`; `protocol_test.py`, itself validated against `framework/scripts/fake_cli.py`, an independent implementation of the protocol |
+| JSON codecs, the CLI loop, `LeanNative.Native` (the C entry points), the native support modules (`LeanNative.Native.*`) | Trusted, tested | `selftest`; `protocol_test.py`, itself validated against `framework/scripts/fake_cli.py`, an independent implementation of the protocol, and run against a small app on each Lean shell |
 | The shell's agreement with the UI grammar (node decoding, dispatch, enums, events) | Checked as it builds | `LeanNativeShell/Check.lean`: the kernel and the build evaluate every row against `Wire.toJson` and `Event.fromJson?` |
 | The shell itself (renderer, store, capabilities, C shim) and the retargeted libraries | Trusted, driven in the simulator and under Mac Catalyst | the apps' UI tests |
 | An app's `perform` | the app's | that app's own tests |
@@ -329,7 +330,8 @@ framework/
     LeanNative/                Html, Wire, Erase, Program, Spec, Cmd (proven core); Json, Cli, CmdCli, Selftest,
                             Native (trusted shell); Gate; Proofs/ and Proofs.lean (the framework's gate);
                             Native/ (optional native support: BackgroundRun, the typed capability clients, EffectScope)
-    LeanNativeTest/            the native support modules' tests and fixtures (`make check`)
+    LeanNativeTest/            the native support modules' tests and fixtures, the journey driver's patterns, Html's
+                            decorations, and a small app on each CLI shell (`make check`)
     LeanNativeRelease/         the release tool, `leannative-release` (ios-release.yml's steps)
     LeanNativeShell/               the native shell as Lean data; `lake exe leannative-shell <dir>` prints its Objective-C
   native/                   README (the shell, capabilities, Mac Catalyst, UI tests), c/ (the C shim), scripts/

@@ -40,6 +40,31 @@ root = "LeanNativeTest.EffectScope"
 name = "manifest-test"
 root = "LeanNativeTest.Manifest"
 
+# The headless journey driver's text patterns (Journey.Regex) and Journey.escapeRegex (`make check`; not a
+# default target).
+[[lean_exe]]
+name = "regex-test"
+root = "LeanNativeTest.Regex"
+
+# Chained decorations (Html.decor, Decor.merge) on Html.toWire's JSON (`make check`; not a default target).
+[[lean_exe]]
+name = "html-test"
+root = "LeanNativeTest.Html"
+
+# A small app on each stdin/stdout shell, `LeanNative.Cli` and `LeanNative.CmdCli` (LeanNativeTest/CliApp.lean):
+# `make check` runs protocol_test.py and `selftest` against both (not default targets).
+[[lean_lib]]
+name = "LeanNativeTestApp"
+roots = ["LeanNativeTest.CliApp"]
+
+[[lean_exe]]
+name = "cli-test-app"
+root = "LeanNativeTest.Cli"
+
+[[lean_exe]]
+name = "cmdcli-test-app"
+root = "LeanNativeTest.CmdCli"
+
 # The release workflow's steps (.github/workflows/ios-release.yml): policy, bundle checks, App Store Connect.
 # Not a default target: an app builds it only to release (`lake build leannative/leannative-release`).
 [[lean_lib]]

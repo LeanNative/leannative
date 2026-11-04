@@ -21,10 +21,11 @@ itself (`<exe> --wire-app <port>`, the environment of `launch` in its environmen
   the other drivers, `text` matched by `Journey.Regex`;
 * its text is what XCTest reads from the view the identifier lands on (`LNIdentify`: the node's control, else its
   last label: a `labeled` row's value), or, for a container, its texts joined;
-* a tap is the event the node advertises (`Wire.accepts`), sent through `Session.step` exactly as the shell
-  sends a touch: a button's `click`, a toggle's `toggle`, a tab's or picker option's `select`, a stepper half's
-  `select` of the next value, the back button's `dismiss`; `type` is `input`. A node that advertises no event is
-  refused, as a disabled control is: a journey never "taps" a label here;
+* a tap is the event a touch on the node sends (`Target.tapEvent`, and `Target.enabled` for whether it takes one
+  now), sent through `Session.step` exactly as the shell sends a touch: a button's `click`, a toggle's `toggle`, a
+  tab's or picker option's `select`, a stepper half's `select` of the next value, the back button's `dismiss`;
+  `type` is `input`. A node that sends no event for a touch is refused, as a disabled control is: a journey never
+  "taps" a label here;
 * `exists`, `text` and the readiness checks poll the view (the app's answers arrive through `drain`, which the
   child runs whenever the runtime has something queued);
 * `shot` writes the visible tree as `<name>.wire.json` in the screenshots directory, in place of a PNG.

@@ -242,22 +242,6 @@ def handle : Html msg → Event → Option msg
 def dispatch (h : Html msg) (p : List Nat) (e : Event) : Option msg :=
   h.at? p >>= (·.handle e)
 
-def countToggles : Html msg → Nat
-  | .col cs => (cs.map countToggles).sum
-  | .row cs => (cs.map countToggles).sum
-  | .toggle .. => 1
-  | .identified _ h => countToggles h
-  | .decorated _ h => countToggles h
-  | _ => 0
-
-def toggleLabels : Html msg → List String
-  | .col cs => (cs.map toggleLabels).flatten
-  | .row cs => (cs.map toggleLabels).flatten
-  | .toggle l _ _ => [l]
-  | .identified _ h => toggleLabels h
-  | .decorated _ h => toggleLabels h
-  | _ => []
-
 /-- Every handler anywhere in the tree produces a message satisfying `P`. -/
 inductive Sat (P : msg → Prop) : Html msg → Prop
   | text (s : String) (st : TextStyle) : Sat P (.text s st)
