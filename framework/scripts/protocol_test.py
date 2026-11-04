@@ -13,6 +13,11 @@ checks for list-shaped apps (the todo and counter examples): a submitting field 
 (toggle, spacer, destructive button), the scripted input/submit/toggle/delete run used for the replay, and
 one toggle and one destructive button per row along the random walk.
 
+A CLI whose first line carries "cmds" is an app with commands (LeanNative.CmdCli, PROTOCOL.md "Commands"):
+every view reply must then carry a "cmds" list (`[]` on the first line and after a reset), and a last test
+asks for `{"samples":true}`, sends each sample as `{"host":…}` (a view at seq + 1 each) and one answer that
+does not decode (bad-json, nothing changed).
+
 Paths are discovered by walking the view tree, never hardcoded. `advertised(view)` mirrors the table in
 PROTOCOL.md; the tests check the machine-checked guarantee (advertised iff dispatch succeeds) on the real glue.
 Stdlib only. Exit 1 if any test fails.
@@ -203,13 +208,20 @@ class Session:
               f"first line must be {{seq:0,view}}, got {short(first)}")
         self.seq, self.view = 0, first["view"]
         self.initial_view = copy.deepcopy(first["view"])
+        self.commands = "cmds" in first
+        if self.commands:
+            check(first["cmds"] == [], f"the first line's cmds must be [], got {short(first)}")
+
+    def view_reply(self, r, seq_before, what):
+        expect_view(r, seq_before, what)
+        if self.commands:
+            check(isinstance(r.get("cmds"), list), f"{what}: a view reply without a cmds list: {short(r)}")
+        self.seq, self.view = r["seq"], r["view"]
+        return r
 
     def fire(self, path, event, what="event"):
         """Send an advertised pair; expect seq+1 and a view."""
-        r = self.cli.send({"seq": self.seq, "path": path, "event": event})
-        expect_view(r, self.seq, what)
-        self.seq, self.view = r["seq"], r["view"]
-        return r
+        return self.view_reply(self.cli.send({"seq": self.seq, "path": path, "event": event}), self.seq, what)
 
     def reject(self, path, event, code, what, seq=None):
         r = self.cli.send({"seq": self.seq if seq is None else seq, "path": path, "event": event})
@@ -217,9 +229,9 @@ class Session:
         return r
 
     def reset(self):
-        r = self.cli.send({"reset": True})
-        expect_view(r, self.seq, "reset")
-        self.seq, self.view = r["seq"], r["view"]
+        r = self.view_reply(self.cli.send({"reset": True}), self.seq, "reset")
+        if self.commands:
+            check(r["cmds"] == [], f"reset: cmds must be [], got {short(r)}")
         return r
 
 
@@ -450,6 +462,22 @@ def test_replay(s, reqs, views):
     return f"{replays} (prefix, advertised pair) replays, all deterministic and accepted"
 
 
+def test_commands(s):
+    r = s.cli.send({"samples": True})
+    check(r.get("seq") == s.seq and isinstance(r.get("samples"), list) and "view" not in r,
+          f"samples: expected {{seq:{s.seq},samples:[...]}}, got {short(r)}")
+    check(r["samples"], "samples: the app offers no host answer")
+    with_cmds = 0
+    for h in r["samples"]:
+        a = s.view_reply(s.cli.send({"host": h}), s.seq, f"host answer {json.dumps(h)}")
+        with_cmds += 1 if a["cmds"] else 0
+    view = s.view
+    expect_error(s.cli.send({"host": {"no such answer": {}}}), "bad-json", s.seq, "an answer that does not decode")
+    check(s.cli.send({"samples": True}).get("seq") == s.seq, "an answer that does not decode changed seq")
+    s.fire(*advertised(view)[0], "an advertised event after the host answers")
+    return f"{len(r['samples'])} sample answers -> view ({with_cmds} with commands), undecodable -> bad-json"
+
+
 def main():
     args = sys.argv[1:]
     shape = False
@@ -495,6 +523,10 @@ def main():
     else:
         failures += 1
         print("FAIL 4 exhaustive replay: skipped, the sequence to replay was not recorded")
+    if s.commands:
+        run("4b commands (samples, host answers, cmds on every view)", test_commands, s)
+    else:
+        print("     (no cmds on the first line: not an app with commands; skipped the commands test)")
     try:
         code, leftover = cli.close()
         check(code == 0, f"exit code {code} at EOF (expected 0)")
