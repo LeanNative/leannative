@@ -389,7 +389,7 @@ class PartsTests(Fixture):
         self.part_b = self.part("b", [("silentPaymentSend", 30.0, ["01-onboarding", "40-silent-review"])], 32.0,
                                 onboarding=png(4, 8, b"second part"))
 
-    def part(self, name, journeys, video_seconds, sha=SHA, run_id="42", onboarding=None, passed=True):
+    def part(self, name, journeys, video_seconds, sha=SHA, run_id="42", attempt="1", onboarding=None, passed=True):
         directory = self.base / name
         (directory / "screenshots").mkdir(parents=True)
         (directory / "journey.xcresult").mkdir()
@@ -404,7 +404,7 @@ class PartsTests(Fixture):
         (directory / "device.json").write_text((self.journey / "device.json").read_text())
         run = json.loads((self.journey / "run.json").read_text())
         run["source"]["revision"] = sha
-        run["ci"]["run_id"] = run_id
+        run["ci"].update(run_id=run_id, run_attempt=attempt)
         (directory / "run.json").write_text(json.dumps(run))
         (directory / "journeys.json").write_text(json.dumps(
             [{"name": j, "passed": passed, "seconds": s, "screenshots": n} for j, s, n in journeys]))
@@ -483,6 +483,18 @@ class PartsTests(Fixture):
         other = self.part("c", [("shippedCensus", 20.0, ["50-census"])], 22.0, run_id="43")
         with self.assertRaisesRegex(media.Failure, "different runs"):
             self.run_parts(self.part_a, other)
+
+    def test_attempts_of_one_run_are_one_run(self):
+        # "Re-run failed jobs": the part that passed stays attempt 1's, the failed one is attempt 2's
+        other = self.part("c", [("shippedCensus", 20.0, ["50-census"])], 22.0, attempt="2")
+        self.run_parts(self.part_a, other)
+        self.assertEqual(self.manifest()["run_url"], f"{RUN}/attempts/2")
+
+    def test_the_newest_attempt_is_the_run_whichever_part_it_is(self):
+        rerun = self.part("c", [("shippedCensus", 20.0, ["50-census"])], 22.0, attempt="10")
+        other = self.part("d", [("spentElsewhere", 20.0, ["60-spent"])], 22.0, attempt="9")
+        self.run_parts(rerun, other, self.part_a)
+        self.assertEqual(self.manifest()["run_url"], f"{RUN}/attempts/10")
 
     def test_a_failed_part_fails_the_whole(self):
         other = self.part("c", [("shippedCensus", 20.0, ["50-census"])], 22.0, passed=False)

@@ -408,7 +408,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          # a part's is app-<run>-<attempt>-part-<index>, which the media job downloads
+          # a part's is app-<run>-<attempt>-part-<index>, which the media job downloads, whichever attempts made them
           name: app-${{ github.run_id }}-${{ github.run_attempt }}${{ matrix.shard && format('-part-{0}', strategy.job-index) || '' }}
           path: |
             ${{ runner.temp }}/leannative-ci/app/
@@ -445,22 +445,17 @@ jobs:
       - name: The parts' evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: app-${{ github.run_id }}-${{ github.run_attempt }}-part-*
+          # every attempt's: "Re-run failed jobs" leaves a part that passed under the attempt that ran it
+          pattern: app-${{ github.run_id }}-*-part-*
           path: ${{ runner.temp }}/leannative-ci/media/parts
-      - name: The parts, in order
+      - name: The parts, in order, each its newest attempt
         env:
           SHARDS: ${{ inputs.ui-journey-shards }}
           UI_NAME: ${{ inputs.ui-name }}
-          PREFIX: ${{ runner.temp }}/leannative-ci/media/parts/app-${{ github.run_id }}-${{ github.run_attempt }}-part-
         run: |
           set -euo pipefail
-          count=$(/usr/bin/python3 -c 'import json, os; print(len(json.loads(os.environ["SHARDS"])))')
-          parts=()
-          for ((i = 0; i < count; i++)); do
-            [ -d "$PREFIX$i/$UI_NAME" ] || { echo "::error::part $i's evidence has no $UI_NAME directory"; exit 1; }
-            parts+=("$PREFIX$i/$UI_NAME")
-          done
-          { echo "PARTS=${parts[*]}"; echo "CI_RESULTS=$RUNNER_TEMP/leannative-ci/media"; } >> "$GITHUB_ENV"
+          parts=$("$LEANNATIVE_CI/newest-parts" "$RUNNER_TEMP/leannative-ci/media/parts" "$SHARDS" "$UI_NAME")
+          { echo "PARTS=$parts"; echo "CI_RESULTS=$RUNNER_TEMP/leannative-ci/media"; } >> "$GITHUB_ENV"
       - name: The journeys' media
         if: inputs.journey-media != ''
         env:
