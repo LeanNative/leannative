@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""The parts' UI-tests directories, in order, for ios-app.yml's media job.
+
+  framework/native/ci/newest-parts <downloaded> <shards> <ui-name>
+
+<downloaded> holds the run's app-<run>-<attempt>-part-<index> artifacts, each a directory, and <shards> is
+ui-journey-shards, a JSON array with one string for each part. Prints each part's <artifact>/<ui-name> on one
+line, separated by spaces. "Re-run failed jobs" makes only the failed parts again, under the new attempt, while
+a part that passed keeps its artifact from the attempt that ran it, so a part's evidence is that of the newest
+attempt that has the part. A part with no artifact, or whose newest has no <ui-name> directory, is an error:
+an older attempt's evidence never stands in for the newest, which is the one that passed. Python 3 stdlib.
+"""
+import json
+from pathlib import Path
+import re
+import sys
+
+ARTIFACT = re.compile(r"app-\d+-(\d+)-part-(\d+)")
+
+
+def newest_parts(downloaded, count, ui_name):
+    """Each part's directory, in order; SystemExit with GitHub's error annotation when one is missing."""
+    newest = {}
+    for artifact in Path(downloaded).iterdir():
+        match = ARTIFACT.fullmatch(artifact.name)
+        if match and artifact.is_dir():
+            attempt, part = int(match[1]), int(match[2])
+            if attempt > newest.get(part, (0, None))[0]:
+                newest[part] = (attempt, artifact)
+    parts = []
+    for part in range(count):
+        directory = newest[part][1] / ui_name if part in newest else None
+        if directory is None or not directory.is_dir():
+            raise SystemExit(f"::error::part {part}'s evidence has no {ui_name} directory")
+        parts.append(directory)
+    return parts
+
+
+def main(argv):
+    if len(argv) != 3:
+        raise SystemExit(__doc__)
+    downloaded, shards, ui_name = argv
+    print(" ".join(str(part) for part in newest_parts(downloaded, len(json.loads(shards)), ui_name)))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

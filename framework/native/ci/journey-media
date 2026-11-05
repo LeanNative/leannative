@@ -25,7 +25,8 @@ recorded as the journeys ran (run.json); --sha must match it, and this checkout'
 
 Several <journey-out> directories are the parts of one journeys run (ios-app.yml's ui-journey-shards: each
 runner ran some of the journeys), published as if one run had made them: every part must have passed, at
-the same commit, in the same CI run, on the same simulator model and OS. The journeys are listed in the
+the same commit, in the same CI run (in any of its attempts: "Re-run failed jobs" keeps the parts that passed,
+and the run URL is the newest attempt's), on the same simulator model and OS. The journeys are listed in the
 order of the parts, test_seconds is their sum, a screenshot two parts took (01-onboarding) is the first
 part's, and the video is the parts' recordings one after another, transcoded together (ffmpeg is required)
 within the same 25 MiB. `parts` lists each part's journeys, seconds and original recording.
@@ -95,6 +96,12 @@ def run_url_of(args, run):
     if not re.fullmatch(r"https://\S+/actions/runs/\d+(/attempts/\d+)?", url):
         raise Failure("--run-url must be a GitHub Actions run URL")
     return url
+
+
+def attempt_of(url):
+    """(the run's URL without an attempt, the attempt): how a run URL's /attempts/<n> says which attempt."""
+    match = re.fullmatch(r"(.*)/attempts/(\d+)", url or "")
+    return (match[1], int(match[2])) if match else (url, 1)
 
 
 def identity(args, run):
@@ -279,7 +286,7 @@ def prepare_parts(runs, media, args, exporter=None):
         for part in parts[1:]:
             if part["sha"] != first["sha"]:
                 raise Failure(f"the parts ran at different commits: {first['sha']} and {part['sha']}")
-            if part["run_url"] != first["run_url"]:
+            if attempt_of(part["run_url"])[0] != attempt_of(first["run_url"])[0]:
                 raise Failure(f"the parts are from different runs: {first['run_url']} and {part['run_url']}")
             if device_of(part["evidence"]["device"]) != device_of(first["evidence"]["device"]):
                 raise Failure(f"the parts ran on different devices: {device_of(first['evidence']['device'])} and "
@@ -302,7 +309,7 @@ def prepare_parts(runs, media, args, exporter=None):
     manifest = {
         "version": 2,
         "source_sha": first["sha"],
-        "run_url": first["run_url"],
+        "run_url": max((p["run_url"] for p in parts), key=lambda url: attempt_of(url)[1]),
         "branch": first["branch"],
         **fields,
         "test": args.journeys or "journeys",
