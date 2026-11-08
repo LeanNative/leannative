@@ -21,7 +21,7 @@ import LeanNative.Native.Client.Bluetooth
   invalidation drains, and the typed clients (`LeanNative.Native.Client.*`) against the real shell; its lines
   are printed and shown on the Demo tab (`selftest-<n>`), so UI tests read them on iOS and Mac Catalyst alike;
 * Face ID runs in an `EffectScope` the app's going to the background ends: an answer that comes back
-  after that is dropped;
+  after that is dropped; going to the background and coming back from it are logged;
 * with `NATIVEDEMO_BLE_SERVICE=<a service UUID>` at launch, the Probes tab has a Bluetooth section: the
   Bluetooth state, and a connection to the first peripheral offering that service (its id and name logged),
   closed at once. Nothing else is said to the peripheral; without the variable the app never touches
@@ -47,6 +47,8 @@ structure Model where
   selftest : List String := []
   /-- `NATIVEDEMO_BLE_SERVICE`, when set at launch -/
   bleService : Option String := none
+  /-- in the background since the last time the app was active -/
+  away : Bool := false
   deriving Inhabited
 
 inductive Host where
@@ -61,6 +63,8 @@ inductive Host where
   | ran (id : String) (outcome : String)
   /-- the app went to the background -/
   | background
+  /-- the app is active (after a launch, a system sheet, or the background) -/
+  | foreground
   /-- a scoped answer came back stale and was not delivered -/
   | dropped (what : String)
   /-- one line of the selftest -/
@@ -162,7 +166,8 @@ def update : Msg → Model → Model
   | .host (.system e), m => note m s!"system: {e.compress}"
   | .host (.bgtask expired id kind), m => note m s!"bgtask {if expired then "expired" else "launched"}: {id} ({kind})"
   | .host (.ran id o), m => note m s!"background run {id}: {o}"
-  | .host .background, m => m
+  | .host .background, m => { note m "went to the background" with away := true }
+  | .host .foreground, m => if m.away then { note m "back in the foreground" with away := false } else m
   | .host (.dropped what), m => note m s!"dropped a stale answer: {what}"
   | .host (.checked line), m => { m with selftest := line :: m.selftest }
   | .bleState, m => note m "asking: BLE state…"
@@ -203,9 +208,9 @@ def widgets (m : Model) : Html Msg :=
   .screen "Widgets" none
     [ .toolbar [.button "Alert" .plain (some .openAlert)]
     , .list
-      [ .section "Values" "Every value below lives in the Lean model." [ .labeled "Fee priority" (["Low", "Medium", "High"][m.fee]!), .labeled "Copies" s!"{m.copies}" ]
+      [ .section "Values" "Every value below lives in the Lean model." [ .labeled "Fee priority" (["Low", "Medium", "High"][m.fee]!), .identified "copiesValue" (.labeled "Copies" s!"{m.copies}") ]
       , .section "Controls" "" [ .picker "Fee" ["Low", "Medium", "High"] m.fee Msg.fee
-                                , .stepper "Copies" m.copies 1 5 Msg.copies
+                                , .identified "copies" (.stepper "Copies" m.copies 1 5 Msg.copies)
                                 , .input .secure "Passphrase" "Optional" m.secret Msg.secret none
                                 , .disclosure "Details" m.details Msg.details [.text "Hidden until expanded." .body] ]
       , .section "Share" "" [ .qr "bitcoin:tb1qexample", .share "Share address" "tb1qexample"
@@ -381,9 +386,11 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
 
 def app : Native.App Model Msg Cmd Host :=
   { init := { count := 0, ticks := 0, ticking := false, log := [] }, update, view, cmds, host := Msg.host, perform, boot := [.selftest, .bleSetup],
-    -- every system event but the scene phase is logged (the Probes tab shows bgtask launches and expirations)
+    -- every system event but a scene phase is logged (the Probes tab shows bgtask launches and expirations); of
+    -- the scene phases, going to the background and coming back from it are
     system := fun j =>
       if (j.getObjValAs? String "scene").toOption == some "background" then some .background
+      else if (j.getObjValAs? String "scene").toOption == some "active" then some .foreground
       else if (j.getObjVal? "scene").isOk then none
       else match BackgroundTasks.systemEvent? j with
         | some (expired, id, kind) => some (.bgtask expired id kind)

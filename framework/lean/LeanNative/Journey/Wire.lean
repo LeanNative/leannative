@@ -467,18 +467,11 @@ structure State where
   lock : Std.Mutex Unit
   shell : Shell
   openPicker : IO.Ref (Option (List Nat))
-  quiet : Bool
 
 def appearTimeout : Float := 20
 def enabledTimeout : Float := 15
 
 namespace State
-
-def say (st : State) (line : String) : IO Unit := do
-  unless st.quiet do
-    let out ← IO.getStdout
-    out.putStrLn s!"  [app] {line}"
-    out.flush
 
 /-- The capability requests a reply carries, answered by the fake shell. -/
 def answerCaps (st : State) (reply : String) : IO Unit := do
@@ -711,8 +704,7 @@ def serve [ToJson Cmd] (app : Native.App Model Msg Cmd Host) (port : UInt16)
     | some d => pure (System.FilePath.mk d)
     | none => do let cwd ← IO.currentDir; pure (cwd / "wire")
   let shell ← Shell.new dir override
-  let st : State := { runtime := ← Native.runtime app, lock := ← Std.Mutex.new (), shell,
-                      openPicker := ← IO.mkRef none, quiet := (← IO.getEnv "LEANNATIVE_WIRE_QUIET") == some "1" }
+  let st : State := { runtime := ← Native.runtime app, lock := ← Std.Mutex.new (), shell, openPicker := ← IO.mkRef none }
   -- as the shell starts the app: the first view, then the scene phases a launch goes through
   let first ← st.lock.atomically fun _ => st.runtime.start
   st.answerCaps first

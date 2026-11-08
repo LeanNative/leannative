@@ -443,8 +443,9 @@ checks and answers. The checks are the journey's, in Lean, against whatever the 
 XCTest failure with its message, the next journey still runs, and `journeys.json` has each one's result and
 time; `shot` writes `<UI_OUT>/screenshots/<name>.png` and attaches it. Without the port the driver skips, so
 an app's Objective-C tests run as before. Simulator only for now: the Mac Catalyst test runner is sandboxed.
-native-demo's are `NativeDemo/Journeys.lean` (the same counter, typing, refusals, scrolling and screenshots
-as its Objective-C tests):
+native-demo's are `NativeDemo/Journeys.lean`: the same counter, typing, refusals, scrolling and screenshots
+as its Objective-C tests, and more: finding by a button's or an alert's label, a stepper held down (`press`), the
+Home button and back (`home`, `activate`) and `digits`:
 
 ```
 (cd examples/native-demo && lake build journeys)
@@ -480,7 +481,7 @@ innermost sheet, under its alert), its text what XCTest reads from the view the 
 event the node advertises, sent through `Session.step` as the shell sends a touch; a node that advertises no
 event, or a disabled control, is refused. `shot` writes the visible tree as `<name>.wire.json`. No simulator, no
 XCTest, no `ui-tests`: a step costs a tree walk, so an app's journeys belong beside its other headless tests
-(native-demo's five take under a second apart from the refusals journey's deliberate timeouts). What it does not
+(native-demo's eight take under a second apart from the refusals journey's deliberate timeouts). What it does not
 test is the renderer, real touches and the shell's capabilities: keep one simulator run for those, and for the
 screenshots and recording.
 
