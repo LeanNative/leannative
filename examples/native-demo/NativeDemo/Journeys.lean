@@ -67,11 +67,47 @@ def patterns : Journey := ⟨"patterns", do
   tap "inc" (times := 12)
   waitFor twoOrThreeDigits 5
   expectEq "the count, found by its pattern" (← text twoOrThreeDigits) "Count: 12"
+  expectEq "the count's digits" (digits (← text "count")) (some 12)
+  expectEq "a caption's digits" (digits (← text (.text "^This screen is Lean"))) none
   expectEq "the caption ending in a full stop" (← text (.text "inside the iOS app\\.$")) "This screen is Lean compiled to C, running inside the iOS app."
   expect (!(← exists? (.text "compiled to C\\."))) "an escaped full stop matched the comma after C"
   tap (.tab "Probes")
   expectEq "the probe its label begins" (← text (Find.beginning "Complete (none pending)")) "Complete (none pending)"
   expect (!(← exists? (.text "^Complete (none pending)"))) "the label matched with its parentheses read as a group"⟩
+
+/-- The Widgets tab by its buttons' labels (`Find.button`, `Find.alert`): the sheet opened and closed, the alert
+shown and answered. Then the Copies stepper held down (`press`): held, a half repeats to the stepper's end, so one
+press takes Copies from 1 to 5 and one from 5 back to 1; a tap would take one step. -/
+def widgets : Journey := ⟨"widgets", do
+  launch
+  tap (.tab "Widgets")
+  let inSheet := Find.text "^Swipe down or tap Close\\.$"
+  expect (← scrollTo (.button "Open sheet")) "Open sheet cannot be scrolled into view"
+  tap (.button "Open sheet")
+  waitFor inSheet 10
+  tap (.button "Close")
+  expectGone inSheet 10
+  tap (.button "Alert")
+  waitFor (.alert "OK") 10
+  tap (.alert "OK")
+  expectGone (.alert "OK") 10
+  expect (← scrollTo "copies") "the Copies stepper cannot be scrolled into view"
+  expectEq "Copies at launch" (← text "copiesValue") s!"{app.init.copies}"
+  press "copies-Increment" 3
+  waitUntil 5 "Copies reaches 5" do return (← text "copiesValue") == "5"
+  press "copies-Decrement" 3
+  waitUntil 5 "Copies is back to 1" do return (← text "copiesValue") == "1"⟩
+
+/-- The Home button and back (`home`, `activate`): the app logs going to the background and coming back from it,
+on the Demo tab. -/
+def background : Journey := ⟨"background", do
+  launch
+  waitFor "count"
+  expect (← gone? (.text "^went to the background$")) "the background is logged before the app went there"
+  home
+  activate
+  waitFor (.text "^went to the background$") 10
+  waitFor (.text "^back in the foreground$") 10⟩
 
 /-- Screenshots, written to the evidence directory's screenshots/ and attached to the test. -/
 def screenshots : Journey := ⟨"screenshots", do
@@ -85,5 +121,5 @@ end NativeDemo.Journeys
 
 open NativeDemo.Journeys in
 def main (args : List String) : IO UInt32 :=
-  LeanNative.Journey.main [counting, typing, refusals, scrolling, patterns, screenshots] args
+  LeanNative.Journey.main [counting, typing, refusals, scrolling, patterns, widgets, background, screenshots] args
     (wire := some (LeanNative.Journey.Wire.app NativeDemo.app))

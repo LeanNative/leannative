@@ -252,8 +252,6 @@ private def bool (j : Json) (key : String) : IO Bool :=
 def launch (env : List (String × String) := []) : UI Unit :=
   discard <| request "launch" [("env", Json.mkObj (env.map fun (k, v) => (k, Json.str v)))]
 
-def terminate : UI Unit := discard <| request "terminate"
-
 /-- Whether the element appears within `within` seconds (0: whether it is there now). -/
 def exists? (f : Find) (within : Float := 0) : UI Bool := do
   bool (← request "exists" [("find", f.toJson), ("timeout", seconds within)]) "exists"
