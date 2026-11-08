@@ -7,7 +7,9 @@ A simulator has no Bluetooth radio and no enrolled face, so in test mode (a Debu
 the shell's own answers (`LeanNativeShell/Capabilities.lean`): authentication succeeds, and Bluetooth is on with
 one peripheral, `LeanNative HR`, offering the Heart Rate service. Every other capability (the keychain) still
 goes to the shell. The typed clients cannot tell the difference, which is the point: the app's code from the
-button to the reading is the code that talks to a real sensor.
+button to the reading is the code that talks to a real sensor. `BTAUTH_E2E_SENSOR` at launch makes it a sensor
+that fails (`Script`): `absent` is out of range, so the connection times out; `drops` goes out of range after
+three readings.
 
 The sensor follows the Bluetooth SIG's Heart Rate service: Heart Rate Measurement (`2A37`, notify) sends a
 flags byte (bit 0 clear: the rate is one byte) and the rate; Heart Rate Control Point (`2A39`, write) takes
@@ -25,15 +27,32 @@ def peripheralName : String := "LeanNative HR"
 /-- The rates it sends, over and over. -/
 def rates : Array Nat := #[72, 74, 77, 79, 76, 73, 71, 70]
 
+/-- What the sensor does (`BTAUTH_E2E_SENSOR`). -/
+inductive Script where
+  /-- in range, sending until it is closed (unset) -/
+  | inRange
+  /-- out of range: a connection times out, as the shell's does when a scan finds nothing (`absent`) -/
+  | absent
+  /-- out of range after `readings` readings: the next read, and anything after it, answers `disconnected`
+  (`drops`: after three) -/
+  | drops (readings : Nat)
+  deriving BEq, Repr
+
+def Script.ofName? : String → Option Script
+  | "absent" => some .absent
+  | "drops" => some (.drops 3)
+  | _ => none
+
 structure Sensor where
+  script : Script
   connected : IO.Ref Bool
   subscribed : IO.Ref Bool
   /-- the next of `rates` -/
   next : IO.Ref Nat
   resets : IO.Ref Nat
 
-def Sensor.new : IO Sensor :=
-  return { connected := ← IO.mkRef false, subscribed := ← IO.mkRef false, next := ← IO.mkRef 0, resets := ← IO.mkRef 0 }
+def Sensor.new (script : Script := .inRange) : IO Sensor :=
+  return { script, connected := ← IO.mkRef false, subscribed := ← IO.mkRef false, next := ← IO.mkRef 0, resets := ← IO.mkRef 0 }
 
 /-- Whether test mode answers this capability (everything else goes to the shell). -/
 def answers (name : String) : Bool := name == "auth" || name.startsWith "ble."
@@ -57,6 +76,7 @@ def Sensor.answer (s : Sensor) (name : String) (args : Json) : IO Json := do
       | .ok (.arr a) => a.toList.filterMap fun (j : Json) => j.getStr?.toOption
       | _ => []
     unless services.any (fun (u : String) => u.toUpper == heartRateService) do return failJ "timeout"
+    if s.script == .absent then return failJ "timeout"
     s.connected.set true
     return Json.mkObj [("ok", true), ("id", Json.str peripheralId), ("name", Json.str peripheralName),
       ("service", Json.str heartRateService), ("characteristics", Json.arr #[Json.str measurement, Json.str controlPoint])]
@@ -68,6 +88,11 @@ def Sensor.answer (s : Sensor) (name : String) (args : Json) : IO Json := do
   | "ble.read" =>
     IO.sleep 400
     unless (← s.connected.get) && (← s.subscribed.get) do return Json.mkObj [("error", "disconnected")]
+    if let .drops n := s.script then
+      if (← s.next.get) ≥ n then
+        s.connected.set false
+        s.subscribed.set false
+        return Json.mkObj [("error", "disconnected")]
     let i ← s.next.modifyGet fun i => (i, i + 1)
     return Json.mkObj [("hex", Json.str (hex [0, rates[i % rates.size]!]))]
   | "ble.write" =>

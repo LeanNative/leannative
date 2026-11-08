@@ -31,7 +31,7 @@ wallet written in Lean. Three examples are smaller:
 | Example | Shows |
 |---|---|
 | [`examples/simple`](examples/simple) | the smallest useful app: a counter, a greeting, a list, and one capability (`open`); its manifest lists only that, so it links neither CoreBluetooth nor LocalAuthentication |
-| [`examples/bluetooth-auth`](examples/bluetooth-auth) | a heart-rate monitor behind Face ID: `auth`, Bluetooth LE (connect, subscribe, read, write), the keychain; in test mode a scripted sensor stands in for the hardware, so its journey runs on a simulator and headless |
+| [`examples/bluetooth-auth`](examples/bluetooth-auth) | a heart-rate monitor behind Face ID: `auth`, Bluetooth LE (connect, subscribe, read, write), the keychain; in test mode a scripted sensor stands in for the hardware (or one out of range, or one that drops), so its journeys run on a simulator and headless |
 | [`examples/native-demo`](examples/native-demo) | every control and capability in one app, with the framework's own UI tests |
 
 CI runs each one's journeys headless and on a simulator (`check.yml`), and leannative.com shows their
