@@ -1,3 +1,4 @@
+import Lean.Data.Json
 import LeanNativeShell.ObjC
 
 /-! # LeanNativeShell.BackgroundTasks: `LNBackgroundTasks`, in `LNCapabilities.m`
@@ -7,9 +8,21 @@ handler to be registered before the app finishes launching, so `LNAppDelegate` c
 first thing in `didFinishLaunching`: one handler per identifier the app lists in Info.plist
 (`BGTaskSchedulerPermittedIdentifiers`; refresh tasks also need `UIBackgroundModes` `fetch`, processing
 tasks `processing`). A launched task is reported to the app as the system event
-`{"bgtask":{"id","kind"}}` and stays pending until the app answers `bgtask.complete`; when iOS expires it
-the app gets `{"bgtaskExpired":{"id","kind"}}`, and a task still pending one second later is completed
-by the shell with `success: false`. Everything happens on the main queue, like every answer. -/
+`{"bgtask":{"id","kind","tag"}}` and stays pending until the app answers `bgtask.complete`; when iOS
+expires it the app gets `{"bgtaskExpired":{"id","kind","tag"}}`, and a task still pending one second later
+is completed by the shell with `success: false`. Everything happens on the main queue, like every answer.
+
+**The tag.** A launch of an identifier ends the task still pending under it (iOS has launched its successor),
+so a `bgtask.complete` that names only the identifier can end the successor: an older run that finishes on
+its own after iOS launched the new task, but before the app has heard of it, would complete the new task
+before its work ran. Each launch therefore carries a tag, a serial the shell counts up, and a
+`bgtask.complete` with a `tag` completes the pending task only if it is that launch's: an older launch's
+answer is `notPending`. A completion without a tag completes whatever task is pending under its identifier,
+as before tags (apps that do not send one keep working).
+
+`PendingTasks` below is the same bookkeeping in Lean, step for step; background-run-test's `tasks`
+(`make check`) runs `LeanNative.Native.BackgroundTasks` against it. The Objective-C itself is only
+compiled here (native-demo's builds), never run: launches happen only on a device. -/
 
 namespace LeanNativeShell
 
@@ -46,8 +59,11 @@ def backgroundTasksClass : List Stmt := [
     .blank,
     b "@implementation LNBackgroundTasks {" [
         .l "NSMutableSet<NSString *> *_registered;",
-        .l "// launched and not yet completed, by identifier",
-        .l "NSMutableDictionary<NSString *, BGTask *> *_running;"],
+        .l "// launched and not yet completed, by identifier, each with its launch's tag (`PendingTasks`)",
+        .l "NSMutableDictionary<NSString *, BGTask *> *_running;",
+        .l "NSMutableDictionary<NSString *, NSNumber *> *_tags;",
+        .l "// the last launch's tag; the first is 1",
+        .l "unsigned long long _serial;"],
     .blank,
     b "+ (instancetype)shared {" [
         .l "static LNBackgroundTasks *shared;",
@@ -58,7 +74,8 @@ def backgroundTasksClass : List Stmt := [
     b "- (instancetype)init {" [
         b "if ((self = [super init])) {" [
             .l "_registered = [NSMutableSet set];",
-            .l "_running = [NSMutableDictionary dictionary];"],
+            .l "_running = [NSMutableDictionary dictionary];",
+            .l "_tags = [NSMutableDictionary dictionary];"],
         .l "return self;"],
     .blank,
     .l "/// Once, before launch ends: iOS kills an app that registers an identifier twice, and raises for one",
@@ -79,10 +96,12 @@ def backgroundTasksClass : List Stmt := [
     .blank,
     b "- (void)launched:(BGTask *)task {" [
         .l "NSString *identifier = task.identifier;",
-        .l "NSDictionary *info = @{@\"id\": identifier, @\"kind\": LNTaskKind(task)};",
+        .l "NSNumber *tag = @(++_serial);",
+        .l "NSDictionary *info = @{@\"id\": identifier, @\"kind\": LNTaskKind(task), @\"tag\": tag};",
         .l "// a task of the same identifier still pending is over: iOS has launched its successor",
         .l "[self finish:_running[identifier] success:NO];",
         .l "_running[identifier] = task;",
+        .l "_tags[identifier] = tag;",
         .l "__weak BGTask *weakTask = task;",
         b "task.expirationHandler = ^{" [
             .l "dispatch_async(dispatch_get_main_queue(), ^{ [self expired:weakTask info:info]; });"] "};",
@@ -99,6 +118,7 @@ def backgroundTasksClass : List Stmt := [
     b "- (BOOL)finish:(nullable BGTask *)task success:(BOOL)success {" [
         .l "if (!task || _running[task.identifier] != task) return NO;",
         .l "[_running removeObjectForKey:task.identifier];",
+        .l "[_tags removeObjectForKey:task.identifier];",
         .l "task.expirationHandler = nil;",
         .l "[task setTaskCompletedWithSuccess:success];",
         .l "return YES;"],
@@ -143,10 +163,50 @@ def backgroundTasksClass : List Stmt := [
               .l "answer(LNSubmitted(ok ? nil : (error ?: [NSError errorWithDomain:BGTaskSchedulerErrorDomain code:BGTaskSchedulerErrorCodeUnavailable userInfo:nil])));"])] "}"],
     .blank,
     b "- (void)complete:(NSDictionary *)args answer:(LNAnswer)answer {" [
-        .l "BGTask *task = _running[LNArgString(args, @\"id\") ?: @\"\"];",
+        .l "NSString *identifier = LNArgString(args, @\"id\") ?: @\"\";",
+        .l "BGTask *task = _running[identifier];",
+        .l "// a completion that names its launch completes that launch's task only: an older run's late answer",
+        .l "// must not end the successor iOS launched since (`PendingTasks.complete`); one without a tag",
+        .l "// completes whatever is pending under the identifier",
+        .l "NSNumber *tag = LNArgNumber(args, @\"tag\");",
+        .l "if (tag && ![tag isEqualToNumber:(_tags[identifier] ?: @0)]) task = nil;",
         .l "BOOL done = [self finish:task success:[LNArgNumber(args, @\"success\") boolValue]];",
         .l "answer(done ? @{@\"ok\": @YES} : @{@\"ok\": @NO, @\"error\": @\"notPending\"});"],
     .blank,
     .l "@end"]
+
+/-! ## `PendingTasks`: the shell's bookkeeping, in Lean -/
+
+/-- What `LNBackgroundTasks` keeps: the task pending under each identifier, by its launch's tag, and the
+last tag given. -/
+structure PendingTasks where
+  pending : List (String × Nat) := []
+  serial : Nat := 0
+  deriving Repr, BEq, Inhabited
+
+namespace PendingTasks
+
+/-- `launched:`: the new launch's tag, and the tag of the task it ended (completed unsuccessfully), if one
+was pending under the identifier. -/
+def launched (s : PendingTasks) (id : String) : PendingTasks × Nat × Option Nat :=
+  let tag := s.serial + 1
+  ({ pending := (id, tag) :: s.pending.filter (·.1 != id), serial := tag }, tag, s.pending.lookup id)
+
+/-- `expired:`: the app hears an expiry only for the task still pending under the identifier. -/
+def expires (s : PendingTasks) (id : String) (tag : Nat) : Bool := s.pending.lookup id == some tag
+
+/-- `complete:` (and `finish:`): the tag of the task completed, or none (`notPending`). A `tag` must be the
+pending task's; without one, whatever is pending under the identifier is completed. -/
+def complete (s : PendingTasks) (id : String) (tag : Option Nat) : PendingTasks × Option Nat :=
+  match s.pending.lookup id with
+  | some t => if tag.all (· == t) then ({ s with pending := s.pending.filter (·.1 != id) }, some t) else (s, none)
+  | none => (s, none)
+
+/-- The system event of a launch (`expired := false`) or an expiry, as `launched:` posts it. -/
+def event (expired : Bool) (id kind : String) (tag : Nat) : Lean.Json :=
+  Lean.Json.mkObj [(if expired then "bgtaskExpired" else "bgtask",
+    Lean.Json.mkObj [("id", Lean.Json.str id), ("kind", Lean.Json.str kind), ("tag", Lean.toJson tag)])]
+
+end PendingTasks
 
 end LeanNativeShell

@@ -7,7 +7,8 @@ An optional native support module (import it; `LeanNative` does not). A `Backgro
 `work` that the platform may expire at any moment: iOS launches a background task and expires it when
 its time is up, or the app's own `Deadline` does. It knows nothing of what the work is; the app keeps
 its task identifiers, budgets and policy. `BackgroundTasks` connects runs to the shell's `bgtask.*`
-capability (`{"bgtask":…}` launches, `{"bgtaskExpired":…}` expirations, `bgtask.complete`).
+capability (`{"bgtask":…}` launches, `{"bgtaskExpired":…}` expirations, `bgtask.complete` with the
+launch's tag).
 
 ## The lifecycle
 
@@ -264,59 +265,85 @@ end BackgroundRun
 /-! ## The shell's background tasks -/
 
 /-- The runs of the shell's background tasks (`bgtask.*`, `LeanNativeShell/BackgroundTasks.lean`), by task
-identifier: launch one per `{"bgtask":{"id","kind"}}` system event and expire it on
-`{"bgtaskExpired":{"id","kind"}}`; each run answers the shell `bgtask.complete` with its outcome's
-`success`. The app decides which identifiers it handles, their budgets and their work. -/
+identifier: launch one per `{"bgtask":{"id","kind","tag"}}` system event and expire it on
+`{"bgtaskExpired":{"id","kind","tag"}}`; each run answers the shell `bgtask.complete` with its outcome's
+`success` and its launch's `tag`, unless a later launch of its identifier has superseded it. The app decides
+which identifiers it handles, their budgets and their work. background-run-test's `tasks` (`make check`)
+runs it against the shell's bookkeeping (`LeanNativeShell.PendingTasks`). -/
 structure BackgroundTasks where
-  runs : Std.Mutex (List (String × Nat × BackgroundRun))
+  /-- identifier, the launch's serial here, the shell's tag, the run -/
+  runs : Std.Mutex (List (String × Nat × Option Nat × BackgroundRun))
   serial : IO.Ref Nat
   deriving Nonempty
 
 namespace BackgroundTasks
 
+/-- A `{"bgtask":…}` launch (`expired := false`) or a `{"bgtaskExpired":…}` expiry, as `systemEvent?` reads it. -/
+structure Event where
+  expired : Bool
+  id : String
+  kind : String
+  /-- The launch's tag, for `launch` and `expire`; none from a shell that sends none. -/
+  tag : Option Nat := none
+  deriving Repr, BEq, Inhabited
+
 def new : BaseIO BackgroundTasks := do
   return { runs := ← Std.Mutex.new [], serial := ← IO.mkRef 0 }
 
-/-- Answer the shell that task `id` is over. -/
-def complete (fx : Effects Host) (id : String) (success : Bool) : IO Unit :=
-  discard <| fx.ask "bgtask.complete" (Json.mkObj [("id", Json.str id), ("success", Json.bool success)])
+/-- Answer the shell that task `id` is over, naming its launch's `tag` when it has one: the shell then
+ignores the answer if a later launch of `id` is pending, rather than ending that one. -/
+def complete (fx : Effects Host) (id : String) (success : Bool) (tag : Option Nat := none) : IO Unit :=
+  discard <| fx.ask "bgtask.complete" (Json.mkObj ([("id", Json.str id), ("success", Json.bool success)] ++
+    tag.toList.map fun t => ("tag", toJson t)))
 
-/-- A launched task: run `config` for it and start it. A run still registered under `id` is expired
-first (iOS launched a successor; the shell has completed the old task). The run's completion calls
-`config.completion` and then answers `bgtask.complete`. -/
-def launch (t : BackgroundTasks) (fx : Effects Host) (id : String) (config : BackgroundRun.Config) :
-    IO BackgroundRun := do
+/-- A launched task: run `config` for it and start it; `tag` is the launch event's (`Event.tag`), and every
+answer the run gives the shell carries it. A run still registered under `id` is expired first (iOS launched a
+successor, and the shell has completed the old task unsuccessfully): its completion still calls its
+`config.completion`, but answers the shell nothing, since a `bgtask.complete` under the same identifier
+could end the successor. Otherwise the run's completion calls `config.completion` and then answers
+`bgtask.complete`. The successor starts at once; an app whose work cannot overlap waits for the older run
+(`find?`, `BackgroundRun.wait`) before launching. background-run-test's `tasks`: *a launched task completes*,
+*a replaced run*, *a stale tag*. -/
+def launch (t : BackgroundTasks) (fx : Effects Host) (id : String) (config : BackgroundRun.Config)
+    (tag : Option Nat := none) : IO BackgroundRun := do
   let n ← t.serial.modifyGet fun n => (n, n + 1)
   let run ← BackgroundRun.new { config with completion := fun o => do
-    t.runs.atomically (modify (·.filter (·.2.1 != n)))
+    -- still registered: not superseded by a later launch of `id`
+    let current ← t.runs.atomically (modifyGet fun rs => (rs.any (·.2.1 == n), rs.filter (·.2.1 != n)))
     try config.completion o catch _ => pure ()
-    complete fx id o.success }
+    if current then complete fx id o.success tag }
   let old ← t.runs.atomically (modifyGet fun rs =>
-    (rs.filter (·.1 == id), (id, n, run) :: rs.filter (·.1 != id)))
-  for (_, _, r) in old do r.expire
+    (rs.filter (·.1 == id), (id, n, tag, run) :: rs.filter (·.1 != id)))
+  for (_, _, _, r) in old do r.expire
   run.start
   return run
 
-/-- An expired task: expire its run. Without one (iOS expired it before the app launched a run for it)
-the task is completed unsuccessfully at once. -/
-def expire (t : BackgroundTasks) (fx : Effects Host) (id : String) : IO Unit := do
-  match (← t.runs.atomically get).find? (·.1 == id) with
-  | some (_, _, r) => r.expire
-  | none => complete fx id false
+/-- An expired task: expire its run (the one registered under `id`, when `tag` is that launch's or either
+is unknown). Without one the expiry is ignored: the run has completed and answered already, or was
+superseded, and a second `bgtask.complete` could only end a task iOS launched since under the same
+identifier; a task still pending is completed by the shell a second after its expiry. background-run-test's
+`tasks`: *an expired task drains*, *a late expiry answers nothing*, *a replaced run (tagged)*. -/
+def expire (t : BackgroundTasks) (id : String) (tag : Option Nat := none) : IO Unit := do
+  let named := fun (e : String × Nat × Option Nat × BackgroundRun) =>
+    e.1 == id && (match tag, e.2.2.1 with | some a, some b => a == b | _, _ => true)
+  match (← t.runs.atomically get).find? named with
+  | some (_, _, _, r) => r.expire
+  | none => pure ()
 
 /-- The run registered under `id`, if any. -/
 def find? (t : BackgroundTasks) (id : String) : IO (Option BackgroundRun) := do
-  return ((← t.runs.atomically get).find? (·.1 == id)).map (·.2.2)
+  return ((← t.runs.atomically get).find? (·.1 == id)).map (·.2.2.2)
 
-/-- A `{"bgtask":{"id","kind"}}` or `{"bgtaskExpired":{"id","kind"}}` system event: `(expired, id, kind)`. -/
-def systemEvent? (j : Json) : Option (Bool × String × String) :=
-  let task (key : String) : Option (String × String) := do
+/-- A `{"bgtask":{"id","kind","tag"}}` or `{"bgtaskExpired":{"id","kind","tag"}}` system event (`kind`
+`other` and `tag` none when missing). background-run-test's `tasks`: *system events*. -/
+def systemEvent? (j : Json) : Option Event :=
+  let task (key : String) : Option (String × String × Option Nat) := do
     let t ← (j.getObjVal? key).toOption
     let id ← (t.getObjValAs? String "id").toOption
-    return (id, (t.getObjValAs? String "kind").toOption.getD "other")
+    return (id, (t.getObjValAs? String "kind").toOption.getD "other", (t.getObjValAs? Nat "tag").toOption)
   match task "bgtask", task "bgtaskExpired" with
-  | some (id, kind), _ => some (false, id, kind)
-  | _, some (id, kind) => some (true, id, kind)
+  | some (id, kind, tag), _ => some { expired := false, id, kind, tag }
+  | _, some (id, kind, tag) => some { expired := true, id, kind, tag }
   | none, none => none
 
 end BackgroundTasks

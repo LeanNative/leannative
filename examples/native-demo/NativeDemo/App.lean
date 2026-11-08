@@ -57,8 +57,8 @@ inductive Host where
   | echoed (reply : String)
   | probed (label : String) (result : Json)
   | system (event : Json)
-  /-- iOS launched (`expired := false`) or expired a background task -/
-  | bgtask (expired : Bool) (id kind : String)
+  /-- iOS launched (`expired := false`) or expired a background task, with the shell's tag for that launch -/
+  | bgtask (expired : Bool) (id kind : String) (tag : Option Nat)
   /-- a background run ended -/
   | ran (id : String) (outcome : String)
   /-- the app went to the background -/
@@ -107,10 +107,10 @@ inductive Cmd where
   | bleState
   /-- connects to the first peripheral offering the service, logs it and closes the connection -/
   | bleConnect (service : String)
-  | runBackground (id kind : String)
+  | runBackground (id kind : String) (tag : Option Nat)
   /-- ends the session scope (`EffectScope.invalidate`) -/
   | endSession
-  | expireBackground (id : String)
+  | expireBackground (id : String) (tag : Option Nat)
   deriving ToJson
 
 /-- The Probes tab: a label, a capability and its arguments. The background task identifiers are the
@@ -164,7 +164,7 @@ def update : Msg → Model → Model
   | .host (.echoed r), m => note m s!"TCP echo: {r}"
   | .host (.probed l r), m => note m s!"{l}: {r.compress}"
   | .host (.system e), m => note m s!"system: {e.compress}"
-  | .host (.bgtask expired id kind), m => note m s!"bgtask {if expired then "expired" else "launched"}: {id} ({kind})"
+  | .host (.bgtask expired id kind _), m => note m s!"bgtask {if expired then "expired" else "launched"}: {id} ({kind})"
   | .host (.ran id o), m => note m s!"background run {id}: {o}"
   | .host .background, m => { note m "went to the background" with away := true }
   | .host .foreground, m => if m.away then { note m "back in the foreground" with away := false } else m
@@ -186,8 +186,8 @@ def cmds : Msg → Model → List Cmd
   | .bleConnect, m => match m.bleService with
     | some s => [.bleConnect s]
     | none => []
-  | .host (.bgtask false id kind), _ => [.runBackground id kind]
-  | .host (.bgtask true id _), _ => [.expireBackground id]
+  | .host (.bgtask false id kind tag), _ => [.runBackground id kind tag]
+  | .host (.bgtask true id _ tag), _ => [.expireBackground id tag]
   | .host .background, _ => [.endSession]
   | _, _ => []
 
@@ -337,9 +337,10 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
       fx.post (.echoed r)
   | .probe l n a => fx.cap n a (.probed l)
   -- iOS gives a refresh task about 30 s; the run asks its work to stop after 20
-  | .runBackground id _ => discard <| backgroundTasks.launch fx id
+  -- the launch's tag goes back with its `bgtask.complete`, so an older run's answer cannot end a newer task
+  | .runBackground id _ tag => discard <| backgroundTasks.launch fx id (tag := tag)
       { work := backgroundWork 10, deadline := .after 20_000, completion := fun o => fx.post (.ran id (describe o)) }
-  | .expireBackground id => backgroundTasks.expire fx id
+  | .expireBackground id tag => backgroundTasks.expire id tag
   | .bleSetup => do
       if let some s ← IO.getEnv "NATIVEDEMO_BLE_SERVICE" then
         if !s.isEmpty then fx.post (.bleService s)
@@ -393,7 +394,7 @@ def app : Native.App Model Msg Cmd Host :=
       else if (j.getObjValAs? String "scene").toOption == some "active" then some .foreground
       else if (j.getObjVal? "scene").isOk then none
       else match BackgroundTasks.systemEvent? j with
-        | some (expired, id, kind) => some (.bgtask expired id kind)
+        | some e => some (.bgtask e.expired e.id e.kind e.tag)
         | none => some (.system j) }
 
 initialize Native.register app

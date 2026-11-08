@@ -48,8 +48,8 @@ structure App (Model Msg Cmd Host : Type) extends CmdApp Model Msg Cmd Host wher
   /-- Commands run once, at start. -/
   boot : List Cmd := []
   /-- What the shell's system events mean to the app (`{"scene":"active"|"inactive"|"background"}`,
-  `{"captured":bool}` while the screen is recorded or mirrored, `{"bgtask":{"id","kind"}}` when iOS
-  launches a background task and `{"bgtaskExpired":{"id","kind"}}` when it expires one): a host message,
+  `{"captured":bool}` while the screen is recorded or mirrored, `{"bgtask":{"id","kind","tag"}}` when iOS
+  launches a background task and `{"bgtaskExpired":{"id","kind","tag"}}` when it expires one): a host message,
   or nothing. -/
   system : Json → Option Host := fun _ => none
 

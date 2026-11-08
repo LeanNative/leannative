@@ -246,8 +246,8 @@ drains. Threads Lean did not create are registered (`lean_initialize_thread`) on
 **System events.** The shell reports what happens to the app, not to a control, through
 `leannative_system`: `{"scene":"active"|"inactive"|"background"}` on every scene-phase change and
 `{"captured":true|false}` when screen recording or mirroring starts or stops,
-`{"bgtask":{"id":…,"kind":"refresh"|"processing"}}` when iOS launches one of the app's background tasks
-and `{"bgtaskExpired":{"id":…,"kind":…}}` when it expires one. The app's `App.system` turns each into a
+`{"bgtask":{"id":…,"kind":"refresh"|"processing","tag":n}}` when iOS launches one of the app's background
+tasks and `{"bgtaskExpired":{"id":…,"kind":…,"tag":n}}` when it expires one. The app's `App.system` turns each into a
 host message (or ignores it); Winnow stops networking in the background and hides recovery words while
 the screen is captured.
 
@@ -258,9 +258,16 @@ thing in `didFinishLaunching` (refresh tasks also need `UIBackgroundModes` `fetc
 (`{"id":…,"kind":"refresh"|"processing","after":s,"requiresNetwork":bool,"requiresPower":bool}`, all but
 `id` optional; it replaces that identifier's earlier request; iOS decides when, and whether, it runs).
 When the task launches the app hears `{"bgtask":…}`, does its work, and answers
-`bgtask.complete {"id":…,"success":bool}`. On expiration it hears `{"bgtaskExpired":…}` and should stop
-and complete; a task still pending one second later is completed by the shell with `success: false`
-(a later `bgtask.complete` answers `{"ok":false,"error":"notPending"}`). `bgtask.refreshStatus` answers
+`bgtask.complete {"id":…,"success":bool,"tag":n}` with the launch's `tag`. On expiration it hears
+`{"bgtaskExpired":…}` and should stop and complete; a task still pending one second later is completed by
+the shell with `success: false` (a later `bgtask.complete` answers `{"ok":false,"error":"notPending"}`).
+An expiry that comes after the app has answered needs no second answer: one could only end a task launched
+since. A launch of an identifier ends the task still pending under it, and the tag is what keeps the old
+task's run from ending the new one: each launch has its own (a serial), and a `bgtask.complete` with a
+`tag` that is not the pending launch's answers `notPending` and leaves that task alone. That covers a run
+that finishes on its own after iOS launched its successor but before the app heard of it, which nothing in
+the app can tell apart. A `bgtask.complete` without a `tag` completes whatever task is pending under its
+identifier, as before tags. `bgtask.refreshStatus` answers
 `{"status":"available"|"denied"|"restricted"}` (Background App Refresh). A system event that arrives
 before the store has started (a task launched early) starts it. The simulator refuses every request
 (`bgtask.schedule` answers `unavailable`), so launches and expirations can only be exercised on a device,
@@ -273,10 +280,11 @@ delivers its completion at most once (exactly once when started or expired), and
 while the work runs, cancels the work (`IO.cancel` plus the app's `cancel` hook) and completes only after
 the work and its `cleanup` have returned, so a late success is never reported. Cancellation is
 cooperative: work that checks neither `IO.checkCanceled` nor anything its hook can interrupt keeps
-running, and so does the wait for it. `BackgroundTasks` keeps the runs by identifier: `launch fx id config`
-on `{"bgtask":…}`, `expire fx id` on `{"bgtaskExpired":…}` (an expiry with no run is answered
-`bgtask.complete false` at once), each run answering `bgtask.complete` with its outcome;
-`BackgroundTasks.systemEvent?` reads both events. The module documentation states every race and
+running, and so does the wait for it. `BackgroundTasks` keeps the runs by identifier: `launch fx id config (tag := e.tag)`
+on `{"bgtask":…}`, `expire id e.tag` on `{"bgtaskExpired":…}` (an expiry with no run answers nothing),
+each run answering `bgtask.complete` with its outcome and its launch's tag, except a run a later launch of
+its identifier superseded, which answers nothing (the shell has ended its task); `BackgroundTasks.systemEvent?`
+reads both events, tag and all. The module documentation states every race and
 failure case, and `LeanNativeTest/BackgroundRun.lean` (`make check`) tests each one with gates. native-demo
 runs iOS-launched tasks through it, and its headless selftest runs one run to completion and one past
 its deadline (verified on the iOS 27 simulator and under Mac Catalyst on arm64 and x86_64). These are
