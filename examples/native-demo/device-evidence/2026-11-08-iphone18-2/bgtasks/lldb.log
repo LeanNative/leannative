@@ -1,0 +1,61 @@
+(lldb) command source -s 0 '<tmp>/bg.lldb'
+Executing commands in '<tmp>/bg.lldb'.
+(lldb) device select <udid>
+(lldb) device process attach -p 31601
+(lldb) command script import <repo>/framework/native/ci/device_bgtasks.py
+(lldb) script device_bgtasks.wait_stopped(lldb.debugger)
+warning: libobjc.A.dylib is being read from process memory. This indicates that LLDB could not find the on-disk shared cache for this device. This will likely reduce debugging performance.
+
+Process 31601 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = signal SIGSTOP
+      frame #0: 0x000000025094fcd4 
+libsystem_kernel.dylib`mach_msg2_trap:
+->  0x25094fcd4 <+8>: ret    
+
+libsystem_kernel.dylib`macx_swapon:
+    0x25094fcd8 <+0>: mov    x16, #-0x30               ; =-48 
+    0x25094fcdc <+4>: svc    #0x80
+    0x25094fce0 <+8>: ret    
+Target 0: (NativeDemo) stopped.
+device_bgtasks: the app is stopped
+(lldb) thread select 1
+(lldb) expression -l objc -- (void)[(id)[NSClassFromString(@"BGTaskScheduler") sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"art.fralex.leannative.nativedemo.refresh"]
+* thread #1, queue = 'com.apple.main-thread', stop reason = signal SIGSTOP
+      frame #0: 0x000000025094fcd4 
+libsystem_kernel.dylib`mach_msg2_trap:
+->  0x25094fcd4 <+8>: ret    
+
+libsystem_kernel.dylib`macx_swapon:
+    0x25094fcd8 <+0>: mov    x16, #-0x30               ; =-48 
+    0x25094fcdc <+4>: svc    #0x80
+    0x25094fce0 <+8>: ret    
+(lldb) script device_bgtasks.run_for(lldb.debugger, 5)
+device_bgtasks: ran 5 s
+(lldb) expression -l objc -- (void)[(id)[NSClassFromString(@"BGTaskScheduler") sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"art.fralex.leannative.nativedemo.processing"]
+Process 31601 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = signal 2147483647
+      frame #0: 0x000000025094fcd4 libsystem_kernel.dylib`mach_msg2_trap + 8
+libsystem_kernel.dylib`mach_msg2_trap:
+    0x25094fcd4 <+8>: ret    
+
+libsystem_kernel.dylib`macx_swapon:
+    0x25094fcd8 <+0>: mov    x16, #-0x30               ; =-48 
+    0x25094fcdc <+4>: svc    #0x80
+    0x25094fce0 <+8>: ret    
+Target 0: (NativeDemo) stopped.
+(lldb) script device_bgtasks.run_for(lldb.debugger, 0.5)
+device_bgtasks: ran 0.5 s
+(lldb) expression -l objc -- (void)[(id)[NSClassFromString(@"BGTaskScheduler") sharedScheduler] _simulateExpirationForTaskWithIdentifier:@"art.fralex.leannative.nativedemo.processing"]
+Process 31601 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = signal SIGSTOP
+      frame #0: 0x000000025094fcd4 libsystem_kernel.dylib`mach_msg2_trap + 8
+libsystem_kernel.dylib`mach_msg2_trap:
+->  0x25094fcd4 <+8>: ret    
+
+libsystem_kernel.dylib`macx_swapon:
+    0x25094fcd8 <+0>: mov    x16, #-0x30               ; =-48 
+    0x25094fcdc <+4>: svc    #0x80
+    0x25094fce0 <+8>: ret    
+Target 0: (NativeDemo) stopped.
+(lldb) process detach
+Process 31601 detached

@@ -69,7 +69,7 @@ rewrites each object's `LC_BUILD_VERSION` (platform 7 = iOS Simulator, 2 = iOS, 
 17.0, the deployment target) — `scripts/retarget_ar.py`. Lean does not support this. `<out>/lib/.platform`
 records the platform the libraries were made for, and a run for another platform makes them again, so one
 `build/` serves every platform in turn. Verified on the iOS Simulator (GMP big numbers, tasks, libuv TCP,
-capabilities) and under Mac Catalyst on both architectures; a device build links but has not been run.
+capabilities) and under Mac Catalyst on both architectures, and on an iPhone (iOS 27.2: `ci/device-run`, below).
 
 **Mac Catalyst** (`maccatalyst`) builds a universal app, arm64 + x86_64. The x86_64 half of each library
 comes from Lean's official macOS x86_64 release of the same version, which only its `lib/` archives are
@@ -272,7 +272,8 @@ identifier, as before tags. `bgtask.refreshStatus` answers
 before the store has started (a task launched early) starts it. The simulator refuses every request
 (`bgtask.schedule` answers `unavailable`), so launches and expirations can only be exercised on a device,
 where Xcode's debugger launches a scheduled task with
-`e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"…"]`.
+`e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"…"]`
+(`framework/native/ci/device-run` does, below).
 
 **Running the work: `LeanNative.Native.BackgroundRun`** (optional; import it). A `BackgroundRun` is one job
 that may be expired at any moment: it linearizes start, expiry and the work's end under one lock,
@@ -561,6 +562,58 @@ The UI tests need macOS's Automation Mode, which a Mac that asks for authenticat
 it beforehand with `sudo automationmodetool enable-automationmode-without-authentication`.
 `TEST_RUNNER_NATIVEDEMO_KEYCHAIN=access-group` tells the selftest test to expect the real Keychain rather
 than `-34018`.
+
+**On a device: `framework/native/ci/device-run`.** What only an iPhone or iPad shows, in one run of
+native-demo, kept as evidence. A person runs it, at a Mac with the device connected and unlocked:
+
+```
+DEVICE=<UDID or name> DEVELOPMENT_TEAM=<team> framework/native/ci/device-run <evidence directory>
+```
+
+It builds native-demo signed with the team's development profile already on the Mac (one that lists the
+device; Xcode asks Apple for nothing), checks that it has no Swift, installs it, and launches it with its
+console (`devicectl … --console`), so the app's stdout is the run's record: the selftest
+(`NATIVEDEMO_SELFTEST`), Face ID asked 8 s after launch (`NATIVEDEMO_AUTH_AFTER`) and the Bluetooth section
+(`NATIVEDEMO_BLE_SERVICE`, a Ledger Nano X's service by default). The person goes first: Face ID when it
+asks, then Probes → BLE state and BLE connect with the peripheral awake (the script waits up to 5 minutes).
+Then, once the selftest has scheduled its background tasks, lldb has iOS launch the refresh task and then
+launch and expire the processing task (`ci/device_bgtasks.py`). lldb holds the app stopped while it attaches,
+a minute or two when it has no copy of the device's iOS and reads the system libraries from the device, and
+an answer given meanwhile comes back stale (`auth: dropped a stale answer`), hence the order. The device must
+stay unlocked with the app in front: iOS refuses to install or open an app on a locked device, and lldb to
+attach to one; the script asks and tries again for two minutes at each of those steps. The evidence directory gets
+`console.log`, `lldb.log`, `device.json` (model and iOS version, no name or UDID), `run.json` (the revision
+built, Xcode, the launch environment) and `results.json`, where `ci/device-results` grades each check from
+the console: `passed`, `failed` (the line is quoted) or `not reached`, never inferred.
+
+| check | what the run shows | how |
+|---|---|---|
+| `selftest`, `tcp`, `background-run`, `effect-scope` | the selftest on a device: Lean's libuv TCP, BackgroundRun's completion and expiry, EffectScope's drain | headless |
+| `keychain-device-only` | the typed client's create-only `add`, `alreadyExists`, read, delete, read after delete, in the shell's device-only class (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`) | headless |
+| `keychain-classes` | a `synchronizable` item written and read, and unseen by a device-only read (`-25300`) | headless |
+| `bgtask-schedule` | `bgtask.refreshStatus` `available`; `bgtask.schedule` accepted for both tasks (the simulator and the Mac answer `unavailable`); an unlisted identifier refused | headless |
+| `bgtask-launch` | iOS launches the refresh task (`{"bgtask":…}`); its BackgroundRun completes and answers `bgtask.complete` | lldb |
+| `bgtask-expiration` | iOS launches the processing task and expires it (`{"bgtaskExpired":…}`); its run ends `expired` | lldb |
+| `face-id` | `auth` answered `authenticated` | the person |
+| `ble-state`, `ble-connect` | CoreBluetooth on iOS: `poweredOn`, then the first peripheral offering the service connected (its id, name and characteristic count) and closed | the person |
+
+Results, iPhone 17 Pro Max (iPhone18,2), iOS 27.2 (24B119), Xcode 27.2, a Ledger Nano X, 2026-11-08, in
+[`examples/native-demo/device-evidence/2026-11-08-iphone18-2`](../../examples/native-demo/device-evidence/2026-11-08-iphone18-2):
+every check passed, in two runs, not one. `selftest-face-id-ble/` is a `device-run` of 8cbbf85 (`run.json`):
+the selftest, Face ID and BLE passed; its lldb step was an earlier version and reached neither task.
+`bgtasks/` is the same app launched with devicectl's console and lldb running `device_bgtasks.py`'s commands
+(`lldb.log`, the UDID and local paths taken out): both background tasks and the selftest passed; nobody did
+the hand steps. No single run has all twelve: in the runs that tried, Face ID was answered while lldb held
+the app (stale), or lldb did not get through (it crashed once while the app ran between expressions, and once
+could not resolve `NSClassFromString`, hence the `@import Foundation` now sent first, not yet run on a device).
+
+Not covered: the Keychain item's class is the shell's code path (the run shows the classes kept apart, not
+the attribute read back), and nothing reads an item while the device is locked; a background task iOS
+schedules by itself (lldb asks for each launch and expiry); Face ID's failure answers (`cancelled`,
+`denied`), which only a person can cause; Bluetooth beyond connect and close (subscribe, write, read are a
+peripheral's protocol, Winnow's); CloudKit and iCloud Keychain sync between devices (native-demo has no
+iCloud container: `cloudkit.*` answers `missingEntitlement`); the HTTP probes, which need the Mac's SOCKS
+proxy; the renderer and the UI tests, which run on the simulator and under Catalyst. CI does not run it.
 
 ## View nodes
 

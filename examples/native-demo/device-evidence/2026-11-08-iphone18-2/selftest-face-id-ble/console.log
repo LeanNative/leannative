@@ -1,0 +1,34 @@
+selftest: TCP echo: echo: selftest
+selftest: background run: completed, work started, success true
+selftest: background run past its deadline: expired, work started, success false
+selftest: effect scope: started, drained true, late result delivered false, now 0 tasks
+selftest: typed keychain.add: ok added
+selftest: typed keychain.add again: ok alreadyExists
+selftest: typed keychain.get: ok 010203
+selftest: typed keychain.delete: ok 
+selftest: typed keychain.get after delete: ok none
+selftest: typed http.get ftp: failed bad-url
+selftest: typed http.get unreachable: failed system (-1004)
+selftest: typed cloudkit.account: unsupported missingEntitlement
+selftest: Refresh status: {"status":"available"}
+selftest: Schedule refresh: {"ok":true}
+selftest: Schedule processing: {"ok":true}
+selftest: Schedule unlisted id: {"detail":"not registered: list it in BGTaskSchedulerPermittedIdentifiers","error":"notPermitted","ok":false}
+selftest: Complete (none pending): {"error":"notPending","ok":false}
+selftest: CloudKit account: {"detail":"no CloudKit in the com.apple.developer.icloud-services entitlement","error":"missingEntitlement"}
+selftest: CloudKit query: {"detail":"no CloudKit in the com.apple.developer.icloud-services entitlement","error":"missingEntitlement"}
+selftest: Keychain sync set: {"ok":true,"status":0}
+selftest: Keychain sync get: {"hex":"00ff10","status":0}
+selftest: Keychain local get: {"hex":null,"status":-25300}
+selftest: Keychain sync delete: {"ok":true,"status":0}
+auth: asking (8 s after launch, NATIVEDEMO_AUTH_AFTER)
+auth: authenticated
+ble: BLE state: ok poweredOn
+ble: BLE connected: id 5FDF35E5-78D9-B556-5CAE-2CAF335E2DC1, name 69E6, service 13D63400-2C97-0004-0000-4C6564676572, 3 characteristics
+ble: BLE closed: ok 
+selftest: HTTP via SOCKS: {"code":-1001,"domain":"NSURLErrorDomain","error":"The request timed out."}
+selftest: HTTP bad proxy: {"error":"bad-proxy"}
+selftest: done
+Launched application with art.fralex.leannative.nativedemo bundle identifier.
+Waiting for the application to terminate...
+App terminated due to signal 9.

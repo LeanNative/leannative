@@ -1,0 +1,183 @@
+#!/bin/bash
+# native-demo on a physical iPhone or iPad, with what it answered kept as evidence:
+#
+#   DEVICE=<UDID or name> DEVELOPMENT_TEAM=<team> framework/native/ci/device-run <out>
+#
+# What only a device shows, in one run of the app (framework/native/README.md, "On a device"):
+#   1. build native-demo (Debug, signed with the team's development profile already on this Mac: no
+#      -allowProvisioningUpdates, nothing asked of Apple), check that it has no Swift, install it;
+#   2. launch it with its console (devicectl --console: the app's stdout is the run's record) and
+#      NATIVEDEMO_SELFTEST (TCP, BackgroundRun, EffectScope, the Keychain's classes, bgtask.schedule …),
+#      NATIVEDEMO_AUTH_AFTER (Face ID asked a few seconds after launch) and NATIVEDEMO_BLE_SERVICE (the Probes
+#      tab's Bluetooth section, a Ledger Nano X's service by default);
+#   3. the person at the device: Face ID when it asks, then Probes → BLE state and BLE connect (allowing
+#      Bluetooth the first time) with the peripheral awake; the run waits up to HAND_SECONDS for both;
+#   4. once the selftest is done (it schedules both), lldb has iOS launch the refresh task and then launch and
+#      expire the processing task (device_bgtasks.py), as Apple says to test background tasks. lldb holds the
+#      app stopped meanwhile, so an answer given then comes back stale: the person goes first.
+# The device stays unlocked with the app in front throughout: lldb refuses a locked device, and iOS sends a
+# locked or covered app to the background.
+#
+# <out> (must not exist or be empty) gets console.log (the app's stdout), lldb.log, device.json (model and
+# iOS version: no name, no UDID), run.json (the revision built, Xcode, times) and results.json with
+# framework/native/ci/device-results, which grades every check from console.log: passed, failed or not
+# reached. The app is left installed; `xcrun devicectl device uninstall app --device … art.fralex.leannative.nativedemo`
+# removes it.
+#
+#   DEVICE            the device (required): a UDID or name from `xcrun devicectl list devices`
+#   DEVELOPMENT_TEAM  the team whose development profile lists the device (required unless DEVICE_APP)
+#   DEVICE_APP        an already built and signed NativeDemo.app: no build (run.json says so)
+#   BLE_SERVICE       the peripheral's service UUID (default a Ledger Nano X's)
+#   AUTH_AFTER        seconds after launch that Face ID is asked (default 8)
+#   HAND_SECONDS      how long to wait for the person (default 300)
+#   SELFTEST_SECONDS  how long to wait for the selftest after the person (default 180)
+set -euo pipefail
+CI="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$CI/../../.." && pwd)"
+OUT="${1:?evidence directory}"
+DEVICE="${DEVICE:?set DEVICE to a UDID or name from devicectl list devices}"
+BLE_SERVICE="${BLE_SERVICE:-13d63400-2c97-0004-0000-4c6564676572}"
+AUTH_AFTER="${AUTH_AFTER:-8}"
+HAND_SECONDS="${HAND_SECONDS:-300}"
+SELFTEST_SECONDS="${SELFTEST_SECONDS:-180}"
+BUNDLE=art.fralex.leannative.nativedemo
+mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
+[ -z "$(ls -A "$OUT")" ] || { echo "$OUT is not empty" >&2; exit 2; }
+say() { echo "device-run: $*"; }
+
+# the device, by UDID, and its record (devicectl's JSON; nothing that names the person)
+devicectl() { xcrun devicectl "$@"; }
+devicectl device info details --timeout 60 --device "$DEVICE" --json-output "$OUT/.details.json" >/dev/null
+/usr/bin/python3 - "$OUT/.details.json" "$OUT/device.json" > "$OUT/.udid" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))["result"]
+d, h = r["deviceProperties"], r["hardwareProperties"]
+if d.get("developerModeStatus") != "enabled":
+    sys.exit("Developer Mode is not on: Settings → Privacy & Security → Developer Mode")
+record = {"model": h.get("marketingName"), "productType": h.get("productType"), "platform": h.get("platform"),
+          "os": d.get("osVersionNumber"), "osBuild": d.get("osBuildUpdate")}
+json.dump(record, open(sys.argv[2], "w"), indent=2)
+print(h["udid"])
+PY
+UDID="$(cat "$OUT/.udid")"; rm -f "$OUT/.details.json" "$OUT/.udid"
+say "device: $(tr -d '\n' < "$OUT/device.json")"
+
+record() {
+  /usr/bin/python3 - "$OUT/run.json" "$ROOT" "$@" <<'PY'
+import datetime, json, subprocess, sys
+path, root, what = sys.argv[1:4]
+now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+def out(*a):
+    try: return subprocess.run(a, check=True, text=True, capture_output=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError): return None
+if what == "start":
+    run = {"schema": 1, "runner": "framework/native/ci/device-run", "app": "native-demo", "started_at": now,
+           "source": {"revision": out("git", "-C", root, "rev-parse", "HEAD"),
+                      "dirty": out("git", "-C", root, "status", "--porcelain", "--untracked-files=no") != ""},
+           "built": sys.argv[4], "xcode": out("xcodebuild", "-version"),
+           "environment": {"NATIVEDEMO_SELFTEST": "1", "NATIVEDEMO_AUTH_AFTER": sys.argv[5],
+                           "NATIVEDEMO_BLE_SERVICE": sys.argv[6]}}
+else:
+    run = json.load(open(path)); run.update(finished_at=now, exit_status=int(sys.argv[4]))
+json.dump(run, open(path, "w"), indent=2)
+PY
+}
+
+# 1. build, no Swift, install
+if [ -n "${DEVICE_APP:-}" ]; then
+  APP="$(cd "$DEVICE_APP" && pwd)"; BUILT="given: $APP"
+else
+  TEAM="${DEVELOPMENT_TEAM:?set DEVELOPMENT_TEAM (or DEVICE_APP)}"
+  DD="$ROOT/examples/native-demo/ios/build/DerivedData-device"
+  say "building native-demo for iOS, signed for team $TEAM"
+  BUILD_LOG="$OUT/.xcodebuild.log" DERIVED_DATA="$DD" APP_DIR="$ROOT/examples/native-demo" APP_ROOT=NativeDemo \
+    SCHEME=NativeDemo "$CI/build-ios" Debug ios CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$TEAM" \
+    "CODE_SIGN_IDENTITY=Apple Development" \
+    CODE_SIGN_ENTITLEMENTS="$ROOT/examples/native-demo/ios/NativeDemo-team.entitlements"
+  APP="$DD/Build/Products/Debug-iphoneos/NativeDemo.app"; BUILT="framework/native/ci/build-ios Debug ios"
+  (cd "$ROOT" && "$CI/check-no-swift" "$OUT/.xcodebuild.log" "$APP")
+  rm -f "$OUT/.xcodebuild.log"
+fi
+record start "$BUILT" "$AUTH_AFTER" "$BLE_SERVICE"
+STATUS=1
+CONSOLE_PID=""
+finish() {
+  [ -n "$CONSOLE_PID" ] && kill "$CONSOLE_PID" 2>/dev/null || true
+  record end "$STATUS"
+  [ -f "$OUT/console.log" ] && "$CI/device-results" "$OUT/console.log" --out "$OUT/results.json" || true
+}
+trap finish EXIT
+say "installing $BUNDLE"
+for attempt in $(seq 12); do
+  devicectl device install app --timeout 300 --device "$UDID" "$APP" > "$OUT/.install.log" 2>&1 && break
+  [ "$attempt" = 12 ] && { cat "$OUT/.install.log"; exit 1; }
+  say "the install failed (a locked device cannot take one): unlock it and keep it unlocked (trying again)"
+  sleep 10
+done
+rm -f "$OUT/.install.log"
+
+# 2. launch with the console
+ENV="{\"NATIVEDEMO_SELFTEST\":\"1\",\"NATIVEDEMO_AUTH_AFTER\":\"$AUTH_AFTER\",\"NATIVEDEMO_BLE_SERVICE\":\"$BLE_SERVICE\"}"
+# iOS refuses to open an app on a locked device: ask, and try again for two minutes
+for attempt in $(seq 12); do
+  devicectl device process launch --console --terminate-existing --device "$UDID" --environment-variables "$ENV" \
+    "$BUNDLE" > "$OUT/console.log" 2>&1 &
+  CONSOLE_PID=$!
+  # launched (the app prints its first selftest line within seconds; devicectl's own lines come late, buffered), or refused
+  for _ in $(seq 60); do
+    grep -qE "^(selftest: |Launched application)" "$OUT/console.log" && break
+    kill -0 "$CONSOLE_PID" 2>/dev/null || break
+    sleep 1
+  done
+  grep -qE "^(selftest: |Launched application)" "$OUT/console.log" && kill -0 "$CONSOLE_PID" 2>/dev/null && break
+  grep -q "could not be, unlocked" "$OUT/console.log" || { cat "$OUT/console.log"; exit 1; }
+  [ "$attempt" = 12 ] && { say "the device stayed locked"; exit 1; }
+  say "the device is locked: unlock it and keep it unlocked (trying again)"
+  sleep 5
+done
+say "launched; Face ID will ask ${AUTH_AFTER} s after launch: look at the device"
+wait_for() {  # wait_for <seconds> <extended regex>…: every pattern has a line in console.log
+  local deadline=$((SECONDS + $1)); shift
+  while [ $SECONDS -lt $deadline ]; do
+    local all=1
+    for p in "$@"; do grep -qE "$p" "$OUT/console.log" || all=0; done
+    [ $all = 1 ] && return 0
+    kill -0 "$CONSOLE_PID" 2>/dev/null || { say "the app's console ended"; return 1; }
+    sleep 1
+  done
+  return 1
+}
+# 3. the person first: an answer given while lldb holds the app stopped would come back stale
+say "on the device: answer Face ID, then Probes → BLE state, then BLE connect, with the peripheral awake (allow Bluetooth if asked)"
+wait_for "$HAND_SECONDS" '^auth: (authenticated|not authenticated|dropped)' '^ble: BLE (connected|connect:)' \
+  || say "stopped waiting for the person after $HAND_SECONDS s"
+wait_for "$SELFTEST_SECONDS" '^selftest: done$' || say "the selftest did not finish"
+grep -q '^selftest: Schedule processing:' "$OUT/console.log" || { say "the selftest scheduled no background task"; exit 1; }
+
+# 4. background tasks through lldb: the app stops while lldb attaches (keep the device unlocked)
+devicectl device info processes --timeout 60 --device "$UDID" --json-output "$OUT/.processes.json" >/dev/null 2>&1 || true
+/usr/bin/python3 - "$OUT/.processes.json" > "$OUT/.pid" <<'PY'
+import json, sys
+try: ps = json.load(open(sys.argv[1]))["result"]["runningProcesses"]
+except (OSError, KeyError, ValueError): ps = []
+ps = [p for p in ps if p.get("executable", "").endswith("/NativeDemo.app/NativeDemo")]
+print(ps[0]["processIdentifier"] if ps else "")
+PY
+PID="$(cat "$OUT/.pid")"; rm -f "$OUT/.processes.json" "$OUT/.pid"
+[ -n "$PID" ] || { say "native-demo is not running on the device"; exit 1; }
+say "background tasks: lldb attaches to pid $PID"
+# lldb refuses a locked device ("Device needs to be unlocked."), and a refusal sticks for that lldb: a new one
+# each time, for two minutes
+/usr/bin/python3 "$CI/device_bgtasks.py" "$UDID" "$PID" "$BUNDLE." > "$OUT/.bgtasks.lldb"
+for attempt in $(seq 12); do
+  xcrun lldb --batch -s "$OUT/.bgtasks.lldb" > "$OUT/lldb.log" 2>&1 || true
+  grep -q "needs to be unlocked" "$OUT/lldb.log" || break
+  say "lldb: the device is locked: unlock it and keep it unlocked (trying again)"
+  sleep 10
+done
+rm -f "$OUT/.bgtasks.lldb"
+grep -E "^error|device_bgtasks:|detached|stop reason" "$OUT/lldb.log" | sed 's/^/  lldb: /' || true
+wait_for 30 "^background run $BUNDLE\\.refresh:" "^background run $BUNDLE\\.processing:" || say "a background run did not end"
+
+sleep 2
+STATUS=0

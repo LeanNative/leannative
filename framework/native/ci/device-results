@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""What a device run of native-demo showed, read from the app's console (framework/native/ci/device-run).
+
+  framework/native/ci/device-results <console.log> [--out results.json]
+
+Each check is one or more lines native-demo prints to stdout (its selftest, `bgtask …`, `background run …`,
+`auth: …` and `ble: …`), each matched against the answer a device should give. A check is
+
+  passed       every line it needs is there, with the expected answer
+  failed       a line it needs is there with another answer (the line is quoted)
+  not reached  a line it needs never appeared: the run did not get that far, or nobody did the hand step
+
+Nothing is inferred: a check that did not print its line is "not reached", never "passed". The table goes to
+stdout and the manifest (schema "leannative.device-results/1") to --out. Python 3 stdlib.
+"""
+import argparse
+import json
+import re
+import sys
+
+SCHEMA = "leannative.device-results/1"
+ID = "art.fralex.leannative.nativedemo."
+
+# (name, what it shows, [(the line's prefix, the expected line as a regular expression)]); a prefix starting
+# "re:" is a regular expression
+CHECKS = [
+    ("selftest", "the selftest ran to its end", [("selftest: done", r"selftest: done")]),
+    ("tcp", "Lean's libuv TCP: an echo server and client in the app",
+     [("selftest: TCP echo:", r"selftest: TCP echo: echo: selftest")]),
+    ("background-run", "BackgroundRun: one run completes, one is expired past its deadline",
+     [("selftest: background run:", r"selftest: background run: completed, work started, success true"),
+      ("selftest: background run past its deadline:",
+       r"selftest: background run past its deadline: expired, work started, success false")]),
+    ("effect-scope", "EffectScope: an invalidation drains a task and drops its late result",
+     [("selftest: effect scope:", r"selftest: effect scope: started, drained true, late result delivered false, now 0 tasks")]),
+    ("keychain-device-only", "the Keychain's device-only class (WhenUnlockedThisDeviceOnly): create-only add, read, delete",
+     [("selftest: typed keychain.add:", r"selftest: typed keychain.add: ok added"),
+      ("selftest: typed keychain.add again:", r"selftest: typed keychain.add again: ok alreadyExists"),
+      ("selftest: typed keychain.get:", r"selftest: typed keychain.get: ok 010203"),
+      ("selftest: typed keychain.delete:", r"selftest: typed keychain.delete: ok\s*"),
+      ("selftest: typed keychain.get after delete:", r"selftest: typed keychain.get after delete: ok none")]),
+    ("keychain-classes", "a synchronizable item is not the device-only class's: written, read, unseen by a device-only read",
+     [("selftest: Keychain sync set:", r'selftest: Keychain sync set: \{"ok":true,"status":0\}'),
+      ("selftest: Keychain sync get:", r'selftest: Keychain sync get: \{"hex":"00ff10","status":0\}'),
+      ("selftest: Keychain local get:", r'selftest: Keychain local get: \{"hex":null,"status":-25300\}'),
+      ("selftest: Keychain sync delete:", r'selftest: Keychain sync delete: \{"ok":true,"status":0\}')]),
+    ("bgtask-schedule", "bgtask.refreshStatus and bgtask.schedule, which the simulator and the Mac refuse",
+     [("selftest: Refresh status:", r'selftest: Refresh status: \{"status":"available"\}'),
+      ("selftest: Schedule refresh:", r'selftest: Schedule refresh: \{"ok":true\}'),
+      ("selftest: Schedule processing:", r'selftest: Schedule processing: \{"ok":true\}'),
+      ("selftest: Schedule unlisted id:", r'selftest: Schedule unlisted id: \{.*"error":"notPermitted".*\}')]),
+    ("bgtask-launch", "iOS launches the scheduled refresh task; its BackgroundRun completes",
+     [(f"bgtask launched: {ID}refresh", rf"bgtask launched: {re.escape(ID)}refresh \(refresh\)"),
+      (f"background run {ID}refresh:", rf"background run {re.escape(ID)}refresh: completed, work started, success true")]),
+    ("bgtask-expiration", "iOS launches the processing task and expires it; its BackgroundRun ends expired",
+     [(f"bgtask launched: {ID}processing", rf"bgtask launched: {re.escape(ID)}processing \(processing\)"),
+      (f"bgtask expired: {ID}processing", rf"bgtask expired: {re.escape(ID)}processing"),
+      (f"background run {ID}processing:", rf"background run {re.escape(ID)}processing: expired, work started, success \w+")]),
+    ("face-id", "Face ID through the auth capability, answered by a person",
+     [("re:auth: (?!asking)", r"auth: authenticated")]),
+    ("ble-state", "CoreBluetooth on iOS: the radio's state, after the person allowed Bluetooth",
+     [("ble: BLE state:", r"ble: BLE state: ok poweredOn")]),
+    ("ble-connect", "a Bluetooth LE peripheral offering the service found, connected and closed",
+     [("ble: BLE connect", r"ble: BLE connected: id \S+, name .+, service \S+, \d+ characteristics"),
+      ("ble: BLE closed:", r"ble: BLE closed: ok\s*")]),
+]
+
+
+def grade(lines):
+    results = []
+    for name, shows, needs in CHECKS:
+        found, worst = [], "passed"
+        for prefix, expected in needs:
+            candidates = [l for l in lines
+                          if (re.match(prefix[3:], l) if prefix.startswith("re:") else l.startswith(prefix))]
+            match = next((l for l in candidates if re.fullmatch(expected, l)), None)
+            if match is not None:
+                found.append(match)
+            elif candidates:
+                found.append(candidates[-1])
+                worst = "failed"
+            elif worst == "passed":
+                worst = "not reached"
+        results.append({"check": name, "shows": shows, "result": worst, "lines": found})
+    return results
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("console")
+    p.add_argument("--out")
+    a = p.parse_args(argv)
+    with open(a.console, encoding="utf-8", errors="replace") as f:
+        lines = [l.rstrip("\r\n") for l in f]
+    results = grade(lines)
+    for r in results:
+        print(f"{r['result']:<12} {r['check']:<21} {r['shows']}")
+        if r["result"] == "failed":
+            for l in r["lines"]:
+                print(f"{'':<12} {'':<21} {l}")
+    if a.out:
+        counts = {k: sum(r["result"] == k for r in results) for k in ("passed", "failed", "not reached")}
+        with open(a.out, "w") as f:
+            json.dump({"schema": SCHEMA, "console": a.console.rsplit("/", 1)[-1], "counts": counts, "checks": results},
+                      f, indent=2)
+            f.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
