@@ -21,7 +21,11 @@ import LeanNative.Native.Client.Bluetooth
   invalidation drains, and the typed clients (`LeanNative.Native.Client.*`) against the real shell; its lines
   are printed and shown on the Demo tab (`selftest-<n>`), so UI tests read them on iOS and Mac Catalyst alike;
 * Face ID runs in an `EffectScope` the app's going to the background ends: an answer that comes back
-  after that is dropped; going to the background and coming back from it are logged;
+  after that is dropped; going to the background and coming back from it are logged; each answer, a
+  dropped one too, and the scope's end are printed to stdout (`auth: …`, `scene: …`), and so are the
+  background tasks iOS launches and expires (`bgtask …`), for hand checks that keep the output;
+* with `NATIVEDEMO_AUTH_AFTER=<seconds>` at launch, the app asks for Face ID that long after launching, as
+  its Face ID button does, for hand checks where nobody clicks;
 * with `NATIVEDEMO_BLE_SERVICE=<a service UUID>` at launch, the Probes tab has a Bluetooth section: the
   Bluetooth state, and a connection to the first peripheral offering that service (its id and name logged),
   closed at once. Nothing else is said to the peripheral; without the variable the app never touches
@@ -73,6 +77,8 @@ inductive Host where
   | bleService (uuid : String)
   /-- one answer of the Bluetooth probes -/
   | bleSaid (line : String)
+  /-- `NATIVEDEMO_AUTH_AFTER` seconds have passed since launch: ask as the Face ID button does -/
+  | authCue
 
 inductive Msg where
   | inc
@@ -104,6 +110,9 @@ inductive Cmd where
   | selftest
   /-- at launch: reads `NATIVEDEMO_BLE_SERVICE` -/
   | bleSetup
+  /-- at launch: with `NATIVEDEMO_AUTH_AFTER=<seconds>`, asks for Face ID / Touch ID that long after
+  launch, for hand checks where nobody can click (the Face ID button's command) -/
+  | authSetup
   | bleState
   /-- connects to the first peripheral offering the service, logs it and closes the connection -/
   | bleConnect (service : String)
@@ -174,6 +183,7 @@ def update : Msg → Model → Model
   | .bleConnect, m => note m "asking: BLE connect…"
   | .host (.bleService s), m => { m with bleService := some s }
   | .host (.bleSaid line), m => note m line
+  | .host .authCue, m => note m "asking for Face ID or the passcode… (NATIVEDEMO_AUTH_AFTER)"
 
 def cmds : Msg → Model → List Cmd
   | .startTicks, m => if m.ticking then [] else [.ticker]
@@ -189,6 +199,7 @@ def cmds : Msg → Model → List Cmd
   | .host (.bgtask false id kind tag), _ => [.runBackground id kind tag]
   | .host (.bgtask true id _ tag), _ => [.expireBackground id tag]
   | .host .background, _ => [.endSession]
+  | .host .authCue, _ => [.auth]
   | _, _ => []
 
 def demoView (m : Model) : Html Msg :=
@@ -303,10 +314,14 @@ def bleStateName : Client.Bluetooth.State → String
   | .poweredOn => "poweredOn" | .poweredOff => "poweredOff" | .unauthorized => "unauthorized"
   | .unsupported => "unsupported" | .resetting => "resetting" | .unknown => "unknown"
 
-/-- A Bluetooth probe's answer: printed to stdout (the run's evidence) and logged. -/
-def bleSay (fx : Effects Host) (line : String) : IO Unit := do
+/-- A line of a run's evidence: stdout is what a hand check keeps. -/
+def printed (line : String) : IO Unit := do
   let out ← IO.getStdout
-  out.putStrLn s!"ble: {line}"; out.flush
+  out.putStrLn line; out.flush
+
+/-- A Bluetooth probe's answer: printed to stdout and logged. -/
+def bleSay (fx : Effects Host) (line : String) : IO Unit := do
+  printed s!"ble: {line}"
   fx.post (.bleSaid line)
 
 def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
@@ -331,19 +346,34 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         | .failed e => (false, toString e)
         | .stale _ => (false, "stale")
       -- a stale answer is not the session's; it is noted apart, so a test can see it was dropped
-      unless ← session.deliver token (fx.post (.authed ok detail)) do fx.post (.dropped stage)
+      let answer := if ok then "authenticated" else s!"not authenticated: {detail}"
+      unless ← session.deliver token (do printed s!"auth: {answer}"; fx.post (.authed ok detail)) do
+        printed s!"auth: dropped a stale answer: {stage}"
+        fx.post (.dropped stage)
   | .echo text => discard <| IO.asTask do
       let r ← try echoOnce 48334 text catch e => pure s!"failed: {e}"
       fx.post (.echoed r)
   | .probe l n a => fx.cap n a (.probed l)
   -- iOS gives a refresh task about 30 s; the run asks its work to stop after 20
   -- the launch's tag goes back with its `bgtask.complete`, so an older run's answer cannot end a newer task
-  | .runBackground id _ tag => discard <| backgroundTasks.launch fx id (tag := tag)
-      { work := backgroundWork 10, deadline := .after 20_000, completion := fun o => fx.post (.ran id (describe o)) }
-  | .expireBackground id tag => backgroundTasks.expire id tag
+  | .runBackground id kind tag => do
+      printed s!"bgtask launched: {id} ({kind})"
+      discard <| backgroundTasks.launch fx id (tag := tag)
+        { work := backgroundWork 10, deadline := .after 20_000,
+          completion := fun o => do printed s!"background run {id}: {describe o}"; fx.post (.ran id (describe o)) }
+  | .expireBackground id tag => do
+      printed s!"bgtask expired: {id}"
+      backgroundTasks.expire id tag
   | .bleSetup => do
       if let some s ← IO.getEnv "NATIVEDEMO_BLE_SERVICE" then
         if !s.isEmpty then fx.post (.bleService s)
+  | .authSetup => do
+      if let some s ← IO.getEnv "NATIVEDEMO_AUTH_AFTER" then
+        if let some n := s.toNat? then
+          discard <| IO.asTask (prio := .dedicated) do
+            IO.sleep (n * 1000).toUInt32
+            printed s!"auth: asking ({n} s after launch, NATIVEDEMO_AUTH_AFTER)"
+            fx.post .authCue
   | .bleState => discard <| IO.asTask (prio := .dedicated) do
       bleSay fx s!"BLE state: {shown (← Client.Bluetooth.state.call fx) bleStateName}"
   | .bleConnect service => discard <| IO.asTask (prio := .dedicated) do
@@ -352,7 +382,9 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         bleSay fx s!"BLE connected: id {c.id}, name {c.name.getD "(none)"}, service {c.service}, {c.characteristics.size} characteristics"
         bleSay fx s!"BLE closed: {shown (← (Client.Bluetooth.close c.id).call fx) fun _ => ""}"
       | r => bleSay fx s!"BLE connect: {shown r fun _ => ""}"
-  | .endSession => discard <| IO.asTask (prio := .dedicated) session.invalidate
+  | .endSession => do
+      printed "scene: background, the session's scope ends"
+      discard <| IO.asTask (prio := .dedicated) session.invalidate
   | .selftest => do
       -- a headless check for runs nobody clicks through (`NATIVEDEMO_SELFTEST=1` in the launch
       -- environment): the TCP echo and every probe in order, each answer printed to stdout and logged
@@ -386,7 +418,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         say "done"
 
 def app : Native.App Model Msg Cmd Host :=
-  { init := { count := 0, ticks := 0, ticking := false, log := [] }, update, view, cmds, host := Msg.host, perform, boot := [.selftest, .bleSetup],
+  { init := { count := 0, ticks := 0, ticking := false, log := [] }, update, view, cmds, host := Msg.host, perform, boot := [.selftest, .bleSetup, .authSetup],
     -- every system event but a scene phase is logged (the Probes tab shows bgtask launches and expirations); of
     -- the scene phases, going to the background and coming back from it are
     system := fun j =>
