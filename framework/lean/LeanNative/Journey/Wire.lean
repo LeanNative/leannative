@@ -143,6 +143,10 @@ def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
     return Json.mkObj [("path", Json.str documents.toString)]
   | "exclude-from-backup" => return Json.mkObj [("ok", true)]
   | "open" => return Json.mkObj [("ok", true)]
+  | "webauth" =>
+    -- no browser: the sign-in is cancelled, as the shell says when the person closes the sheet
+    return Json.mkObj [("ok", false), ("error", Json.str "The operation couldn’t be completed."), ("name", Json.str "canceledLogin"),
+                       ("code", toJson (1 : Int)), ("domain", Json.str "com.apple.AuthenticationServices.WebAuthenticationSession")]
   | "clipboard.set" =>
     sh.clipboard.set (str args "text")
     return Json.mkObj [("ok", true)]

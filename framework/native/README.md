@@ -308,7 +308,11 @@ URLSession: ephemeral, same-host redirects only, never https→http — Lean's r
 is sent to the proxy unresolved, there is no fallback to a direct connection, request and resource time
 out after 90 s and 180 s, and a host that is not a string or a port outside 1…65535 answers
 `{"error":"bad-proxy"}`; a system error answers its text with its `code` and `domain`),
-`open` (a URL outside the app), `bgtask.schedule/complete/refreshStatus` (background tasks, above),
+`open` (a URL outside the app), `webauth` (a sign-in in the system browser, `ASWebAuthenticationSession`: the
+URL to open and the callback it ends at, https — iOS 17.4 and later, the host among the app's `webcredentials:`
+associated domains — or a custom scheme; answers `{"ok":true,"url":…}`, the callback URL with its query, or the
+`ASWebAuthenticationSessionError` as `name` and `code`, `canceledLogin` when the person closes the sheet; one at a
+time, and the browser's cookies are shared unless `ephemeral`), `bgtask.schedule/complete/refreshStatus` (background tasks, above),
 `cloudkit.account/query/save/load/delete` (below), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
 `ble.connect` (a peripheral the system already holds connected, else the first a scan finds; answers its
 characteristics), `ble.subscribe` (notifications on; iOS pairs here, so it may wait on the user),
@@ -349,7 +353,7 @@ entitlements blob of the code signature — and when they lack CloudKit or the c
 simulator, native-demo answers `missingEntitlement`; built with the entitlement it answers
 `{"status":"noAccount","user":null}` and a query `notAuthenticated`.)
 
-**Typed clients: `LeanNative.Native.Client.*`** (optional; import them). `Client.Auth`, `Client.Keychain`,
+**Typed clients: `LeanNative.Native.Client.*`** (optional; import them). `Client.Auth`, `Client.WebAuth`, `Client.Keychain`,
 `Client.Http`, `Client.CloudKit` and `Client.Bluetooth` build each capability's arguments from a typed
 request and read its answer into a typed result or a `Client.Error`: `denied`, `cancelled`,
 `unsupported` (an unknown capability, the platform, a missing entitlement), `malformed` (never read as
