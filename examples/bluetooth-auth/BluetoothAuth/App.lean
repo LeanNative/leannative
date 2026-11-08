@@ -14,8 +14,8 @@ import BluetoothAuth.Fake
 
 Every capability is asked through the typed clients (`LeanNative.Native.Client.*`). In test mode (a Debug build,
 which the shell's `build` says, launched with `BTAUTH_E2E=1`) `auth` and `ble.*` are answered by a scripted
-sensor instead (`BluetoothAuth.Fake`), so the journey runs on a simulator and headless; a Release build never
-enters it. -/
+sensor instead (`BluetoothAuth.Fake`; `BTAUTH_E2E_SENSOR` makes it one that fails), so the journey runs on a
+simulator and headless; a Release build never enters it. -/
 
 namespace BluetoothAuth
 open LeanNative LeanNative.Native Lean
@@ -41,8 +41,8 @@ inductive Host where
   | connected (id name : String)
   | notConnected (why : String)
   | beat (bpm : Nat)
-  /-- the readings stopped: disconnected, or an error -/
-  | ended (why : String)
+  /-- the readings from this sensor stopped: disconnected, or an error -/
+  | ended (id why : String)
   | reset (ok : Bool)
   | forgotten
 
@@ -82,7 +82,10 @@ def update : Msg → Model → Model
     { m with sensor := some (id, name), connecting := false, remembered := some name, readings := 0, status := s!"connected to {name}" }
   | .host (.notConnected why), m => { m with connecting := false, status := s!"not connected: {why}" }
   | .host (.beat bpm), m => { m with bpm := some bpm, readings := m.readings + 1 }
-  | .host (.ended why), m => { m with sensor := none, connecting := false, bpm := none, status := s!"readings stopped: {why}" }
+  -- only for the sensor shown: locking has already let it go, and the locked screen says so
+  | .host (.ended id why), m =>
+    if m.sensor.map (·.1) == some id then { m with sensor := none, connecting := false, bpm := none, status := s!"readings stopped: {why}" }
+    else m
   | .host (.reset ok), m => { m with status := if ok then "energy expended reset" else "the sensor refused the reset" }
   | .host .forgotten, m => { m with remembered := none, status := "forgotten" }
 
@@ -158,7 +161,8 @@ def perform (c : Cmd) (fx₀ : Effects Host) : IO Unit := do
         -- test mode only in a Debug build: the shell's `build` capability says which this is
         let build ← IO.wait (← fx₀.ask "build" (Json.mkObj []))
         if (build.getObjValAs? Bool "debug").toOption == some true then
-          testSensor.set (some (← Fake.Sensor.new))
+          let script := ((← IO.getEnv "BTAUTH_E2E_SENSOR").bind Fake.Script.ofName?).getD .inRange
+          testSensor.set (some (← Fake.Sensor.new script))
           fx.post .testMode
   | .authenticate => discard <| IO.asTask (prio := .dedicated) do
       match ← (Client.Auth.authenticate "Unlock your heart-rate monitor").call fx with
@@ -181,15 +185,20 @@ def perform (c : Cmd) (fx₀ : Effects Host) : IO Unit := do
         let name := conn.name.getD conn.id
         discard <| (Client.Keychain.setText lastSensor name).call fx
         fx.post (.connected conn.id name)
+        -- the readings stopped: a sensor still connected (a subscription that failed, a read that timed out) is let go,
+        -- or it would stay connected with nothing on screen to disconnect it
+        let stopped (e : Client.Error) : IO Unit := do
+          unless e.name == "disconnected" do discard <| (Client.Bluetooth.close conn.id).call fx
+          fx.post (.ended conn.id (if e.name == "disconnected" then "disconnected" else why e))
         match ← (Client.Bluetooth.subscribe conn.id Fake.measurement (some 30)).call fx with
-        | .error e => fx.post (.ended (why e))
+        | .error e => stopped e
         | .ok () =>
           -- one reading at a time until the sensor goes away (closing it ends the reads with `disconnected`)
           let mut going := true
           while going do
             match ← (Client.Bluetooth.read conn.id Fake.measurement (some 15)).call fx with
             | .ok bytes => if let some r := rate bytes then fx.post (.beat r)
-            | .error e => fx.post (.ended (if e.name == "disconnected" then "disconnected" else why e)); going := false
+            | .error e => stopped e; going := false
   | .close id => discard <| IO.asTask (prio := .dedicated) do
       discard <| (Client.Bluetooth.close id).call fx
   | .resetEnergy id => discard <| IO.asTask (prio := .dedicated) do

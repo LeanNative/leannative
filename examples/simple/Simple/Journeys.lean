@@ -16,7 +16,8 @@ Each check is against the app's own `update`, and the screenshots are the websit
 namespace Simple.Journeys
 open LeanNative LeanNative.Journey
 
-/-- Count, greet, take two notes and clear them. -/
+/-- Count, greet, take two notes and clear them; then the link, the app's one capability: `open` goes to the
+shell (on a simulator Safari comes to the front, so the app is brought back), and the status shows its answer. -/
 def tour : Journey := ⟨"tour", do
   launch
   waitFor "count"
@@ -34,7 +35,12 @@ def tour : Journey := ⟨"tour", do
   expectEq "the first note" (← text "note-0") "Buy milk"
   shot "simple-notes"
   tap "clearNotes"
-  expectGone "note-0"⟩
+  expectGone "note-0"
+  tap "openSite"
+  activate
+  let opened := update (.host (.opened true)) (update .openSite app.init)
+  try waitUntil 10 s!"the status \"{opened.status}\"" do return (← text "status") == opened.status
+  catch e => failure s!"{e}; it says \"{← text "status"}\""⟩
 
 end Simple.Journeys
 
