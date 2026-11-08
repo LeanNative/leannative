@@ -1,0 +1,115 @@
+{
+  "schema": "leannative.device-results/1",
+  "console": "console.log",
+  "counts": {
+    "passed": 10,
+    "failed": 0,
+    "not reached": 2
+  },
+  "checks": [
+    {
+      "check": "selftest",
+      "shows": "the selftest ran to its end",
+      "result": "passed",
+      "lines": [
+        "selftest: done"
+      ]
+    },
+    {
+      "check": "tcp",
+      "shows": "Lean's libuv TCP: an echo server and client in the app",
+      "result": "passed",
+      "lines": [
+        "selftest: TCP echo: echo: selftest"
+      ]
+    },
+    {
+      "check": "background-run",
+      "shows": "BackgroundRun: one run completes, one is expired past its deadline",
+      "result": "passed",
+      "lines": [
+        "selftest: background run: completed, work started, success true",
+        "selftest: background run past its deadline: expired, work started, success false"
+      ]
+    },
+    {
+      "check": "effect-scope",
+      "shows": "EffectScope: an invalidation drains a task and drops its late result",
+      "result": "passed",
+      "lines": [
+        "selftest: effect scope: started, drained true, late result delivered false, now 0 tasks"
+      ]
+    },
+    {
+      "check": "keychain-device-only",
+      "shows": "the Keychain's device-only class (WhenUnlockedThisDeviceOnly): create-only add, read, delete",
+      "result": "passed",
+      "lines": [
+        "selftest: typed keychain.add: ok added",
+        "selftest: typed keychain.add again: ok alreadyExists",
+        "selftest: typed keychain.get: ok 010203",
+        "selftest: typed keychain.delete: ok ",
+        "selftest: typed keychain.get after delete: ok none"
+      ]
+    },
+    {
+      "check": "keychain-classes",
+      "shows": "a synchronizable item is not the device-only class's: written, read, unseen by a device-only read",
+      "result": "passed",
+      "lines": [
+        "selftest: Keychain sync set: {\"ok\":true,\"status\":0}",
+        "selftest: Keychain sync get: {\"hex\":\"00ff10\",\"status\":0}",
+        "selftest: Keychain local get: {\"hex\":null,\"status\":-25300}",
+        "selftest: Keychain sync delete: {\"ok\":true,\"status\":0}"
+      ]
+    },
+    {
+      "check": "bgtask-schedule",
+      "shows": "bgtask.refreshStatus and bgtask.schedule, which the simulator and the Mac refuse",
+      "result": "passed",
+      "lines": [
+        "selftest: Refresh status: {\"status\":\"available\"}",
+        "selftest: Schedule refresh: {\"ok\":true}",
+        "selftest: Schedule processing: {\"ok\":true}",
+        "selftest: Schedule unlisted id: {\"detail\":\"not registered: list it in BGTaskSchedulerPermittedIdentifiers\",\"error\":\"notPermitted\",\"ok\":false}"
+      ]
+    },
+    {
+      "check": "bgtask-launch",
+      "shows": "iOS launches the scheduled refresh task; its BackgroundRun completes",
+      "result": "not reached",
+      "lines": []
+    },
+    {
+      "check": "bgtask-expiration",
+      "shows": "iOS launches the processing task and expires it; its BackgroundRun ends expired",
+      "result": "not reached",
+      "lines": []
+    },
+    {
+      "check": "face-id",
+      "shows": "Face ID through the auth capability, answered by a person",
+      "result": "passed",
+      "lines": [
+        "auth: authenticated"
+      ]
+    },
+    {
+      "check": "ble-state",
+      "shows": "CoreBluetooth on iOS: the radio's state, after the person allowed Bluetooth",
+      "result": "passed",
+      "lines": [
+        "ble: BLE state: ok poweredOn"
+      ]
+    },
+    {
+      "check": "ble-connect",
+      "shows": "a Bluetooth LE peripheral offering the service found, connected and closed",
+      "result": "passed",
+      "lines": [
+        "ble: BLE connected: id 5FDF35E5-78D9-B556-5CAE-2CAF335E2DC1, name 69E6, service 13D63400-2C97-0004-0000-4C6564676572, 3 characteristics",
+        "ble: BLE closed: ok "
+      ]
+    }
+  ]
+}

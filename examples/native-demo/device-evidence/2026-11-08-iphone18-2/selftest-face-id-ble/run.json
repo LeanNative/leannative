@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "runner": "framework/native/ci/device-run",
+  "app": "native-demo",
+  "started_at": "2026-11-08T14:51:45+00:00",
+  "source": {
+    "revision": "8cbbf850f123f70348db0d5e1c5b199d7763ef74",
+    "dirty": false
+  },
+  "built": "framework/native/ci/build-ios Debug ios",
+  "xcode": "Xcode 27.2\nBuild version 27B52",
+  "environment": {
+    "NATIVEDEMO_SELFTEST": "1",
+    "NATIVEDEMO_AUTH_AFTER": "8",
+    "NATIVEDEMO_BLE_SERVICE": "13d63400-2c97-0004-0000-4c6564676572"
+  },
+  "finished_at": "2026-11-08T14:53:55+00:00",
+  "exit_status": 0
+}
