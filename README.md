@@ -21,7 +21,7 @@ or written per app.
 * **Proofs about application behavior.** State the invariants your app needs and prove that its updates
   preserve them. The framework supplies proofs about dispatch and sessions; each app supplies its own
   application-specific proofs.
-* **Apple platform capabilities.** Device authentication, Keychain, clipboard, file protection, HTTPS,
+* **Apple platform capabilities.** Device authentication, a sign-in in the system browser, Keychain, clipboard, file protection, HTTPS,
   CloudKit, Bluetooth LE, and iOS background tasks are available through the shell. Availability and
   signing requirements differ by platform; see the [native platform guide](framework/native/README.md).
 
@@ -114,8 +114,8 @@ native mode the app runs its own commands: `perform : Cmd → Effects Host → I
 `post` from any thread, or ask the shell for a capability with `cap`. The app registers itself in its
 root module: `initialize LeanNative.Native.register app`.
 
-**Capabilities.** What only the platform can do, by name, for any app: device authentication, the
-Keychain (device-only and iCloud), clipboard, paths and file protection, HTTPS (with SOCKS5), opening
+**Capabilities.** What only the platform can do, by name, for any app: device authentication, a sign-in in
+the system browser, the Keychain (device-only and iCloud), clipboard, paths and file protection, HTTPS (with SOCKS5), opening
 URLs, background tasks, CloudKit, and Bluetooth LE ([framework/native/README.md](framework/native/README.md)).
 
 **The proofs.** A `Spec app` (`LeanNative/Spec.lean`) is three obligations: `init_inv` (your invariant holds

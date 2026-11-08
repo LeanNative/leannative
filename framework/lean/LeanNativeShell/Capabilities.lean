@@ -40,6 +40,16 @@ def capabilities : List Capability :=
           .l "NSDictionary *result = ok ? @{@\"ok\": @YES} : @{@\"ok\": @NO, @\"error\": error.localizedDescription ?: @\"Authentication failed.\",",
           .l "                                                @\"name\": LNAuthErrorName(error), @\"code\": @(error.code), @\"domain\": error.domain ?: @\"\"};",
           .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}];"] },
+  { name := "webauth", args := "`url`, `callbackHost` and `callbackPath` (an https callback: iOS 17.4 and later, with the host in the app's `webcredentials:` associated domains) or `callbackScheme` (a custom scheme), `ephemeral`?",
+    result := "`{\"ok\":true,\"url\":…}` (the callback URL the sign-in ended at, query and all) or `{\"ok\":false,\"error\":…,\"name\":…,\"code\":…,\"domain\":…}`: a sign-in in the system browser (`ASWebAuthenticationSession`, with the browser's cookies unless `ephemeral`); `name` is the `ASWebAuthenticationSessionError` (`canceledLogin`, `presentationContextNotProvided`, `presentationContextInvalid`), `unsupported` (an https callback below iOS 17.4), `bad-url`, `bad-callback`, or `busy` (one sign-in at a time)",
+    body := [
+      .l "NSURL *url = [NSURL URLWithString:LNArgString(args, @\"url\") ?: @\"\"];",
+      b "if (!url || !([url.scheme isEqualToString:@\"https\"] || [url.scheme isEqualToString:@\"http\"])) {" [
+          .l "answer(@{@\"ok\": @NO, @\"error\": @\"Not an http(s) URL.\", @\"name\": @\"bad-url\"});",
+          .l "return;"],
+      .l "NSString *host = LNArgString(args, @\"callbackHost\"), *path = LNArgString(args, @\"callbackPath\"), *scheme = LNArgString(args, @\"callbackScheme\");",
+      .l "BOOL ephemeral = [LNArgNumber(args, @\"ephemeral\") boolValue];",
+      .l "[LNWebAuth.shared start:url host:host path:path scheme:scheme ephemeral:ephemeral answer:answer];"] },
   { name := "keychain.get", args := "`key`, `service`?, `synchronizable`?, `hex`?",
     result := "`{\"value\":…,\"status\":…}` or `{\"value\":null,\"status\":…}` (`service` defaults to the bundle id; `status` is the `OSStatus`: `-25300` for no such item); with `hex`, `{\"hex\":…|null,\"status\":…}`: the raw bytes",
     body := [
@@ -271,6 +281,7 @@ set_option maxRecDepth 8000 in
 def capsBefore : List Stmt := [
     .pp "#import \"LeanNativeShell.h\"",
     .pp "#import <LocalAuthentication/LocalAuthentication.h>",
+    .pp "#import <AuthenticationServices/AuthenticationServices.h>",
     .pp "#import <Security/Security.h>",
     .pp "#import <CoreBluetooth/CoreBluetooth.h>",
     .pp "#import <Network/Network.h>",
@@ -415,6 +426,75 @@ def authErrorName : List Stmt := [
             .l "case LAErrorBiometryLockout: return @\"biometryLockout\";",
             .l "default: return @\"unknown\";"]],
     .blank]
+
+set_option maxRecDepth 8000 in
+/-- `LNWebAuth`, for `webauth` alone: the one `ASWebAuthenticationSession` at a time, held until it ends, and the
+window it is presented from. An app without `webauth` does not get it (nor AuthenticationServices). -/
+def webAuthClass : List Stmt := [
+    .l "/// A sign-in in the system browser (`webauth`): one session at a time, kept alive until it answers.",
+    .l "@interface LNWebAuth : NSObject <ASWebAuthenticationPresentationContextProviding>",
+    .l "+ (instancetype)shared;",
+    .l "- (void)start:(NSURL *)url host:(nullable NSString *)host path:(nullable NSString *)path scheme:(nullable NSString *)scheme",
+    .l "    ephemeral:(BOOL)ephemeral answer:(LNAnswer)answer;",
+    .l "@end",
+    .blank,
+    b "@implementation LNWebAuth {" [
+        .l "ASWebAuthenticationSession *_session;"],
+    .blank,
+    b "+ (instancetype)shared {" [
+        .l "static LNWebAuth *shared;",
+        .l "static dispatch_once_t once;",
+        .l "dispatch_once(&once, ^{ shared = [LNWebAuth new]; });",
+        .l "return shared;"],
+    .blank,
+    .l "/// An `ASWebAuthenticationSessionError`'s name (`unknown` for any other error).",
+    b "static NSString *LNWebAuthErrorName(NSError *error) {" [
+        .l "if (![error.domain isEqualToString:ASWebAuthenticationSessionErrorDomain]) return @\"unknown\";",
+        b "switch ((ASWebAuthenticationSessionErrorCode)error.code) {" [
+            .l "case ASWebAuthenticationSessionErrorCodeCanceledLogin: return @\"canceledLogin\";",
+            .l "case ASWebAuthenticationSessionErrorCodePresentationContextNotProvided: return @\"presentationContextNotProvided\";",
+            .l "case ASWebAuthenticationSessionErrorCodePresentationContextInvalid: return @\"presentationContextInvalid\";",
+            .l "default: return @\"unknown\";"]],
+    .blank,
+    .l "/// The window the browser sheet is presented from: the key window of a foreground scene, else any window.",
+    b "- (ASPresentationAnchor)presentationAnchorForWebAuthenticationSession:(ASWebAuthenticationSession *)session {" [
+        .l "UIWindow *any = nil;",
+        b "for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {" [
+            .l "if (![scene isKindOfClass:UIWindowScene.class]) continue;",
+            .l "UIWindow *key = ((UIWindowScene *)scene).keyWindow;",
+            .l "if (key && scene.activationState == UISceneActivationStateForegroundActive) return key;",
+            .l "if (key && !any) any = key;"],
+        .l "return any ?: [UIWindow new];"],
+    .blank,
+    b "- (void)start:(NSURL *)url host:(NSString *)host path:(NSString *)path scheme:(NSString *)scheme ephemeral:(BOOL)ephemeral answer:(LNAnswer)answer {" [
+        .l "if (_session) { answer(@{@\"ok\": @NO, @\"error\": @\"A sign-in is already open.\", @\"name\": @\"busy\"}); return; }",
+        .l "void (^done)(NSURL *, NSError *) = ^(NSURL *callback, NSError *error) {",
+        .l "    NSDictionary *result = callback ? @{@\"ok\": @YES, @\"url\": callback.absoluteString}",
+        .l "        : @{@\"ok\": @NO, @\"error\": error.localizedDescription ?: @\"The sign-in did not finish.\",",
+        .l "            @\"name\": LNWebAuthErrorName(error), @\"code\": @(error.code), @\"domain\": error.domain ?: @\"\"};",
+        .l "    dispatch_async(dispatch_get_main_queue(), ^{ self->_session = nil; answer(result); });",
+        .l "};",
+        .l "ASWebAuthenticationSession *session = nil;",
+        b "if (host.length > 0 && path.length > 0) {" [
+            b "if (@available(iOS 17.4, *)) {" [
+                .l "session = [[ASWebAuthenticationSession alloc] initWithURL:url",
+                .l "    callback:[ASWebAuthenticationSessionCallback callbackWithHTTPSHost:host path:path] completionHandler:done];"],
+            b "else {" [
+                .l "answer(@{@\"ok\": @NO, @\"error\": @\"An https callback needs iOS 17.4.\", @\"name\": @\"unsupported\"});",
+                .l "return;"]],
+        b "else if (scheme.length > 0) {" [
+            .l "session = [[ASWebAuthenticationSession alloc] initWithURL:url callbackURLScheme:scheme completionHandler:done];"],
+        b "else {" [
+            .l "answer(@{@\"ok\": @NO, @\"error\": @\"Name an https callback (host and path) or a callback scheme.\", @\"name\": @\"bad-callback\"});",
+            .l "return;"],
+        .l "session.prefersEphemeralWebBrowserSession = ephemeral;",
+        .l "session.presentationContextProvider = self;",
+        .l "_session = session;",
+        b "if (![session start]) {" [
+            .l "_session = nil;",
+            .l "answer(@{@\"ok\": @NO, @\"error\": @\"The sign-in could not start.\", @\"name\": @\"presentationContextInvalid\"});"]],
+    .blank,
+    .l "@end"]
 
 set_option maxRecDepth 8000 in
 def bluetoothClass : List Stmt := [
@@ -712,8 +792,8 @@ def selects (uses : List String) (name : String) : Bool :=
   uses.any fun u => u == name || (u.endsWith ".*" && (u.splitOn ".").headD u == (name.splitOn ".").headD name)
 
 /-- `LNCapabilities.m` for an app that uses `uses` (none: every capability, which `leannative-shell` prints).
-Only what a selected capability needs is printed: without `auth` there is no LocalAuthentication, and without a
-`ble.*` capability no CoreBluetooth and no `LNBluetooth`, so the binary does not link a framework that App Store
+Only what a selected capability needs is printed: without `auth` there is no LocalAuthentication, without `webauth`
+no AuthenticationServices and no `LNWebAuth`, and without a `ble.*` capability no CoreBluetooth and no `LNBluetooth`, so the binary does not link a framework that App Store
 Connect then asks a purpose string for. Any other request answers `unknownCapability`, and
 `Manifest.callProblems` already refuses an app whose code calls a capability `uses` leaves out. -/
 def capsFileFor (uses : Option (List String)) : List Stmt :=
@@ -722,11 +802,14 @@ def capsFileFor (uses : Option (List String)) : List Stmt :=
     | some us => capabilities.filter (selects us ·.name)
   let has (fam : String) := chosen.any fun c => (c.name.splitOn ".").headD c.name == fam
   let auth := chosen.any (·.name == "auth")
+  let webauth := chosen.any (·.name == "webauth")
   let ble := has "ble"
   let imports := (capsBefore.take capsImports).filter fun
     | .pp t => (auth || !t.contains "LocalAuthentication") && (ble || !t.contains "CoreBluetooth")
+        && (webauth || !t.contains "AuthenticationServices")
     | _ => true
-  imports ++ argHelpers ++ (if ble then bluetoothClass ++ [.blank] else []) ++ backgroundTasksClass ++ [.blank] ++
+  imports ++ argHelpers ++ (if ble then bluetoothClass ++ [.blank] else []) ++ (if webauth then webAuthClass ++ [.blank] else []) ++
+  backgroundTasksClass ++ [.blank] ++
   cloudKitClass ++ [.blank] ++ (if auth then authErrorName else []) ++ capsBefore.drop capsImports ++
   [ b "- (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(NSDictionary *))answer {"
       [ ifChain "" (chosen.map (fun c => (s!"[name isEqualToString:{lit c.name}]", c.body)) ++ [("", unknownCapability)]) ] ] ++

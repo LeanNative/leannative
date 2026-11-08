@@ -4,6 +4,7 @@ import LeanNative.Native.Client.Http
 import LeanNative.Native.Client.HttpRequest
 import LeanNative.Native.Client.CloudKit
 import LeanNative.Native.Client.Bluetooth
+import LeanNative.Native.Client.WebAuth
 import LeanNativeShell.Capabilities
 
 /-! # The typed clients against wire fixtures and a fake shell
@@ -53,6 +54,8 @@ def item : Keychain.Item := { key := "wallet", service := some "org.example.app"
 
 def cases : List (String × Case) := [
   ("auth", .of (Auth.authenticate "Unlock the vault") fun s => Json.mkObj [("note", optJson (s.note.map Json.str))]),
+  ("webauth", .of (WebAuth.start { url := "https://id.example.com/authorize?client_id=c&state=s", callback := .https "app.example.com" "/oauth/callback" }) Json.str),
+  ("webauth.scheme", .of (WebAuth.start { url := "https://id.example.com/authorize", callback := .scheme "exampleapp", ephemeral := true }) Json.str),
   ("keychain.get", .of (Keychain.get item) fun b => Json.mkObj [("bytes", optJson (b.map (Json.str ∘ hexOf)))]),
   ("keychain.getText", .of (Keychain.getText item) fun t => Json.mkObj [("text", optJson (t.map Json.str))]),
   ("keychain.set", .of (Keychain.set { item with synchronizable := true } (ByteArray.mk #[0, 255])) unit),
