@@ -103,7 +103,7 @@ whenever another app is in front, and the Mac takes no app-switcher snapshots.
 
 | capability | Mac Catalyst (native-demo, ad-hoc signed, arm64 and x86_64 under Rosetta) |
 |---|---|
-| `auth` | LocalAuthentication is available (Touch ID or the login password); not exercised headless |
+| `auth` | LocalAuthentication is available (Touch ID or the login password); not exercised headless. Its sheet is another process's, and hiding the app does not dismiss it: an answer given after the app was hidden is dropped (team-signed, below) |
 | `keychain.*` | Catalyst uses the data-protection keychain: an ad-hoc build has no keychain access group, so writes answer `status: -34018` (errSecMissingEntitlement) and reads `null`; a build signed with a team identity has one |
 | `clipboard.*`, `paths`, `documents`, `exclude-from-backup`, `open`, `build` | available (UIKit's pasteboard is the Mac's) |
 | `http.get` | available, SOCKS included (the SOCKS probe answers 200 with ATYP 3) |
@@ -523,6 +523,34 @@ open -n --env NATIVEDEMO_SELFTEST=1 --stdout /tmp/selftest.out /tmp/dd-team/Buil
 TEST_RUNNER_NATIVEDEMO_KEYCHAIN=access-group UI_PLATFORM=maccatalyst UI_RECORDING=none \
   APP_DIR=examples/native-demo APP_ROOT=NativeDemo SCHEME=NativeDemo framework/native/ci/ui-tests "${SIGN[@]}"
 ```
+
+**Touch ID while the app is hidden.** native-demo prints each Face ID answer to stdout (`auth: authenticated`,
+`auth: not authenticated: …`, or `auth: dropped a stale answer: <stage>` when its session's EffectScope had
+ended first) and `scene: background, the session's scope ends` when the scene goes to the background. With
+`NATIVEDEMO_AUTH_AFTER=<seconds>` it asks that long after launch, as its Face ID button does, so nobody has
+to click:
+
+```
+open -n --env NATIVEDEMO_AUTH_AFTER=4 --stdout /tmp/auth.out /tmp/dd-team/Build/Products/Debug-maccatalyst/NativeDemo.app
+# with the sheet up: hide the app (Cmd-H), wait 3 s, reopen it from the Dock, then answer the sheet
+```
+
+On the M5 Max above (macOS 27.0.1, 2026-11-08) the sheet, which belongs to `coreautha`, stayed up while the
+app was hidden and after it was reopened; hiding sent the scene to the background, which ended the session's
+scope; and the answer given afterwards, a success in LocalAuthentication's log, was dropped:
+
+```
+auth: asking (4 s after launch, NATIVEDEMO_AUTH_AFTER)
+scene: background, the session's scope ends
+auth: dropped a stale answer: after the answer
+```
+
+So under Catalyst an answer that comes back after the app was hidden is never reported as the session's,
+whether or not the system dismissed the sheet. Two departures from the recipe: the app was hidden by a
+script (`NSRunningApplication` `hide`) rather than the Cmd-H key, and reopened with `open` (the reopen a Dock
+click sends); and the Mac's lid was closed, so macOS took the login password in the sheet instead of the
+sensor (coreauthd: "Clamshell is preventing the use of internal Touch ID"). The app gets the same answer
+either way.
 
 The UI tests need macOS's Automation Mode, which a Mac that asks for authentication to enable it
 (`automationmodetool` says which) prompts for on the first run: someone at the Mac answers it, or enables
