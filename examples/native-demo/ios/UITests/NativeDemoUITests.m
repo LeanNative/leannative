@@ -103,19 +103,19 @@
 
 - (void)testScrollingToTheLastProbe {
     if (![self openTab:@"Probes"]) return;
-    // the last capability button (13 probes: probe-12) is below the fold on a phone: LNTap scrolls to it first
-    if (!LNTap(self.app, @"probe-12")) return;
+    // the last capability button (16 probes: probe-15) is below the fold on a phone: LNTap scrolls to it first
+    if (!LNTap(self.app, @"probe-15")) return;
     NSPredicate *asked = [NSPredicate predicateWithFormat:@"label BEGINSWITH 'asking: HTTP bad proxy' OR label BEGINSWITH 'HTTP bad proxy:'"];
     XCUIElement *logged = [[self.app descendantsMatchingType:XCUIElementTypeAny] matchingPredicate:asked].firstMatch;
     XCTAssertTrue([logged waitForExistenceWithTimeout:10], @"the probe's answer is not logged");
 }
 
 - (void)testScrollingToTheEndOfTheLog {
-    // the Probes list made longer than any window (13 probes, then 10 log rows), its oldest row looked for from
+    // the Probes list made longer than any window (16 probes, then 10 log rows), its oldest row looked for from
     // the top: LNScrollTo drags on iOS and turns the scroll wheel under Mac Catalyst. That row starts out of
     // view, so this always scrolls; then back up to the first probe.
     if (![self openTab:@"Probes"]) return;
-    if (!LNTap(self.app, @"probe-12")) return;
+    if (!LNTap(self.app, @"probe-15")) return;
     for (int i = 0; i < 4; i++) if (!LNTap(self.app, @"probe-0")) return;
     NSPredicate *oldest = [NSPredicate predicateWithFormat:@"label BEGINSWITH 'asking: HTTP bad proxy'"];
     XCUIElement *row = [[self.app descendantsMatchingType:XCUIElementTypeAny] matchingPredicate:oldest].firstMatch;
