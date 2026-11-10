@@ -17,6 +17,13 @@ name: LeanNative iOS release
 # everything up to the upload: the build, signing, the archive and export with their checks, and a read-only
 # call to App Store Connect with the key; nothing is published.
 #
+# A preview (`preview-version`, with `upload`) is a TestFlight build of something not released: a pull request,
+# say, so that it can be tried on a phone before it is merged. It is uploaded and handed to the internal group
+# under the version given, with no tag and no GitHub release, and no CI run is looked for: the caller answers
+# for the tests, by making this job `needs` them. Give each thing previewed a version of its own (a pull
+# request's number in it): App Store Connect wants a build number above the last one of the same version, and
+# a build number here is the calling workflow's run number, which only rises within one workflow.
+#
 # The steps are LeanNative's release tool (framework/lean/LeanNativeRelease, `leannative-release`), built from
 # the app's resolved LeanNative package, so they are the commit the app pins. Secrets: ASC_KEY_ID,
 # ASC_ISSUER_ID, ASC_PRIVATE_KEY (the App Store Connect API key's .p8 text), DEV_CERT_P12 (base64) and
@@ -94,6 +101,10 @@ on:
         description: Upload, hand the build to TestFlight's internal group and publish the GitHub release
         type: boolean
         default: false
+      preview-version:
+        description: With upload, a preview (MAJOR.MINOR.PATCH) uploaded under this version, with no tag, no GitHub release and no CI run looked for; empty for a release, whose version is its tag's
+        type: string
+        default: ''
 
     secrets:
       ASC_KEY_ID:
@@ -123,7 +134,7 @@ jobs:
   # A pull request's run does not count: it tests the merge of the pull request into main as it was, whose
   # tree need not be the tag's. With none, run CI on the default branch by hand and rerun the release.
   tested:
-    if: inputs.upload
+    if: inputs.upload && inputs.preview-version == ''
     runs-on: ubuntu-24.04
     steps:
       - name: A successful CI run on this tree
@@ -153,7 +164,7 @@ jobs:
 
   testflight:
     needs: tested
-    if: ${{ !cancelled() && (needs.tested.result == 'success' || (needs.tested.result == 'skipped' && !inputs.upload)) }}
+    if: ${{ !cancelled() && (needs.tested.result == 'success' || (needs.tested.result == 'skipped' && (!inputs.upload || inputs.preview-version != ''))) }}
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     env:
@@ -172,9 +183,15 @@ jobs:
       - name: The version
         env:
           UPLOAD: ${{ inputs.upload }}
+          PREVIEW: ${{ inputs.preview-version }}
         run: |
-          # a release is its tag's version; a run without upload archives as 0.0.0
-          if [ "$UPLOAD" = true ]; then version="${GITHUB_REF_NAME#v}"; tag="$GITHUB_REF_NAME"; else version=0.0.0; tag=; fi
+          # a release is its tag's version; a preview is the version it was given, and has no tag; a run
+          # without upload archives as 0.0.0
+          if [ "$UPLOAD" = true ] && [ -n "$PREVIEW" ]; then
+            [[ "$PREVIEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::preview-version '$PREVIEW' is not MAJOR.MINOR.PATCH"; exit 1; }
+            version="$PREVIEW"; tag=
+          elif [ "$UPLOAD" = true ]; then version="${GITHUB_REF_NAME#v}"; tag="$GITHUB_REF_NAME"
+          else version=0.0.0; tag=; fi
           {
             echo "TESTFLIGHT_MARKETING_VERSION=$version"
             echo "TESTFLIGHT_BUILD_NUMBER=$GITHUB_RUN_NUMBER"
@@ -342,7 +359,7 @@ jobs:
 
   github-release:
     needs: testflight
-    if: ${{ !cancelled() && inputs.upload && needs.testflight.result == 'success' }}
+    if: ${{ !cancelled() && inputs.upload && inputs.preview-version == '' && needs.testflight.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
