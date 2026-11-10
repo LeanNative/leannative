@@ -249,14 +249,18 @@ static BOOL LNIsIn(LNHit *h, LNNode container) { return [h.ancestors containsObj
     for (LNHit *bar in self.hits) {
         XCUIElementType t = bar.node.elementType;
         if (t != XCUIElementTypeNavigationBar && t != XCUIElementTypeTabBar && t != XCUIElementTypeToolbar) continue;
-        if (bar.node == h.node || LNIsIn(h, bar.node) || CGRectIsNull(r) || !CGRectIntersectsRect(r, bar.node.frame)) continue;
+        if (bar.node == h.node || LNIsIn(h, bar.node) || CGRectIsNull(r)) continue;
         CGRect b = bar.node.frame;
         // a bar along the top or the bottom: short, and wide unless it is the tab bar (iOS 26's floats as a
         // capsule narrower than the screen); a sidebar or a toolbar laid over the content is not one
         if (b.size.height > self.root.frame.size.height * 0.25) continue;
         if (t != XCUIElementTypeTabBar && b.size.width < self.root.frame.size.width * 0.5) continue;
-        // the bar takes the top or the bottom of what is left, whichever side it is on
-        if (CGRectGetMidY(b) < CGRectGetMidY(r)) {
+        // beside the bar (the floating tab bar's capsule leaves the screen's edges free) it cuts nothing
+        if (CGRectGetMaxX(r) <= CGRectGetMinX(b) || CGRectGetMinX(r) >= CGRectGetMaxX(b)) continue;
+        // the bar takes its side of the screen, to the screen's edge: content scrolled past a top bar is under
+        // the status bar, where a touch scrolls to the top and reaches no control (a stepper pressed there, at
+        // y = 20, did nothing), and content past a bottom bar is under the home indicator
+        if (CGRectGetMidY(b) < CGRectGetMidY(self.root.frame)) {
             CGFloat top = MAX(CGRectGetMinY(r), CGRectGetMaxY(b));
             r = CGRectMake(r.origin.x, top, r.size.width, MAX(0, CGRectGetMaxY(r) - top));
         } else {
