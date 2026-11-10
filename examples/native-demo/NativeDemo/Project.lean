@@ -10,7 +10,7 @@ def manifest : Manifest where
   displayName := "Native Demo"
   bundleId := "art.fralex.leannative.nativedemo"
   mac := .catalyst
-  uses := ["auth", "keychain.*", "http.get", "ble.*", "bgtask.*"]
+  uses := ["auth", "keychain.*", "http.get", "ble.*", "bgtask.*", "timezone"]
   -- the Probes tab calls cloudkit.* without an iCloud container on purpose, to show the shell's
   -- missingEntitlement answer (listing it in uses would rightly ask for iCloudContainers)
   unlisted := ["cloudkit.*"]

@@ -224,6 +224,26 @@ NSString *_Nullable LNTypeElement(XCUIApplication *app, XCUIElement *element, NS
     return why;
 }
 
+NSString *_Nullable LNSwipeAction(XCUIApplication *app, XCUIElement *element, NSString *name, BOOL trailing, NSString *title) {
+#if TARGET_OS_MACCATALYST
+    // a Mac's list is swiped with two fingers on a trackpad, which XCTest does not have
+    return [NSString stringWithFormat:@"%@: a row cannot be swiped on a Mac", name];
+#else
+    if (!LNAppears(element, LNAppearTimeout)) return [NSString stringWithFormat:@"%@ does not appear within %.0f s", name, LNAppearTimeout];
+    if (!LNScrollTo(app, element)) return [NSString stringWithFormat:@"%@ could not be scrolled into view", name];
+    // across the window at the row's height: half the width shows the actions; a full swipe would fire the first
+    CGFloat width = app.frame.size.width, y = CGRectGetMidY(element.frame);
+    XCUICoordinate *origin = [app coordinateWithNormalizedOffset:CGVectorMake(0, 0)];
+    XCUICoordinate *start = [origin coordinateWithOffset:CGVectorMake(width * (trailing ? 0.85 : 0.15), y)];
+    XCUICoordinate *end = [origin coordinateWithOffset:CGVectorMake(width * (trailing ? 0.40 : 0.60), y)];
+    [start pressForDuration:0.05 thenDragToCoordinate:end withVelocity:XCUIGestureVelocitySlow thenHoldForDuration:0.2];
+    XCUIElement *action = app.buttons[title].firstMatch;
+    if (![action waitForExistenceWithTimeout:5]) return [NSString stringWithFormat:@"%@: swiped, and no action named %@ appeared", name, title];
+    [action tap];
+    return nil;
+#endif
+}
+
 BOOL LNTypeAt(XCUIApplication *app, NSString *identifier, NSString *text, NSString *file, NSUInteger line) {
     XCUIElement *field = LNReady(app, identifier, file, line);
     if (!field) return NO;

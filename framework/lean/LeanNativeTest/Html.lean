@@ -18,9 +18,10 @@ def wire (h : Html Nat) : Json := h.toWire.toJson
 
 /-- The node's `"decor"` on the wire, with any field not given its default. -/
 def decorJson (tone : String := "standard") (mono badge centered : Bool := false) (symbol : String := "")
-    (chevron : Bool := false) : Json :=
+    (chevron : Bool := false) (swipe : String := "none") : Json :=
   Json.mkObj [("tone", Json.str tone), ("mono", Json.bool mono), ("badge", Json.bool badge),
-              ("centered", Json.bool centered), ("symbol", Json.str symbol), ("chevron", Json.bool chevron)]
+              ("centered", Json.bool centered), ("symbol", Json.str symbol), ("chevron", Json.bool chevron),
+              ("swipe", Json.str swipe)]
 
 def label : Html Nat := .text "1,000 sats" .body
 
@@ -86,9 +87,25 @@ def controls : IO Unit := do
     (Json.mkObj [("t", Json.str "button"), ("label", Json.str "Delete"), ("role", Json.str "destructive"),
       ("enabled", Json.bool true), ("decor", decorJson "negative" (chevron := true))])
 
+/-- A row's swipe action is a button with one more decoration: its click and its place in the tree are a
+button's (a journey presses it by its identifier; a phone swipes the row). -/
+def swipes : IO Unit := do
+  let done : Html Nat := Html.swipe .trailing (Html.symbol "checkmark" (.identified "done" (.button "Done" .primary (some 3))))
+  let row : Html Nat := .list [.section "" "" [.col [.text "Maya" .headline, done]]]
+  check "a swipe action dispatches its click where the button stands" (row.dispatch [0, 0, 1] .click == some 3)
+  check "and the wire advertises it there" (row.toWire.advertises [0, 0, 1] .click)
+  same "its JSON: the button's own keys, its id and one decor"  done
+    (Json.mkObj [("t", Json.str "button"), ("label", Json.str "Done"), ("role", Json.str "primary"),
+      ("enabled", Json.bool true), ("id", Json.str "done"), ("decor", decorJson (symbol := "checkmark") (swipe := "trailing"))])
+  let off : Html Nat := Html.swipe .leading (Html.swipe .trailing (.button "Snooze" .plain none))
+  same "the outer edge wins, and a disabled one is still on the wire" off
+    (Json.mkObj [("t", Json.str "button"), ("label", Json.str "Snooze"), ("role", Json.str "plain"),
+      ("enabled", Json.bool false), ("decor", decorJson (swipe := "leading"))])
+
 def main : IO UInt32 := do
   composition
   controls
+  swipes
   let n ← failures.get
   IO.println (if n == 0 then "html: all passed" else s!"html: {n} FAILED")
   return if n == 0 then 0 else 1
