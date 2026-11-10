@@ -131,6 +131,7 @@ def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
   match name with
   | "auth" => return Json.mkObj [("ok", true)]
   | "build" => return Json.mkObj [("debug", true)]
+  | "timezone" => return Json.mkObj [("id", "UTC"), ("offset", (0 : Nat))]
   | "paths" =>
     let documents := sh.dir / "Documents"
     let support := sh.dir / "Library" / "Application Support"

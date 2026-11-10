@@ -45,6 +45,7 @@ theorem kindTag_mem (w : Wire) : kindTag w ∈ tableTags := by
 theorem styles_complete (x : TextStyle) : x ∈ allStyles := by cases x <;> simp [allStyles]
 theorem roles_complete (x : ButtonRole) : x ∈ allRoles := by cases x <;> simp [allRoles]
 theorem tones_complete (x : Tone) : x ∈ allTones := by cases x <;> simp [allTones]
+theorem swipes_complete (x : Swipe) : x ∈ allSwipes := by cases x <;> simp [allSwipes]
 theorem placements_complete (x : Placement) : x ∈ allPlacements := by cases x <;> simp [allPlacements]
 theorem alertStyles_complete (x : AlertStyle) : x ∈ allAlertStyles := by cases x <;> simp [allAlertStyles]
 theorem sheetSizes_complete (x : SheetSize) : x ∈ allSheetSizes := by cases x <;> simp [allSheetSizes]
@@ -115,7 +116,7 @@ def identifiedProblems (w : Wire) : List String :=
 the kind the shell decodes. -/
 def decoratedProblems (w : Wire) : List String :=
   let tag := kindTag w
-  let d : Decor := { tone := .positive, mono := true, badge := true, centered := true, symbol := "s", chevron := true }
+  let d : Decor := { tone := .positive, mono := true, badge := true, centered := true, symbol := "s", chevron := true, swipe := .trailing }
   match w.toJson, (Wire.decorated d w).toJson with
   | .obj plain, j@(.obj kvs) =>
     (if kvs.toList.map (·.1) == ((plain.insert decorKey .null).toList.map (·.1))

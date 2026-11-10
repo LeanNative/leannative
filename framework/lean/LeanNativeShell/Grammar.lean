@@ -60,7 +60,8 @@ def decorKey : String := "decor"
 
 def decorFields : List Field :=
   [{ key := "tone", ty := .enum "Tone" "standard" }, { key := "mono", ty := .bool }, { key := "badge", ty := .bool },
-   { key := "centered", ty := .bool }, { key := "symbol", ty := .str }, { key := "chevron", ty := .bool }]
+   { key := "centered", ty := .bool }, { key := "symbol", ty := .str }, { key := "chevron", ty := .bool },
+   { key := "swipe", ty := .enum "Swipe" "none" }]
 
 set_option maxRecDepth 8000 in
 def nodes : List NodeKind :=
@@ -353,13 +354,14 @@ def allPlacements : List Placement := [.trailing, .leading, .cancel, .confirm, .
 def allAlertStyles : List AlertStyle := [.alert, .actionSheet]
 def allSheetSizes : List SheetSize := [.large, .medium]
 def allTones : List Tone := [.standard, .secondary, .tint, .positive, .negative, .warning]
+def allSwipes : List Swipe := [.none, .leading, .trailing]
 def allRoles : List ButtonRole := [.plain, .primary, .destructive, .secondary, .cancel]
 def allInputKinds : List InputKind := [.plain, .secure, .multiline, .number, .decimal]
 
 /-- (name, values) of each string enum a node field takes. -/
 def stringEnums : List (String × List String) :=
   [ ("Role", allRoles.map (·.str)), ("Style", allStyles.map (·.str)), ("InputKind", allInputKinds.map (·.str)),
-    ("Tone", allTones.map (·.str)), ("Placement", allPlacements.map (·.str)),
+    ("Tone", allTones.map (·.str)), ("Swipe", allSwipes.map (·.str)), ("Placement", allPlacements.map (·.str)),
     ("AlertStyle", allAlertStyles.map (·.str)), ("SheetSize", allSheetSizes.map (·.str)) ]
 
 /-! The events (PROTOCOL.md, "Client → CLI"): name, and the Objective-C parameter and its JSON value if the
