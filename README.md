@@ -304,6 +304,30 @@ every `testflight` step but `upload` against `framework/scripts/fake_asc.py`, a 
 Connect; and a small app, signed ad hoc, through the bundle checks. `upload` (`xcrun altool`) runs only in a
 real release.
 
+**A build per pull request.** With `preview-version` (and `upload: true`) the same workflow uploads a build
+of something not released, so a pull request can be tried on a phone before it is merged: it goes to
+TestFlight's internal group under the version given, with no tag, no GitHub release, and no CI run looked for
+(the caller makes the job `needs` its tests). Give each pull request a version of its own, since App Store
+Connect wants a build number above the last one of the same version and a build number here is the calling
+workflow's run number:
+
+```yaml
+  testflight:
+    needs: [tests]
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    permissions: { contents: write, actions: read }
+    uses: LeanNative/leannative/.github/workflows/ios-release.yml@<commit>
+    with:
+      # … as above …
+      upload: true
+      preview-version: 0.2.${{ github.event.pull_request.number }}
+      notes-line: echo "This build is pull request ${{ github.event.pull_request.number }}, not a release."
+    secrets: { … }
+```
+
+A pull request from a fork has no secrets, hence the `if`. What to Test is the app's file, with `notes-line`'s
+paragraph after it.
+
 ## What is trusted
 
 | Layer | Status | How it is checked |
