@@ -235,7 +235,10 @@ def widgets (m : Model) : Html Msg :=
                                 , .identified "copies" (.stepper "Copies" m.copies 1 5 Msg.copies)
                                 , .input .secure "Passphrase" "Optional" m.secret Msg.secret none
                                 , .disclosure "Details" m.details Msg.details [.text "Hidden until expanded." .body] ]
-      -- a row's swipe actions (`Decor.swipe`): buttons of the row that are not drawn in it. A full swipe from
+      , .section "Share" "" [ .qr "bitcoin:tb1qexample", .share "Share address" "tb1qexample"
+                             , .button "Open sheet" .primary (some .openSheet) ]
+      -- a row's swipe actions (`Decor.swipe`): buttons of the row that are not drawn in it. The list's last
+      -- section, so the rows above stand where the journeys and tests expect them. A full swipe from
       -- the trailing edge archives; the disabled one is no action
       , .section "Swipe" "Swipe the row from either edge."
           [ .col [ .identified "swipeRow" (.text "A row with swipe actions" .body)
@@ -243,9 +246,7 @@ def widgets (m : Model) : Html Msg :=
                  , Html.swipe .trailing (Html.symbol "archivebox" (.identified "swipe-archive" (.button "Archive" .primary (some (.swiped "Archived")))))
                  , Html.swipe .trailing (Html.symbol "trash" (.identified "swipe-delete" (.button "Delete" .destructive (some (.swiped "Deleted")))))
                  , Html.swipe .trailing (.button "Never" .plain none)
-                 , Html.swipe .leading (Html.symbol "flag" (Html.tone .warning (.identified "swipe-flag" (.button "Flag" .plain (some (.swiped "Flagged")))))) ] ]
-      , .section "Share" "" [ .qr "bitcoin:tb1qexample", .share "Share address" "tb1qexample"
-                             , .button "Open sheet" .primary (some .openSheet) ] ]
+                 , Html.swipe .leading (Html.symbol "flag" (Html.tone .warning (.identified "swipe-flag" (.button "Flag" .plain (some (.swiped "Flagged")))))) ] ] ]
     , (if m.sheet then .sheet "A sheet" (some .closeSheet) [.text "Swipe down or tap Close." .body, .button "Close" .plain (some .closeSheet)] else .spacer)
     , (if m.alert then .alert "An alert" "Rendered from a Lean `alert` node." [.button "OK" .plain (some .closeAlert)] else .spacer) ]
 
