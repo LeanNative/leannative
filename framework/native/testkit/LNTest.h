@@ -90,5 +90,9 @@ NSString *_Nullable LNTapElement(XCUIApplication *app, XCUIElement *element, NSS
 /// LNTapElement, holding the element down for `seconds` instead (a stepper's autorepeat).
 NSString *_Nullable LNPressElement(XCUIApplication *app, XCUIElement *element, NSString *name, NSTimeInterval seconds);
 NSString *_Nullable LNTypeElement(XCUIApplication *app, XCUIElement *element, NSString *name, NSString *text);
+/// A list row's swipe action (`decor.swipe`): the row at `element` dragged in from its trailing edge (or its
+/// leading one), far enough to show the actions and not so far that the first one fires, then the action
+/// named `title` pressed. nil, or why it could not be done.
+NSString *_Nullable LNSwipeAction(XCUIApplication *app, XCUIElement *element, NSString *name, BOOL trailing, NSString *title);
 
 NS_ASSUME_NONNULL_END

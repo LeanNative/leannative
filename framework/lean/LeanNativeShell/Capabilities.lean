@@ -104,6 +104,12 @@ def capabilities : List Capability :=
       .l "if ([self synchronizable:args]) query[(__bridge id)kSecAttrSynchronizable] = @YES;",
       .l "OSStatus status = SecItemDelete((__bridge CFDictionaryRef)query);",
       .l "answer(@{@\"ok\": @((BOOL)(status == errSecSuccess || status == errSecItemNotFound)), @\"status\": @(status)});"] },
+  { name := "timezone", args := "`at`?", result := "`{\"id\":…,\"offset\":…}` the device's time zone: its identifier (`Europe/Paris`) and its seconds east of UTC, now or at `at` (Unix seconds), so an app can say a time as the person's clock does",
+    body := [
+      .l "NSTimeZone *zone = NSTimeZone.localTimeZone;",
+      .l "id at = args[@\"at\"];",
+      .l "NSDate *when = [at isKindOfClass:NSNumber.class] ? [NSDate dateWithTimeIntervalSince1970:[at doubleValue]] : [NSDate date];",
+      .l "answer(@{@\"id\": zone.name ?: @\"\", @\"offset\": @([zone secondsFromGMTForDate:when])});"] },
   { name := "build", args := "—", result := "`{\"debug\":…}` whether this is a Debug build (`#if DEBUG`): test hooks stay off in Release",
     body := [
       .pp "#if DEBUG",

@@ -35,6 +35,16 @@ inductive Tone where
   | warning
   deriving Repr, DecidableEq, Inhabited
 
+/-- A button that is a list row's swipe action (native mode, `Decor.swipe`): the edge it is swiped in from.
+`none` is an ordinary button. -/
+inductive Swipe where
+  | none
+  /-- swiped in from the row's leading edge -/
+  | leading
+  /-- swiped in from the row's trailing edge -/
+  | trailing
+  deriving Repr, DecidableEq, Inhabited
+
 /-- Where a `toolbar`'s buttons go (native mode): the navigation bar's `trailing` or `leading` end, `cancel`
 (leading; a `cancel`-role button there is the system Close button), `confirm` (trailing, prominent), or the
 `bottom` toolbar. -/
@@ -75,6 +85,11 @@ structure Decor where
   /-- the button opens something (a screen, a sheet): drawn as a link, and in a list its whole row is the
   button, with a disclosure chevron -/
   chevron : Bool := false
+  /-- a button inside a list's row is not drawn in the row: it is the row's swipe action on that edge, with
+  its label, its `symbol`, its tone's or its role's colour and its click (a mail row's Done, Snooze). In the
+  tree's order, the first is nearest the edge and is what a full swipe does; a disabled button is no action.
+  Outside a list's row, and in a shell that does not know the field, it is the button it was. -/
+  swipe : Swipe := .none
   deriving Repr, DecidableEq, Inhabited
 
 /-- `outer`'s fields where they are set, else `inner`'s. -/
@@ -84,7 +99,8 @@ def Decor.merge (inner outer : Decor) : Decor :=
     badge := inner.badge || outer.badge
     centered := inner.centered || outer.centered
     symbol := if outer.symbol.isEmpty then inner.symbol else outer.symbol
-    chevron := inner.chevron || outer.chevron }
+    chevron := inner.chevron || outer.chevron
+    swipe := if outer.swipe == .none then inner.swipe else outer.swipe }
 
 inductive ButtonRole where
   | plain
@@ -296,6 +312,8 @@ def badge (h : Html msg) : Html msg := decor { badge := true } h
 def centered (h : Html msg) : Html msg := decor { centered := true } h
 def symbol (name : String) (h : Html msg) : Html msg := decor { symbol := name } h
 def navigates (h : Html msg) : Html msg := decor { chevron := true } h
+/-- A button as its list row's swipe action on `edge` (`Decor.swipe`). -/
+def swipe (edge : Swipe) (h : Html msg) : Html msg := decor { swipe := edge } h
 
 end Html
 end LeanNative

@@ -42,6 +42,8 @@ structure Model where
   tab : Nat := 0
   fee : Nat := 1
   copies : Nat := 1
+  /-- what the swipe row's last action was -/
+  swiped : String := "Nothing yet"
   details : Bool := false
   secret : String := ""
   sheet : Bool := false
@@ -88,6 +90,7 @@ inductive Msg where
   | tab (i : Nat)
   | fee (i : Nat)
   | copies (n : Nat)
+  | swiped (what : String)
   | details (b : Bool)
   | secret (s : String)
   | openSheet
@@ -167,6 +170,7 @@ def update : Msg → Model → Model
   | .tab i, m => { m with tab := i }
   | .fee i, m => { m with fee := i }
   | .copies n, m => { m with copies := n }
+  | .swiped what, m => { m with swiped := what }
   | .details b, m => { m with details := b }
   | .secret s, m => { m with secret := s }
   | .openSheet, m => { m with sheet := true }
@@ -232,7 +236,17 @@ def widgets (m : Model) : Html Msg :=
                                 , .input .secure "Passphrase" "Optional" m.secret Msg.secret none
                                 , .disclosure "Details" m.details Msg.details [.text "Hidden until expanded." .body] ]
       , .section "Share" "" [ .qr "bitcoin:tb1qexample", .share "Share address" "tb1qexample"
-                             , .button "Open sheet" .primary (some .openSheet) ] ]
+                             , .button "Open sheet" .primary (some .openSheet) ]
+      -- a row's swipe actions (`Decor.swipe`): buttons of the row that are not drawn in it. The list's last
+      -- section, so the rows above stand where the journeys and tests expect them. A full swipe from
+      -- the trailing edge archives; the disabled one is no action
+      , .section "Swipe" "Swipe the row from either edge."
+          [ .col [ .identified "swipeRow" (.text "A row with swipe actions" .body)
+                 , .identified "swipedValue" (Html.tone .secondary (.text m.swiped .caption))
+                 , Html.swipe .trailing (Html.symbol "archivebox" (.identified "swipe-archive" (.button "Archive" .primary (some (.swiped "Archived")))))
+                 , Html.swipe .trailing (Html.symbol "trash" (.identified "swipe-delete" (.button "Delete" .destructive (some (.swiped "Deleted")))))
+                 , Html.swipe .trailing (.button "Never" .plain none)
+                 , Html.swipe .leading (Html.symbol "flag" (Html.tone .warning (.identified "swipe-flag" (.button "Flag" .plain (some (.swiped "Flagged")))))) ] ] ]
     , (if m.sheet then .sheet "A sheet" (some .closeSheet) [.text "Swipe down or tap Close." .body, .button "Close" .plain (some .closeSheet)] else .spacer)
     , (if m.alert then .alert "An alert" "Rendered from a Lean `alert` node." [.button "OK" .plain (some .closeAlert)] else .spacer) ]
 
@@ -418,6 +432,11 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         let late ← scope.deliver token (pure ())
         say s!"effect scope: {if spawned matches .started _ then "started" else "stale"}, drained {← drained.get}, late result delivered {late}, now {← scope.liveTasks} tasks"
         typedSelftest fx say
+        -- the device's time zone: an identifier, and seconds east of UTC within a day either way
+        let zone ← IO.wait (← fx.ask "timezone" (Json.mkObj []))
+        let zoneOk := (zone.getObjValAs? String "id").isOk &&
+          ((zone.getObjValAs? Int "offset").toOption.map fun o => -86400 < o && o < 86400).getD false
+        say s!"timezone: {if zoneOk then "an identifier and an offset" else zone.compress}"
         for (l, n, a) in probes do
           let j ← IO.wait (← fx.ask n a)
           say s!"{l}: {j.compress}"

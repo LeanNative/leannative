@@ -101,6 +101,32 @@
     self.finished = YES;
 }
 
+// Not on a Mac: a row is swiped there with two fingers on a trackpad, which XCTest does not have. Left out and
+// not skipped: the evidence of a run counts a skipped test as one that did not pass.
+#if !TARGET_OS_MACCATALYST
+- (void)testSwipingARowDoesItsAction {
+    if (![self openTab:@"Widgets"]) return;
+    XCUIElement *row = LNElement(self.app, @"swipeRow"), *value = LNElement(self.app, @"swipedValue");
+    XCTAssertTrue(LNScrollTo(self.app, row), @"the swipe row cannot be scrolled into view");
+    XCTAssertEqualObjects(LNText(value), @"Nothing yet");
+    // a swipe action is not drawn in its row
+    XCTAssertFalse(LNElement(self.app, @"swipe-archive").exists, @"the Archive button is drawn in the row");
+    XCTAssertFalse(LNElement(self.app, @"swipe-flag").exists, @"the Flag button is drawn in the row");
+    // from the trailing edge: Archive and Delete, and not the disabled one
+    NSString *why = LNSwipeAction(self.app, row, @"the swipe row", YES, @"Delete");
+    XCTAssertNil(why, @"%@", why);
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(value) isEqualToString:@"Deleted"]; }), @"after Delete: %@", LNText(value));
+    XCTAssertFalse(self.app.buttons[@"Never"].exists, @"a disabled button is offered as a swipe action");
+    why = LNSwipeAction(self.app, row, @"the swipe row", YES, @"Archive");
+    XCTAssertNil(why, @"%@", why);
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(value) isEqualToString:@"Archived"]; }), @"after Archive: %@", LNText(value));
+    // and from the leading edge
+    why = LNSwipeAction(self.app, row, @"the swipe row", NO, @"Flag");
+    XCTAssertNil(why, @"%@", why);
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(value) isEqualToString:@"Flagged"]; }), @"after Flag: %@", LNText(value));
+}
+#endif
+
 - (void)testScrollingToTheLastProbe {
     if (![self openTab:@"Probes"]) return;
     // the last capability button (16 probes: probe-15) is below the fold on a phone: LNTap scrolls to it first
@@ -154,6 +180,8 @@
     XCTAssertEqualObjects(said[@"background run past its deadline"], @"expired, work started, success false");
     // EffectScope: the invalidation cancelled and drained the task, and its late result was not delivered
     XCTAssertEqualObjects(said[@"effect scope"], @"started, drained true, late result delivered false, now 0 tasks");
+    // the device's time zone, asked of the shell
+    XCTAssertEqualObjects(said[@"timezone"], @"an identifier and an offset");
     // the typed clients: every answer decoded (ok, or a classified error; never malformed)
     NSRegularExpression *decoded = [NSRegularExpression regularExpressionWithPattern:@"^(ok|denied|cancelled|unsupported|failed)( .*)?$" options:0 error:nil];
     for (NSString *key in said) {

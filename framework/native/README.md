@@ -324,7 +324,9 @@ URLSession: ephemeral, same-host redirects only, never https→http — Lean's r
 is sent to the proxy unresolved, there is no fallback to a direct connection, request and resource time
 out after 90 s and 180 s, and a host that is not a string or a port outside 1…65535 answers
 `{"error":"bad-proxy"}`; a system error answers its text with its `code` and `domain`),
-`open` (a URL outside the app), `webauth` (a sign-in in the system browser, `ASWebAuthenticationSession`: the
+`open` (a URL outside the app), `timezone` (the device's zone: its identifier and its seconds east of UTC, now or
+at `at` in Unix seconds, so a list can say `09:12` as the person's clock does; ask again when the app comes back
+to the front, since a person travels), `webauth` (a sign-in in the system browser, `ASWebAuthenticationSession`: the
 URL to open and the callback it ends at, https — iOS 17.4 and later, the host among the app's `webcredentials:`
 associated domains — or a custom scheme; answers `{"ok":true,"url":…}`, the callback URL with its query, or the
 `ASWebAuthenticationSessionError` as `name` and `code`, `canceledLogin` when the person closes the sheet; one at a
