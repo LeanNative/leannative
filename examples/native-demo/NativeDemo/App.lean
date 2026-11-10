@@ -134,6 +134,13 @@ def probes : List (String × String × Json) :=
       Json.mkObj [("id", processing), ("kind", "processing"), ("requiresNetwork", true)]),
     ("Schedule unlisted id", "bgtask.schedule", Json.mkObj [("id", "not.in.info.plist")]),
     ("Complete (none pending)", "bgtask.complete", Json.mkObj [("id", refresh), ("success", true)]),
+    -- continued processing (iOS 26): the launch arrives as a `bgtask` event of kind `continued`, and the demo's
+    -- background run answers it; `unavailable` on an older iOS and on the Mac
+    ("Continue work", "bgtask.continue",
+      Json.mkObj [("id", "art.fralex.leannative.nativedemo.work.demo"), ("title", "Native demo"), ("subtitle", "A piece of work that outlives the screen")]),
+    ("Continue unlisted id", "bgtask.continue", Json.mkObj [("id", "not.in.info.plist.work"), ("title", "No")]),
+    ("Progress (none pending)", "bgtask.progress",
+      Json.mkObj [("id", "art.fralex.leannative.nativedemo.work.demo"), ("completed", (1 : Nat)), ("total", (2 : Nat))]),
     ("CloudKit account", "cloudkit.account", Json.mkObj []),
     ("CloudKit query", "cloudkit.query", Json.mkObj [("type", "WalletBackup")]),
     ("Keychain sync set", "keychain.set",
