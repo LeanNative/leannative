@@ -132,6 +132,7 @@ def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
   | "auth" => return Json.mkObj [("ok", true)]
   | "build" => return Json.mkObj [("debug", true)]
   | "timezone" => return Json.mkObj [("id", "UTC"), ("offset", (0 : Nat))]
+  | "device" => return Json.mkObj [("idiom", "phone")]
   | "paths" =>
     let documents := sh.dir / "Documents"
     let support := sh.dir / "Library" / "Application Support"
@@ -272,6 +273,11 @@ where
       match cs[sel]? with
       | some c => selected (Elem.at c (e.path ++ [sel])) (some e)
       | none => (some e, e)
+    -- a split as a narrow window has it: the column it shows (a wide one shows them side by side)
+    | .split shown cs =>
+      match cs[shown]? with
+      | some c => selected (Elem.at c (e.path ++ [shown])) tabs
+      | none => (tabs, e)
     | _ => (tabs, e)
   /-- Into the innermost presentation: an alert covers what presents it; a sheet presents the next. -/
   descend (e : Elem) (tabs : Option Elem) (kind : TopKind) : Scene :=

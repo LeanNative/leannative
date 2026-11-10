@@ -23,14 +23,14 @@ open Lean LeanNative
 
 def tableTags : List String :=
   ["text", "col", "row", "button", "field", "toggle", "divider", "spacer", "input", "list", "section", "labeled",
-   "screen", "toolbar", "tabs", "sheet", "alert", "picker", "progress", "icon", "qr", "share", "link", "page",
+   "screen", "toolbar", "tabs", "split", "sheet", "alert", "picker", "progress", "icon", "qr", "share", "link", "page",
    "empty", "disclosure", "stepper"]
 
 def kindTag : Wire → String
   | .text .. => "text" | .col .. => "col" | .row .. => "row" | .button .. => "button" | .field .. => "field"
   | .toggle .. => "toggle" | .divider => "divider" | .spacer => "spacer" | .input .. => "input" | .list .. => "list"
   | .section .. => "section" | .labeled .. => "labeled" | .screen .. => "screen" | .toolbar .. => "toolbar"
-  | .tabs .. => "tabs" | .sheet .. => "sheet" | .alert .. => "alert" | .picker .. => "picker"
+  | .tabs .. => "tabs" | .split .. => "split" | .sheet .. => "sheet" | .alert .. => "alert" | .picker .. => "picker"
   | .progress .. => "progress" | .icon .. => "icon" | .qr .. => "qr" | .share .. => "share" | .link .. => "link"
   | .page .. => "page" | .empty .. => "empty" | .disclosure .. => "disclosure" | .stepper .. => "stepper"
   | .identified _ w => kindTag w
@@ -56,7 +56,7 @@ def samples : List Wire :=
   let k := [Wire.divider]
   [ .text "t" .caption, .col k, .row k, .button "b" .primary false, .field "p" "v" true, .toggle "l" true, .divider,
     .spacer, .input .secure "l" "p" "v" true, .list k, .section "h" "f" k, .labeled "l" "v", .screen "t" true k true false 2,
-    .toolbar k .confirm, .tabs ["a"] ["i"] 1 k, .sheet "t" true k true .medium, .alert "t" "m" k .actionSheet, .picker "l" ["o"] 0, .progress "l",
+    .toolbar k .confirm, .tabs ["a"] ["i"] 1 k, .split 1 k, .sheet "t" true k true .medium, .alert "t" "m" k .actionSheet, .picker "l" ["o"] 0, .progress "l",
     .icon "n", .qr "q", .share "l" "t" true, .link "l" "u", .page "p", .empty "t" "i" "m" k, .disclosure "t" true k,
     .stepper "l" 1 0 2 "d" ]
 
@@ -116,7 +116,7 @@ def identifiedProblems (w : Wire) : List String :=
 the kind the shell decodes. -/
 def decoratedProblems (w : Wire) : List String :=
   let tag := kindTag w
-  let d : Decor := { tone := .positive, mono := true, badge := true, centered := true, symbol := "s", chevron := true, swipe := .trailing }
+  let d : Decor := { tone := .positive, mono := true, badge := true, centered := true, symbol := "s", chevron := true, swipe := .trailing, selected := true }
   match w.toJson, (Wire.decorated d w).toJson with
   | .obj plain, j@(.obj kvs) =>
     (if kvs.toList.map (·.1) == ((plain.insert decorKey .null).toList.map (·.1))

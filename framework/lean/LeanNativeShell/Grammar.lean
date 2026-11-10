@@ -61,7 +61,7 @@ def decorKey : String := "decor"
 def decorFields : List Field :=
   [{ key := "tone", ty := .enum "Tone" "standard" }, { key := "mono", ty := .bool }, { key := "badge", ty := .bool },
    { key := "centered", ty := .bool }, { key := "symbol", ty := .str }, { key := "chevron", ty := .bool },
-   { key := "swipe", ty := .enum "Swipe" "none" }]
+   { key := "swipe", ty := .enum "Swipe" "none" }, { key := "selected", ty := .bool }]
 
 set_option maxRecDepth 8000 in
 def nodes : List NodeKind :=
@@ -161,6 +161,9 @@ def nodes : List NodeKind :=
     render := [
       .l "LNBuildRow(box, 0);"] },
   { tag := "tabs", fields := [strs "labels", strs "icons", int "selected", kids],
+    render := [
+      .l "LNBuildColumn(box);"] },
+  { tag := "split", fields := [int "shown", kids],
     render := [
       .l "LNBuildColumn(box);"] },
   { tag := "sheet", fields := [str "title", bool "dismissable", bool "largeTitle", enum "size" "SheetSize" "large", kids], overlay := true,

@@ -18,10 +18,10 @@ def wire (h : Html Nat) : Json := h.toWire.toJson
 
 /-- The node's `"decor"` on the wire, with any field not given its default. -/
 def decorJson (tone : String := "standard") (mono badge centered : Bool := false) (symbol : String := "")
-    (chevron : Bool := false) (swipe : String := "none") : Json :=
+    (chevron : Bool := false) (swipe : String := "none") (selected : Bool := false) : Json :=
   Json.mkObj [("tone", Json.str tone), ("mono", Json.bool mono), ("badge", Json.bool badge),
               ("centered", Json.bool centered), ("symbol", Json.str symbol), ("chevron", Json.bool chevron),
-              ("swipe", Json.str swipe)]
+              ("swipe", Json.str swipe), ("selected", Json.bool selected)]
 
 def label : Html Nat := .text "1,000 sats" .body
 
@@ -87,6 +87,28 @@ def controls : IO Unit := do
     (Json.mkObj [("t", Json.str "button"), ("label", Json.str "Delete"), ("role", Json.str "destructive"),
       ("enabled", Json.bool true), ("decor", decorJson "negative" (chevron := true))])
 
+/-- A split's columns are its children: a click in one is dispatched at the child's place, going back from one
+(a narrow window) is that screen's `onBack`, and the chosen row says so in its decoration. -/
+def columns : IO Unit := do
+  let inbox : Html Nat := Html.chosen true (.identified "inbox" (.button "Inbox" .plain (some 1)))
+  let split : Html Nat := .split 1
+    [ .screen "Boxes" none [.list [.section "" "" [inbox]]],
+      .screen "Inbox" (some 9) [.button "A message" .plain (some 2)] ]
+  check "a click in the first column is its button's" (split.dispatch [0, 0, 0, 0] .click == some 1)
+  check "a click in the second column is its button's" (split.dispatch [1, 0] .click == some 2)
+  check "going back from the second column is its screen's" (split.dispatch [1] .dismiss == some 9)
+  check "the first column has nothing to go back to" (split.dispatch [0] .dismiss == none)
+  check "and the wire advertises the same" (split.toWire.advertises [1] .dismiss && !split.toWire.advertises [0] .dismiss)
+  check "the split's JSON names the column a narrow window shows"
+    ((split.toWire.toJson.getObjValAs? Nat "shown").toOption == some 1
+      && (split.toWire.toJson.getObjValAs? String "t").toOption == some "split"
+      && ((split.toWire.toJson.getObjValAs? (Array Json) "c").toOption.map (·.size)) == some 2)
+  same "the chosen row's JSON: the button's own keys, its id and one decor" inbox
+    (Json.mkObj [("t", Json.str "button"), ("label", Json.str "Inbox"), ("role", Json.str "plain"),
+      ("enabled", Json.bool true), ("id", Json.str "inbox"), ("decor", decorJson (selected := true))])
+  let other : Html Nat := Html.chosen false (.button "Archive" .plain (some 1))
+  check "a row that is not chosen has no decoration" ((other.toWire.toJson.getObjVal? "decor").toOption == none)
+
 /-- A row's swipe action is a button with one more decoration: its click and its place in the tree are a
 button's (a journey presses it by its identifier; a phone swipes the row). -/
 def swipes : IO Unit := do
@@ -106,6 +128,7 @@ def main : IO UInt32 := do
   composition
   controls
   swipes
+  columns
   let n ← failures.get
   IO.println (if n == 0 then "html: all passed" else s!"html: {n} FAILED")
   return if n == 0 then 0 else 1
