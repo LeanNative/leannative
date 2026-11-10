@@ -55,6 +55,12 @@ def main : IO UInt32 := do
     uses := ["bgtask.*"], backgroundTasks := [("com.example.app.refresh", .refresh)], info := [("UIBackgroundModes", toJson ([] : List String))] }
     "UIBackgroundModes"
   accepted "bgtask.* with tasks" { base with uses := ["bgtask.*"], backgroundTasks := [("com.example.app.refresh", .refresh)] }
+  -- a continued task: a wildcard identifier, and no background mode of its own
+  accepted "bgtask.* with a continued task alone" { base with uses := ["bgtask.*"], backgroundTasks := [("com.example.app.work.*", .continued)] }
+  accepted "bgtask.* with a refresh and a continued task" { base with
+    uses := ["bgtask.*"], backgroundTasks := [("com.example.app.refresh", .refresh), ("com.example.app.work.*", .continued)] }
+  refused "bgtask.* with a plain identifier and no mode beside a continued task" { base with
+    uses := ["bgtask.*"], info := [("BGTaskSchedulerPermittedIdentifiers", toJson ["com.example.app.refresh", "com.example.app.work.*"])] } "UIBackgroundModes"
   -- cloudkit
   refused "cloudkit.* without a container" { base with uses := ["cloudkit.*"] } "com.apple.developer.icloud-container-identifiers"
   refused "cloudkit.* without the CloudKit service" { base with

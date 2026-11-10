@@ -20,7 +20,8 @@ def manifest : Manifest where
     ("NSBluetoothAlwaysUsageDescription", "Shows that a Lean app can connect to a Bluetooth LE peripheral.")]
   -- the Probes tab schedules them
   backgroundTasks := [("art.fralex.leannative.nativedemo.refresh", .refresh),
-                      ("art.fralex.leannative.nativedemo.processing", .processing)]
+                      ("art.fralex.leannative.nativedemo.processing", .processing),
+                      ("art.fralex.leannative.nativedemo.work.*", .continued)]
   uiTests := some {}
 
 def main := manifest.main

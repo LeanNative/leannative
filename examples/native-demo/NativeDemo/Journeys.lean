@@ -53,8 +53,8 @@ logged. -/
 def scrolling : Journey := ⟨"scrolling", do
   launch
   tap (.tab "Probes")
-  expect (← scrollTo "probe-12") "the last probe cannot be scrolled into view"
-  tap "probe-12"
+  expect (← scrollTo "probe-15") "the last probe cannot be scrolled into view"
+  tap "probe-15"
   waitFor (.text "^(asking: )?HTTP bad proxy") 10⟩
 
 /-- Text patterns as journeys write them: a class with a count (`\d{2,3}`), an escaped metacharacter (`\.`), and

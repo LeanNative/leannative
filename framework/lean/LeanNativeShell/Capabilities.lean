@@ -244,6 +244,12 @@ def capabilities : List Capability :=
   { name := "bgtask.complete", args := "`id`, `success`, `tag`? (the launch's, from `{\"bgtask\":…}`)",
     result := "`{\"ok\":true}`, or `{\"ok\":false,\"error\":\"notPending\"}` when no task of that `id` is running (never launched, completed, or completed by the shell a second after it expired) or, with a `tag`, the one running is a later launch's (an older run's late answer does not end its successor); without a `tag`, whatever task of that `id` is running is completed",
     body := [.l "[LNBackgroundTasks.shared complete:args answer:answer];"] },
+  { name := "bgtask.continue", args := "`id` (under a wildcard identifier of Info.plist, one per piece of work), `title`, `subtitle`?, `strategy`? (`queue` or `fail`; `queue`)",
+    result := "`{\"ok\":true}` or `{\"ok\":false,\"error\",\"detail\",\"code\"?}` (`unavailable` before iOS 26 and on the Mac, `notPermitted`, `tooManyPending`, `immediateRunIneligible`, `badArgs`, `unknown`). Continued processing: work a person started, which iOS lets finish after they leave the app, shown with its progress in a Live Activity they can cancel. Asked for while the app is in front; the launch is `{\"bgtask\":{\"id\",\"kind\":\"continued\",\"tag\"}}`",
+    body := [.l "[LNBackgroundTasks.shared continueWork:args answer:answer];"] },
+  { name := "bgtask.progress", args := "`id`, `tag`?, `completed`?, `total`?, `title`?, `subtitle`?",
+    result := "`{\"ok\":true}`, or `{\"ok\":false,\"error\":\"notPending\"}` when no continued task of that `id` (and `tag`) is running. iOS expires continued work that reports no progress; the work's end is `bgtask.complete`",
+    body := [.l "[LNBackgroundTasks.shared progress:args answer:answer];"] },
   { name := "bgtask.refreshStatus", args := "—",
     result := "`{\"status\":…}`: `available`, `denied` (Background App Refresh off for the app) or `restricted`",
     body := [

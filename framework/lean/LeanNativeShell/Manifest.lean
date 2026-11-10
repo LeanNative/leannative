@@ -51,13 +51,16 @@ def Orientation.key : Orientation → String
   | .landscapeLeft => "UIInterfaceOrientationLandscapeLeft"
   | .landscapeRight => "UIInterfaceOrientationLandscapeRight"
 
-/-- A background task's kind (`bgtask.schedule`'s `kind`), which decides its `UIBackgroundModes` entry. -/
+/-- A background task's kind (`bgtask.schedule`'s `kind`, or `continued` for `bgtask.continue`), which
+decides its `UIBackgroundModes` entry. A continued task's identifier is a wildcard
+(`<bundle id>.<context>.*`) and asks for no background mode. -/
 inductive TaskKind where
-  | refresh | processing
+  | refresh | processing | continued
 
-def TaskKind.mode : TaskKind → String
-  | .refresh => "fetch"
-  | .processing => "processing"
+def TaskKind.mode : TaskKind → Option String
+  | .refresh => some "fetch"
+  | .processing => some "processing"
+  | .continued => none
 
 /-- The app's UI-test target (Objective-C XCUITest), which alone compiles the framework's test kit. -/
 structure UITests where
@@ -147,9 +150,12 @@ def Manifest.infoPlist (m : Manifest) : Json :=
     | some (phone, pad) => [("UISupportedInterfaceOrientations", strs (phone.map (·.key))),
                             ("UISupportedInterfaceOrientations~ipad", strs (pad.map (·.key)))]
     | none => []
-  let modes := m.backgroundTasks.foldl (fun acc (_, k) => if acc.contains k.mode then acc else acc ++ [k.mode]) []
+  let modes := m.backgroundTasks.foldl (fun acc (_, k) => match k.mode with
+    | some mode => if acc.contains mode then acc else acc ++ [mode]
+    | none => acc) []
   let tasks := if m.backgroundTasks.isEmpty then [] else
-    [("UIBackgroundModes", strs modes), ("BGTaskSchedulerPermittedIdentifiers", strs (m.backgroundTasks.map (·.1)))]
+    (if modes.isEmpty then [] else [("UIBackgroundModes", strs modes)]) ++
+    [("BGTaskSchedulerPermittedIdentifiers", strs (m.backgroundTasks.map (·.1)))]
   let generated := Json.mkObj <|
     [("CFBundleDisplayName", Json.str m.displayName)] ++ version ++ [("UILaunchScreen", Json.mkObj [])] ++
     -- the shell's scene delegate (LeanNativeShell.h)
@@ -275,7 +281,8 @@ def requirements : List (String × (Json → Json → List String)) := [
     let ids := strList info "BGTaskSchedulerPermittedIdentifiers"
     let modes := strList info "UIBackgroundModes"
     (if ids.isEmpty then ["uses bgtask.*, but Info.plist has no BGTaskSchedulerPermittedIdentifiers (backgroundTasks)"] else []) ++
-    (if modes.contains "fetch" || modes.contains "processing" then []
+    -- a wildcard identifier is a continued task's, which needs no background mode
+    (if modes.contains "fetch" || modes.contains "processing" || ids.all (·.endsWith ".*") then []
      else ["uses bgtask.*, but Info.plist's UIBackgroundModes has neither fetch nor processing (backgroundTasks)"])),
   -- CloudKit traps on a missing entitlement (the shell answers missingEntitlement instead, at run time)
   ("cloudkit", fun _ ent =>

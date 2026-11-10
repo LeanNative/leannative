@@ -196,7 +196,7 @@ Where each key comes from:
   |---|---|
   | `auth` | `NSFaceIDUsageDescription` |
   | `ble.*` | `NSBluetoothAlwaysUsageDescription` |
-  | `bgtask.*` | `BGTaskSchedulerPermittedIdentifiers`, and `UIBackgroundModes` with `fetch` or `processing` |
+  | `bgtask.*` | `BGTaskSchedulerPermittedIdentifiers`, and `UIBackgroundModes` with `fetch` or `processing` (not asked of an app whose identifiers are all wildcards: continued tasks) |
   | `cloudkit.*` | the `com.apple.developer.icloud-services` entitlement holding `CloudKit`, and an `icloud-container-identifiers` one |
   | anything else (`keychain.*`, `http.get`, `clipboard.*`, …) | nothing |
 
@@ -275,6 +275,21 @@ where Xcode's debugger launches a scheduled task with
 `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"…"]`
 (`framework/native/ci/device-run` does, below).
 
+**Continued processing** (iOS 26, `BGContinuedProcessingTask`). The tasks above run when iOS sees fit,
+often hours later. Work a person started and is waiting for (an export, a first sync) is the other kind: asked
+for while the app is in front, it keeps running after they leave the app, and iOS shows its title, subtitle and
+progress in a Live Activity where they can cancel it. In the manifest it is a wildcard identifier of kind
+`.continued` (`("<bundle id>.work.*", .continued)`, which asks for no background mode); each piece of work then
+has its own identifier under it. `bgtask.continue {"id","title","subtitle"?,"strategy"?}` registers that
+identifier (once: iOS allows these after launch, and ends an app that registers one twice) and submits it;
+iOS starts it at once or queues it (`"strategy":"fail"`: refuses instead, `immediateRunIneligible`). The launch
+is the same system event, `{"bgtask":{"id","kind":"continued","tag"}}`. From then on the app reports
+`bgtask.progress {"id","tag","completed","total","title"?,"subtitle"?}` as the work advances (iOS expires
+continued work that reports none, and the shell never reports it whole: the end is `bgtask.complete`'s), and
+answers `bgtask.complete` when it is done. `{"bgtaskExpired":…}` is the person's cancel or iOS taking the time
+back. Before iOS 26 and on the Mac `bgtask.continue` answers `unavailable`, and the work is the app's to carry
+on as it did. What the shell does here is compiled by every build and has not yet been run on a device.
+
 **Running the work: `LeanNative.Native.BackgroundRun`** (optional; import it). A `BackgroundRun` is one job
 that may be expired at any moment: it linearizes start, expiry and the work's end under one lock,
 delivers its completion at most once (exactly once when started or expired), and, when expiry wins
@@ -313,7 +328,7 @@ out after 90 s and 180 s, and a host that is not a string or a port outside 1…
 URL to open and the callback it ends at, https — iOS 17.4 and later, the host among the app's `webcredentials:`
 associated domains — or a custom scheme; answers `{"ok":true,"url":…}`, the callback URL with its query, or the
 `ASWebAuthenticationSessionError` as `name` and `code`, `canceledLogin` when the person closes the sheet; one at a
-time, and the browser's cookies are shared unless `ephemeral`), `bgtask.schedule/complete/refreshStatus` (background tasks, above),
+time, and the browser's cookies are shared unless `ephemeral`), `bgtask.schedule/complete/refreshStatus/continue/progress` (background tasks, above),
 `cloudkit.account/query/save/load/delete` (below), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
 `ble.connect` (a peripheral the system already holds connected, else the first a scan finds; answers its
 characteristics), `ble.subscribe` (notifications on; iOS pairs here, so it may wait on the user),

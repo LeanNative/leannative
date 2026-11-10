@@ -20,6 +20,16 @@ before its work ran. Each launch therefore carries a tag, a serial the shell cou
 answer is `notPending`. A completion without a tag completes whatever task is pending under its identifier,
 as before tags (apps that do not send one keep working).
 
+**Continued processing** (iOS 26, `BGContinuedProcessingTask`; not on Mac Catalyst). Work a person started
+that should finish though they leave the app: iOS keeps the app running, shows the work's title, subtitle and
+progress in a Live Activity, and lets the person cancel it there. An identifier of this kind is listed in
+Info.plist with a wildcard (`<bundle id>.<context>.*`); each piece of work has its own identifier under it,
+which is registered when it is first asked for (iOS exempts these from the before-launch rule, and kills an
+app that registers one identifier twice, so the shell registers each once). `bgtask.continue` registers and
+submits; the launch arrives as `{"bgtask":{"id","kind":"continued","tag"}}` like any other; the app says how
+far the work is with `bgtask.progress` (iOS expires work that reports none) and ends it with
+`bgtask.complete`. A cancel by the person, or iOS taking the time back, is `{"bgtaskExpired":…}`.
+
 `PendingTasks` below is the same bookkeeping in Lean, step for step; background-run-test's `tasks`
 (`make check`) runs `LeanNative.Native.BackgroundTasks` against it. The Objective-C itself is only
 compiled here (native-demo's builds), never run: launches happen only on a device. -/
@@ -31,11 +41,23 @@ def backgroundTasksClass : List Stmt := [
     .l "@interface LNBackgroundTasks ()",
     .l "- (void)schedule:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "- (void)complete:(NSDictionary *)args answer:(LNAnswer)answer;",
+    .l "- (void)continueWork:(NSDictionary *)args answer:(LNAnswer)answer;",
+    .l "- (void)progress:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "@end",
+    .blank,
+    .l "// BGContinuedProcessingTask: the iOS 26 SDK, and never Mac Catalyst",
+    .pp "#if !TARGET_OS_MACCATALYST && defined(__IPHONE_26_0) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_26_0",
+    .pp "#define LN_CONTINUED_TASKS 1",
+    .pp "#else",
+    .pp "#define LN_CONTINUED_TASKS 0",
+    .pp "#endif",
     .blank,
     b "static NSString *LNTaskKind(BGTask *task) {" [
         .l "if ([task isKindOfClass:BGProcessingTask.class]) return @\"processing\";",
         .l "if ([task isKindOfClass:BGAppRefreshTask.class]) return @\"refresh\";",
+        .pp "#if LN_CONTINUED_TASKS",
+        .l "if (@available(iOS 26.0, *)) { if ([task isKindOfClass:BGContinuedProcessingTask.class]) return @\"continued\"; }",
+        .pp "#endif",
         .l "return @\"other\";"],
     .blank,
     .l "/// A submission's answer: `{\"ok\":true}`, or `{\"ok\":false,\"error\":…,\"code\":…,\"detail\":…}`.",
@@ -59,6 +81,8 @@ def backgroundTasksClass : List Stmt := [
     .blank,
     b "@implementation LNBackgroundTasks {" [
         .l "NSMutableSet<NSString *> *_registered;",
+        .l "// the wildcard identifiers of Info.plist, without their `*`: what a continued task's identifier starts with",
+        .l "NSMutableArray<NSString *> *_continuedPrefixes;",
         .l "// launched and not yet completed, by identifier, each with its launch's tag (`PendingTasks`)",
         .l "NSMutableDictionary<NSString *, BGTask *> *_running;",
         .l "NSMutableDictionary<NSString *, NSNumber *> *_tags;",
@@ -74,6 +98,7 @@ def backgroundTasksClass : List Stmt := [
     b "- (instancetype)init {" [
         b "if ((self = [super init])) {" [
             .l "_registered = [NSMutableSet set];",
+            .l "_continuedPrefixes = [NSMutableArray array];",
             .l "_running = [NSMutableDictionary dictionary];",
             .l "_tags = [NSMutableDictionary dictionary];"],
         .l "return self;"],
@@ -88,6 +113,10 @@ def backgroundTasksClass : List Stmt := [
         .l "if (![identifiers isKindOfClass:NSArray.class]) return;",
         b "for (NSString *identifier in identifiers) {" [
             .l "if (![identifier isKindOfClass:NSString.class] || [_registered containsObject:identifier]) continue;",
+            .l "// a wildcard names continued tasks: each is registered when it is asked for (`continueWork:`)",
+            b "if ([identifier hasSuffix:@\".*\"]) {" [
+                .l "[_continuedPrefixes addObject:[identifier substringToIndex:identifier.length - 1]];",
+                .l "continue;"],
             .blk [("@try {", [
                   .l "BOOL ok = [BGTaskScheduler.sharedScheduler registerForTaskWithIdentifier:identifier usingQueue:dispatch_get_main_queue()",
                   .l "                                                             launchHandler:^(__kindof BGTask *task) { [self launched:task]; }];",
@@ -161,6 +190,69 @@ def backgroundTasksClass : List Stmt := [
               .l "BOOL ok = [scheduler submitTaskRequest:request error:&error];",
               .pp "#pragma clang diagnostic pop",
               .l "answer(LNSubmitted(ok ? nil : (error ?: [NSError errorWithDomain:BGTaskSchedulerErrorDomain code:BGTaskSchedulerErrorCodeUnavailable userInfo:nil])));"])] "}"],
+    .blank,
+    .l "/// `bgtask.continue`: the work `id` (under a wildcard identifier of Info.plist) registered, once, and",
+    .l "/// submitted with what the person is shown. iOS runs it at once or queues it (`strategy` `fail`: refuses).",
+    b "- (void)continueWork:(NSDictionary *)args answer:(LNAnswer)answer {" [
+        .pp "#if LN_CONTINUED_TASKS",
+        b "if (@available(iOS 26.0, *)) {" [
+            .l "NSString *identifier = LNArgString(args, @\"id\");",
+            .l "NSString *title = LNArgString(args, @\"title\");",
+            b "if (identifier.length == 0 || title.length == 0) {" [
+                .l "answer(@{@\"ok\": @NO, @\"error\": @\"badArgs\", @\"detail\": @\"an id and a title\"});",
+                .l "return;"],
+            .l "BOOL permitted = NO;",
+            .l "for (NSString *prefix in _continuedPrefixes) if ([identifier hasPrefix:prefix] && identifier.length > prefix.length) permitted = YES;",
+            b "if (!permitted) {" [
+                .l "answer(@{@\"ok\": @NO, @\"error\": @\"notPermitted\", @\"detail\": @\"no wildcard identifier of BGTaskSchedulerPermittedIdentifiers covers it\"});",
+                .l "return;"],
+            b "if (![_registered containsObject:identifier]) {" [
+                .blk [("@try {", [
+                      .l "BOOL ok = [BGTaskScheduler.sharedScheduler registerForTaskWithIdentifier:identifier usingQueue:dispatch_get_main_queue()",
+                      .l "                                                             launchHandler:^(__kindof BGTask *task) { [self launched:task]; }];",
+                      .l "if (ok) [_registered addObject:identifier];"]), ("} @catch (NSException *e) {", [
+                      .l "NSLog(@\"bgtask: cannot register %@: %@\", identifier, e.reason);"])] "}",
+                b "if (![_registered containsObject:identifier]) {" [
+                    .l "answer(@{@\"ok\": @NO, @\"error\": @\"notPermitted\", @\"detail\": @\"iOS did not register it\"});",
+                    .l "return;"]],
+            .l "BGContinuedProcessingTaskRequest *request = [[BGContinuedProcessingTaskRequest alloc] initWithIdentifier:identifier",
+            .l "    title:title subtitle:LNArgString(args, @\"subtitle\") ?: @\"\"];",
+            .l "if ([LNArgString(args, @\"strategy\") isEqualToString:@\"fail\"]) request.strategy = BGContinuedProcessingTaskRequestSubmissionStrategyFail;",
+            .l "NSError *error = nil;",
+            .pp "#pragma clang diagnostic push",
+            .pp "#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"",
+            .l "BOOL ok = [BGTaskScheduler.sharedScheduler submitTaskRequest:request error:&error];",
+            .pp "#pragma clang diagnostic pop",
+            .l "answer(LNSubmitted(ok ? nil : (error ?: [NSError errorWithDomain:BGTaskSchedulerErrorDomain code:BGTaskSchedulerErrorCodeUnavailable userInfo:nil])));",
+            .l "return;"],
+        .pp "#endif",
+        .l "answer(@{@\"ok\": @NO, @\"error\": @\"unavailable\", @\"detail\": @\"continued processing needs iOS 26, and is not on the Mac\"});"],
+    .blank,
+    .l "/// `bgtask.progress`: how far the continued task pending under `id` is (`completed` of `total`), and, when",
+    .l "/// given, the title and subtitle the person is shown now.",
+    b "- (void)progress:(NSDictionary *)args answer:(LNAnswer)answer {" [
+        .pp "#if LN_CONTINUED_TASKS",
+        b "if (@available(iOS 26.0, *)) {" [
+            .l "NSString *identifier = LNArgString(args, @\"id\") ?: @\"\";",
+            .l "BGTask *pending = _running[identifier];",
+            .l "NSNumber *tag = LNArgNumber(args, @\"tag\");",
+            .l "if (tag && ![tag isEqualToNumber:(_tags[identifier] ?: @0)]) pending = nil;",
+            b "if (![pending isKindOfClass:BGContinuedProcessingTask.class]) {" [
+                .l "answer(@{@\"ok\": @NO, @\"error\": @\"notPending\"});",
+                .l "return;"],
+            .l "BGContinuedProcessingTask *task = (BGContinuedProcessingTask *)pending;",
+            .l "NSNumber *total = LNArgNumber(args, @\"total\");",
+            .l "NSNumber *completed = LNArgNumber(args, @\"completed\");",
+            .l "if (total) task.progress.totalUnitCount = MAX(total.longLongValue, 1);",
+            .l "// never the whole of it: a finished progress is the task's end, which is `bgtask.complete`'s to say",
+            .l "if (completed) task.progress.completedUnitCount = MIN(MAX(completed.longLongValue, 0), MAX(task.progress.totalUnitCount - 1, 0));",
+            .l "NSString *title = LNArgString(args, @\"title\");",
+            .l "NSString *subtitle = LNArgString(args, @\"subtitle\");",
+            .l "if (title.length || subtitle.length) [task updateTitle:(title.length ? title : task.title) subtitle:(subtitle ?: task.subtitle)];",
+            .l "answer(@{@\"ok\": @YES});",
+            .l "return;"],
+        .pp "#endif",
+        .l "answer(@{@\"ok\": @NO, @\"error\": @\"unavailable\"});"],
     .blank,
     b "- (void)complete:(NSDictionary *)args answer:(LNAnswer)answer {" [
         .l "NSString *identifier = LNArgString(args, @\"id\") ?: @\"\";",
