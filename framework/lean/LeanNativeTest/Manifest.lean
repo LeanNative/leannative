@@ -157,6 +157,17 @@ def main : IO UInt32 := do
   check "fixed versions in Info.plist" (is plain ["targets", "App", "info", "properties", "CFBundleVersion"] "1")
   check "no UI tests, no test target" (at? plain ["targets", "AppUITests"] == none
     && at? plain ["schemes", "App", "test"] == none)
+  -- Swift: declared a file at a time, compiled with the other sources and named in Info.plist for the checks
+  refused "a Swift file among nativeSources" { base with nativeSources := ["Bridge.swift"] } "swiftSources"
+  refused "swiftSources that is not a .swift file" { base with swiftSources := ["Bridges"] } "swiftSources Bridges"
+  let swift : Manifest := { base with nativeSources := ["Port.m"], swiftSources := ["Bridge.swift", "Bridges/LLM.swift"] }
+  accepted "swiftSources beside nativeSources" swift
+  let sp := swift.project paths
+  check "Swift sources after the native ones" (((at? sp ["targets", "App", "sources"]).bind (·.getArr?.toOption)).map (·.toList.drop 3)
+    == some [Json.mkObj [("path", "Port.m")], Json.mkObj [("path", "Bridge.swift")], Json.mkObj [("path", "Bridges/LLM.swift")]])
+  check "Swift sources declared in Info.plist" (is sp ["targets", "App", "info", "properties", swiftSourcesKey]
+    (toJson ["Bridge.swift", "Bridges/LLM.swift"]))
+  check "no Swift sources, no declaration" (at? plain ["targets", "App", "info", "properties", swiftSourcesKey] == none)
   -- the capabilities file for an app's `uses`: only what they need is printed, so linked
   let caps (uses : Option (List String)) := file [] (capsFileFor uses)
   let every := caps none

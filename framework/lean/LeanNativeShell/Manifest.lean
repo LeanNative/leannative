@@ -91,6 +91,11 @@ structure Manifest where
   /-- App-owned native source files, relative to `ios/`. Useful for a staged port of an existing
   library; the generated Lean C and shared shell remain in the target. -/
   nativeSources : List String := []
+  /-- App-owned Swift source files, relative to `ios/`: the app's bridge to a framework that has no
+  Objective-C interface (docs/BRIDGES.md). They are compiled like `nativeSources`, and named in Info.plist
+  (`LNSwiftSources`), which is how `ci/check-no-swift` and `leannative-release verify-app` know the Swift
+  the app means to have: these files and the system's Swift libraries pass, any other Swift is refused. -/
+  swiftSources : List String := []
   /-- the shell capabilities the app calls: names (`auth`) or families (`ble.*`) of `LeanNativeShell.capabilities` -/
   uses : List String := []
   /-- capability families the app calls without listing them in `uses`, on purpose: their requirements are
@@ -140,6 +145,9 @@ def strs (xs : List String) : Json := Json.arr (xs.map Json.str).toArray
 /-- `YES`/`NO`, as Xcode writes build settings. -/
 def yes (b : Bool) : Json := if b then "YES" else "NO"
 
+/-- The Info.plist key `swiftSources` are written under. -/
+def swiftSourcesKey : String := "LNSwiftSources"
+
 def Manifest.testBundleId (m : Manifest) (t : UITests) : String := t.bundleId.getD (m.bundleId ++ ".uitests")
 
 def Manifest.infoPlist (m : Manifest) : Json :=
@@ -163,7 +171,9 @@ def Manifest.infoPlist (m : Manifest) : Json :=
         ("UIApplicationSupportsMultipleScenes", false),
         ("UISceneConfigurations", Json.mkObj [("UIWindowSceneSessionRoleApplication", Json.arr #[Json.mkObj [
             ("UISceneConfigurationName", "Default"), ("UISceneDelegateClassName", "LNSceneDelegate")]])])])] ++
-    orientations ++ m.usage.map (fun (k, v) => (k, Json.str v)) ++ tasks
+    orientations ++ m.usage.map (fun (k, v) => (k, Json.str v)) ++ tasks ++
+    -- the Swift the app means to have, for the checks that otherwise refuse any (check-no-swift, verify-app)
+    (if m.swiftSources.isEmpty then [] else [(swiftSourcesKey, strs m.swiftSources)])
   deepMerge generated (Json.mkObj m.info)
 
 def Manifest.entitlementsPlist (m : Manifest) : Json :=
@@ -226,7 +236,7 @@ def Manifest.project (m : Manifest) (p : Paths) : Json :=
     [Json.mkObj [("path", Json.str s!"{p.build}/native-shell"), ("name", "LeanNativeShell")],
      Json.mkObj [("path", Json.str s!"{p.native}/c"), ("name", "LeanNativeShim")],
      Json.mkObj [("path", Json.str s!"{p.build}/lean-c"), ("name", "LeanC"), ("compilerFlags", strs ["-w"])]] ++
-    m.nativeSources.map (fun s => Json.mkObj [("path", Json.str s)]) ++
+    (m.nativeSources ++ m.swiftSources).map (fun s => Json.mkObj [("path", Json.str s)]) ++
     m.resources.map (fun r => Json.mkObj [("path", Json.str r), ("buildPhase", "resources")]) ++
     m.icon.toList.map (fun i => Json.mkObj [("path", Json.str i)])
   let entitlements := m.entitlementsPlist
@@ -310,6 +320,11 @@ def Manifest.problems (m : Manifest) : List String :=
   (m.uses.filter (!known ·) |>.map fun u => s!"uses {u}: the shell has no such capability (LeanNativeShell.capabilities)") ++
   (m.unlisted.filter (!known ·) |>.map fun u => s!"unlisted {u}: the shell has no such capability (LeanNativeShell.capabilities)") ++
   (m.backgroundTasks.filter (·.1.isEmpty) |>.map fun _ => "backgroundTasks: an empty identifier") ++
+  -- Swift is declared, a file at a time: a directory or a `.swift` among the other sources would be Swift
+  -- the checks were not told of
+  (m.nativeSources.filter (·.endsWith ".swift") |>.map fun s =>
+    s!"nativeSources {s}: a Swift file is listed in swiftSources, which declares it to the no-Swift checks") ++
+  (m.swiftSources.filter (!·.endsWith ".swift") |>.map fun s => s!"swiftSources {s}: a .swift file, by name") ++
   (requirements.filter (families.contains ·.1) |>.flatMap fun (_, need) => need info ent)
 
 /-! ## What the app's code calls

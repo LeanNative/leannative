@@ -4,7 +4,8 @@ A LeanNative app (package `leannative`, see the README's names section) runs on 
 tasks, `ByteArray`, hash maps…) compiled by Lean's compiler to C and linked with Lean's runtime. A shared
 Objective-C renderer draws the view tree with UIKit on iOS and Mac Catalyst on macOS. The app runs its
 commands in Lean (`perform`: TCP, files, timers, tasks) and requests platform services through
-capabilities. No Swift is compiled, per app or in the shell. The native runtime calls `Session.step`,
+capabilities. No Swift is compiled in the shell, and none per app unless its manifest declares a bridge
+(`swiftSources`, below). The native runtime calls `Session.step`,
 so its state-transition theorems apply to the transition used by the running app. The renderer and
 platform effects remain trusted and tested separately.
 
@@ -223,6 +224,20 @@ Where each key comes from:
   `version` (`.fixed short build` into Info.plist, or `.settings marketing current`: `MARKETING_VERSION` and
   `CURRENT_PROJECT_VERSION`, which a release overrides with xcodebuild arguments), `deploymentTarget`
   (17.0), `xcodeVersion`, `mac`, `orientations` (iPhone, then iPad), `icon`, `resources`, `uiTests`.
+- **Swift the app owns** (`swiftSources`, `.swift` files relative to `ios/`): an app's bridge to a framework
+  with no Objective-C interface ([docs/BRIDGES.md](../../docs/BRIDGES.md)). They are compiled with the
+  target like `nativeSources`, and written into Info.plist as `LNSwiftSources`, which is the app saying
+  which Swift it means to have. `ci/check-no-swift` and `leannative-release verify-app` read it from the
+  built app, so no workflow passes them anything: without the key they refuse any Swift, as before; with
+  it they allow those files in the tree and in the build log, and the system's Swift libraries
+  (`/usr/lib/swift`, `/System/Library`) linked, and still refuse any other `.swift` file tracked or
+  compiled, a Swift library that is not the system's, and one bundled in `Frameworks`. Generation refuses
+  a `.swift` file in `nativeSources` and an entry of `swiftSources` that is not one, so Swift is always
+  declared a file at a time. A tracked file matches a declared one by the end of its path
+  (`ios/Bridge.swift` is `Bridge.swift`), whole components only. An app with a hand-kept `project.yml`
+  sets `LNSwiftSources` in its Info.plist itself. XcodeGen's default `SWIFT_VERSION` (5.0) applies unless
+  `settings` says otherwise. Tried in Debug and Release for the simulator (the class survives dead-code
+  stripping); not under Mac Catalyst, on a device, or through a release.
 - **Anything the manifest does not model**: `info` (Info.plist keys), `entitlements`, `settings` (the app
   target's build settings) and `testSettings` (the UI-test target's) go over the generated values, and
   `spec` is merged into the whole XcodeGen spec last (objects key by key, anything else replaced), so any
@@ -397,6 +412,21 @@ optional app-owned Objective-C class named `LeanNativeAppCapabilities` with the 
 `run:answer:`. It is useful for a staged port of an existing native library: the app declares the
 capability in `uses`, adds its bridge through `Manifest.nativeSources`, and can keep the model and views
 in Lean while moving the library a module at a time. Without the class, the shell answers `unsupported`.
+
+**Apple's machine learning, and other bridges.** The shell has no ML capability; an app reaches the
+frameworks through `app.invoke`, its `LeanNativeAppCapabilities` class calling them. Core ML, Vision,
+NaturalLanguage, Speech and SoundAnalysis have Objective-C headers in the iOS 27.2 SDK, so running a
+model, recognizing text or tagging a sentence is a few lines of Objective-C and a JSON answer: run the
+request off the main thread and answer on the main queue, as `http.get` does, and bundle a compiled model
+(`.mlmodelc`) through `resources`. Images cross as hex in the JSON, which suits a photo, not a camera's
+frames. Foundation Models (the on-device language model) is Swift only (its SDK ships a `.swiftmodule` and
+no headers), so its bridge is a Swift file: the same class, named for Objective-C
+(`@objc(LeanNativeAppCapabilities)`). That builds and answers as the manifest and
+`build-ios` are (a scratch copy of `examples/simple`, iOS 26.5 simulator). The manifest names it in
+`swiftSources`, not `nativeSources`, which is what lets it past `ci/check-no-swift` and `leannative-release
+verify-app` (the manifest, above).
+[docs/BRIDGES.md](../../docs/BRIDGES.md) lists the capabilities that need a bridge of either kind, what
+each bridge has to get right and how each is tested.
 
 **Scoped effects: `LeanNative.Native.EffectScope`** (optional; import it). A scope is a part of the app's
 life whose effects end together (an open document, an account, a screen): the app `capture`s a token

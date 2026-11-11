@@ -44,7 +44,8 @@ native-support:
 release:
 	cd lean && lake build leannative-release release-test && .lake/build/bin/release-test $(PY) ../scripts/fake_asc.py
 
-# framework/native/ci's Python, against fixtures: export-evidence (scripts/tests).
+# framework/native/ci's scripts, against fixtures: export-evidence and the others' Python, and check-no-swift
+# against small apps clang links here (scripts/tests).
 scripts:
 	$(PY) -I -m unittest discover -s scripts/tests
 

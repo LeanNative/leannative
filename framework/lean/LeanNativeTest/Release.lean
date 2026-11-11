@@ -112,7 +112,7 @@ def policyChecks (dir : System.FilePath) : IO Unit := do
   check "append-notes: a last paragraph" ((← IO.FS.readFile notes) == "What to Test.\n\nPeers: census abc\n")
   check "policy: a bad tag" (← failsWith (policy notes (some "v1.2")) "stable vMAJOR.MINOR.PATCH")
 
-def infoPlist (bundle version build : String) : String := s!"<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+def infoPlist (bundle version build : String) (extra : String := "") : String := s!"<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
 <plist version=\"1.0\"><dict>
 <key>CFBundleIdentifier</key><string>{bundle}</string>
@@ -120,7 +120,7 @@ def infoPlist (bundle version build : String) : String := s!"<?xml version=\"1.0
 <key>CFBundleShortVersionString</key><string>{version}</string>
 <key>CFBundleVersion</key><string>{build}</string>
 <key>ITSAppUsesNonExemptEncryption</key><false/>
-<key>CFBundleIcons</key><dict><key>CFBundlePrimaryIcon</key><dict><key>CFBundleIconName</key><string>AppIcon</string></dict></dict>
+<key>CFBundleIcons</key><dict><key>CFBundlePrimaryIcon</key><dict><key>CFBundleIconName</key><string>AppIcon</string></dict></dict>{extra}
 </dict></plist>
 "
 
@@ -136,14 +136,22 @@ def entitlementsPlist (team bundle : String) (debuggable : Bool) : String := s!"
 </dict></plist>
 "
 
-/-- A signed `Probe.app` under `dir`: an arm64 executable, Info.plist, and the given entitlements. -/
-def probeApp (dir : System.FilePath) (team : String) (debuggable : Bool) : IO System.FilePath := do
+/-- A signed `Probe.app` under `dir`: an arm64 executable, Info.plist, and the given entitlements. With
+`swift`, the executable links the system's Swift library; `declared` are its Info.plist's `LNSwiftSources`. -/
+def probeApp (dir : System.FilePath) (team : String) (debuggable : Bool) (swift : Bool := false)
+    (declared : List String := []) : IO System.FilePath := do
   let app := dir / "Payload" / "Probe.app"
   if ← app.pathExists then IO.FS.removeDirAll app
   IO.FS.createDirAll app
   IO.FS.writeFile (dir / "probe.c") "int main(void) { return 0; }\n"
-  discard <| run "xcrun" #["clang", "-arch", "arm64", "-o", (app / "Probe").toString, (dir / "probe.c").toString]
-  IO.FS.writeFile (app / "Info.plist") (infoPlist "com.example.probe" "1.2.3" "42")
+  let swiftLib ← if swift then do
+      let sdk ← run "xcrun" #["--show-sdk-path"]
+      pure #[s!"-L{trim sdk.stdout}/usr/lib/swift", "-lswiftCore"]
+    else pure #[]
+  discard <| run "xcrun" (#["clang", "-arch", "arm64", "-o", (app / "Probe").toString, (dir / "probe.c").toString] ++ swiftLib)
+  let sources := if declared.isEmpty then "" else
+    s!"\n<key>{swiftSourcesKey}</key><array>{"".intercalate (declared.map (s!"<string>{·}</string>"))}</array>"
+  IO.FS.writeFile (app / "Info.plist") (infoPlist "com.example.probe" "1.2.3" "42" sources)
   IO.FS.writeFile (dir / "ent.plist") (entitlementsPlist team "com.example.probe" debuggable)
   discard <| run "codesign" #["--force", "-s", "-", "--entitlements", (dir / "ent.plist").toString, app.toString]
   return app
@@ -164,6 +172,22 @@ def bundleChecks (dir : System.FilePath) : IO Unit := do
   check "verify-app: debugging on is not distribution" (← failsWith (verifyApp archived id true) "disable debugging")
   let otherTeam ← probeApp dir "OTHERTEAM1" false
   check "verify-app: signed for another team" (← failsWith (verifyApp otherTeam id true) "signed as OTHERTEAM1.com.example.probe")
+  -- Swift: none unless the app declares its sources, then the system's libraries only, and none bundled
+  let core := "/usr/lib/swift/libswiftCore.dylib"
+  check "swift: the libraries otool lists, by install name"
+    (swiftLibraries s!"/tmp/swift/Probe:\n\t{core} (compatibility version 0.0.0, current version 0.0.0)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n\t@rpath/libswift_Concurrency.dylib (compatibility version 1.0.0)\n"
+      == [core, "@rpath/libswift_Concurrency.dylib"])
+  check "swift: none linked, none declared" (swiftProblems [] [] []).isEmpty
+  check "swift: linked but not declared" ((swiftProblems [] [core] []).any (·.contains swiftSourcesKey))
+  check "swift: declared, the system's libraries" (swiftProblems ["Bridge.swift"] [core, "/System/Library/Frameworks/SwiftUI.framework/SwiftUI"] []).isEmpty
+  check "swift: declared, a library that is not the system's"
+    ((swiftProblems ["Bridge.swift"] [core, "@rpath/libswiftCore.dylib"] []).any (·.contains "not the system's (@rpath/libswiftCore.dylib)"))
+  check "swift: declared, a bundled library all the same"
+    ((swiftProblems ["Bridge.swift"] [core] ["libswiftCore.dylib"]).any (·.contains "bundles a Swift library (libswiftCore.dylib)"))
+  let undeclared ← probeApp dir "TEAM123456" false (swift := true)
+  check "verify-app: Swift linked without a declaration" (← failsWith (verifyApp undeclared id true) "links a Swift library (/usr/lib/swift/libswiftCore.dylib)")
+  let bridged ← probeApp dir "TEAM123456" false (swift := true) (declared := ["Bridge.swift"])
+  check "verify-app: Swift linked, its sources declared" (!(← failsWith (verifyApp bridged id true) ""))
   let app ← probeApp dir "TEAM123456" false
   let ipa := dir / "Probe.ipa"
   discard <| run "ditto" #["-c", "-k", "--keepParent", (dir / "Payload").toString, ipa.toString]
