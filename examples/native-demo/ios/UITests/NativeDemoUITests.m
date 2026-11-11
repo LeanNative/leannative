@@ -226,6 +226,27 @@
     XCTAssertEqualObjects(LNText(LNElement(self.app, @"count")), @"Count: 1");
 }
 
+/// A sheet's button that opens a screen: the sheet goes, the screen is pushed, and it stays. UIKit keeps a push
+/// back while a sheet over the stack is on its way out, and the shell used to push the screen again for each view
+/// that came meanwhile (here the answer of the TCP echo the button also starts), then read the first to land as a
+/// pop the person made: the app was told to go back, and did, within a second.
+- (void)testAScreenOpenedFromASheetStays {
+    if (![self openTab:@"Widgets"]) return;
+    XCUIElement *open = self.app.buttons[@"Open sheet"].firstMatch;
+    XCTAssertTrue(LNScrollTo(self.app, open), @"Open sheet cannot be scrolled into view");
+    XCTAssertNil(LNTapElement(self.app, open, @"Open sheet"));
+    if (!LNTap(self.app, @"sheetPush") || !LNWait(self.app, @"pushedText")) return;
+    // the view after the push has come: the echo's answer is the newest line of the log
+    XCUIElement *pushed = LNElement(self.app, @"pushedText"), *log = LNElement(self.app, @"pushedLog");
+    XCTAssertTrue(LNPoll(10, 0.1, ^BOOL{ return log.exists && [LNText(log) hasPrefix:@"TCP echo"]; }), @"the echo never answered");
+    // three seconds on, the screen is still up: nothing told the app to go back
+    [NSThread sleepForTimeInterval:3];
+    XCTAssertTrue(LNPoll(2, 0.1, ^BOOL{ return pushed.exists && !open.exists; }), @"the screen opened from the sheet went back by itself");
+    // and back from it, as a person goes, is the Widgets tab's own screen
+    XCTAssertNil(LNTapElement(self.app, self.app.navigationBars.buttons.firstMatch, @"Back (from the pushed screen)"));
+    XCTAssertTrue(LNPoll(10, 0.1, ^BOOL{ return open.exists && !pushed.exists; }), @"going back did not show the Widgets tab's screen");
+}
+
 - (void)testScrollingToTheLastProbe {
     if (![self openTab:@"Probes"]) return;
     // the last capability button (16 probes: probe-15) is below the fold on a phone: LNTap scrolls to it first
