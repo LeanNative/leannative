@@ -56,7 +56,11 @@ jobs:
               | sh -s -- -y --default-toolchain none --no-modify-path
           fi
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          "$HOME/.elan/bin/elan" toolchain install "$(cat framework/lean/lean-toolchain)"
+          # an elan that already has the toolchain refuses to install it again (4.2.3 exits 1), and a
+          # self-hosted runner keeps its ~/.elan between jobs: install only what is missing, as ios-app.yml does
+          t=$(cat framework/lean/lean-toolchain)
+          have=$("$HOME/.elan/bin/elan" toolchain list)
+          awk '{print $1}' <<< "$have" | grep -qxF "$t" || "$HOME/.elan/bin/elan" toolchain install "$t"
       - name: make check
         run: make check
       - name: native-demo for the iOS simulator
@@ -133,7 +137,11 @@ jobs:
               | sh -s -- -y --default-toolchain none --no-modify-path
           fi
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          "$HOME/.elan/bin/elan" toolchain install "$(cat framework/lean/lean-toolchain)"
+          # an elan that already has the toolchain refuses to install it again (4.2.3 exits 1), and a
+          # self-hosted runner keeps its ~/.elan between jobs: install only what is missing, as ios-app.yml does
+          t=$(cat framework/lean/lean-toolchain)
+          have=$("$HOME/.elan/bin/elan" toolchain list)
+          awk '{print $1}' <<< "$have" | grep -qxF "$t" || "$HOME/.elan/bin/elan" toolchain install "$t"
       - name: native-demo UI tests
         run: |
           UI_OUT="$RUNNER_TEMP/ui" UI_BEFORE="$PWD/examples/native-demo/ios/ui-before" DERIVED_DATA="$RUNNER_TEMP/dd" \
@@ -218,7 +226,11 @@ jobs:
               | sh -s -- -y --default-toolchain none --no-modify-path
           fi
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          "$HOME/.elan/bin/elan" toolchain install "$(cat framework/lean/lean-toolchain)"
+          # an elan that already has the toolchain refuses to install it again (4.2.3 exits 1), and a
+          # self-hosted runner keeps its ~/.elan between jobs: install only what is missing, as ios-app.yml does
+          t=$(cat framework/lean/lean-toolchain)
+          have=$("$HOME/.elan/bin/elan" toolchain list)
+          awk '{print $1}' <<< "$have" | grep -qxF "$t" || "$HOME/.elan/bin/elan" toolchain install "$t"
       - name: native-demo UI tests under Mac Catalyst
         run: |
           set -euo pipefail
@@ -304,7 +316,11 @@ jobs:
               | sh -s -- -y --default-toolchain none --no-modify-path
           fi
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          "$HOME/.elan/bin/elan" toolchain install "$(cat framework/lean/lean-toolchain)"
+          # an elan that already has the toolchain refuses to install it again (4.2.3 exits 1), and a
+          # self-hosted runner keeps its ~/.elan between jobs: install only what is missing, as ios-app.yml does
+          t=$(cat framework/lean/lean-toolchain)
+          have=$("$HOME/.elan/bin/elan" toolchain list)
+          awk '{print $1}' <<< "$have" | grep -qxF "$t" || "$HOME/.elan/bin/elan" toolchain install "$t"
       - name: The journeys against the app itself, headless (no simulator)
         run: |
           set -euo pipefail
