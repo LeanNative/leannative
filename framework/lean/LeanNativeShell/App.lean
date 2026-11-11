@@ -43,6 +43,23 @@ def appFile : List Stmt := [
         .l "config.delegateClass = LNSceneDelegate.class;",
         .l "return config;"],
     .blank,
+    .l "// The view's keys (`decor.key`, `LNKeys`) are commands of the main menu, and this delegate is their target.",
+    b "- (void)buildMenuWithBuilder:(id<UIMenuBuilder>)builder {" [
+        .l "[super buildMenuWithBuilder:builder];",
+        .l "if (builder.system == UIMenuSystem.mainSystem) [LNKeys build:builder];"],
+    .blank,
+    .l "- (void)lnKey:(UICommand *)command { [LNKeys perform:command.propertyList]; }",
+    .blank,
+    .l "// A key pressed asks with its command: one that does nothing now is not the app's, and goes on as the text",
+    .l "// it may be. A Mac's menu bar asks with an item of its own, and then with `validateCommand:`.",
+    b "- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {" [
+        .l "if (action == @selector(lnKey:)) return ![sender isKindOfClass:UICommand.class] || [LNKeys available:((UICommand *)sender).propertyList];",
+        .l "return [super canPerformAction:action withSender:sender];"],
+    .blank,
+    b "- (void)validateCommand:(UICommand *)command {" [
+        .l "[super validateCommand:command];",
+        .l "if (command.action == @selector(lnKey:) && ![LNKeys available:command.propertyList]) command.attributes |= UIMenuElementAttributesDisabled;"],
+    .blank,
     .l "@end",
     .blank,
     b "@implementation LNSceneDelegate {" [

@@ -94,5 +94,14 @@ NSString *_Nullable LNTypeElement(XCUIApplication *app, XCUIElement *element, NS
 /// leading one), far enough to show the actions and not so far that the first one fires, then the action
 /// named `title` pressed. nil, or why it could not be done.
 NSString *_Nullable LNSwipeAction(XCUIApplication *app, XCUIElement *element, NSString *name, BOOL trailing, NSString *title);
+/// A list row's context menu (`decor.menu`), opened at `element`: a long press on iOS, a right click on the Mac.
+/// nil once the menu's item named `first` is there, or why it is not.
+NSString *_Nullable LNOpenMenu(XCUIApplication *app, XCUIElement *element, NSString *name, NSString *first);
+/// An item of the menu that is open, by its title.
+XCUIElement *LNMenuItem(XCUIApplication *app, NSString *title);
+/// LNOpenMenu, then the item named `title` chosen. nil, or why it could not be done.
+NSString *_Nullable LNMenuAction(XCUIApplication *app, XCUIElement *element, NSString *name, NSString *title);
+/// A key pressed with its modifiers, as a keyboard's (`decor.key`): `LNPressKey(app, @"k", XCUIKeyModifierCommand)`.
+void LNPressKey(XCUIApplication *app, NSString *key, XCUIKeyModifierFlags flags);
 
 NS_ASSUME_NONNULL_END

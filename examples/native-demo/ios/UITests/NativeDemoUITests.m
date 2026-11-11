@@ -127,6 +127,71 @@
 }
 #endif
 
+/// A row's context menu (`decor.menu`): a long press on a phone, a right click on a Mac. Its items are the row's
+/// buttons, which are not drawn in the row; a disabled one is there and greyed.
+- (void)testARowsMenuDoesItsActions {
+    if (![self openTab:@"Widgets"]) return;
+    XCUIElement *row = LNElement(self.app, @"swipeRow"), *value = LNElement(self.app, @"swipedValue");
+    XCTAssertTrue(LNScrollTo(self.app, row), @"the row cannot be scrolled into view");
+    XCTAssertEqualObjects(LNText(value), @"Nothing yet");
+    // a menu's item is not drawn in its row
+    XCTAssertFalse(LNElement(self.app, @"menu-unread").exists, @"Mark unread is drawn in the row");
+    NSString *why = LNOpenMenu(self.app, row, @"the row", @"Mark unread");
+    XCTAssertNil(why, @"%@", why);
+    if (why) return;
+    // the swipe actions that are in the menu too, the one that is only a swipe action not, and the disabled one greyed
+    XCTAssertTrue(LNMenuItem(self.app, @"Archive").exists && LNMenuItem(self.app, @"Delete").exists, @"the menu lacks Archive or Delete");
+    XCTAssertFalse(LNMenuItem(self.app, @"Flag").exists, @"a swipe action that is no menu item is in the menu");
+    XCTAssertTrue(LNMenuItem(self.app, @"Locked").exists, @"the disabled item is not in the menu");
+    XCTAssertFalse(LNMenuItem(self.app, @"Locked").enabled, @"the disabled item is enabled");
+#if TARGET_OS_MACCATALYST
+    [LNMenuItem(self.app, @"Mark unread") click];
+#else
+    [LNMenuItem(self.app, @"Mark unread") tap];
+#endif
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(value) isEqualToString:@"Marked unread"]; }), @"after Mark unread: %@", LNText(value));
+    why = LNMenuAction(self.app, row, @"the row", @"Delete");
+    XCTAssertNil(why, @"%@", why);
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(value) isEqualToString:@"Deleted"]; }), @"after Delete: %@", LNText(value));
+}
+
+/// Keys (`decor.key`): a button's key is its click, in the page or in a bar, an input's puts the cursor in it
+/// (here cmd-F, the system's Find), and cmd-[ goes back from a screen.
+- (void)testKeysDoWhatTheirNodesDo {
+    if (!LNWait(self.app, @"inc")) return;
+    XCUIElement *count = LNElement(self.app, @"count");
+    LNPressKey(self.app, @"k", XCUIKeyModifierCommand);
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(count) isEqualToString:@"Count: 1"]; }), @"after cmd-K: %@", LNText(count));
+    // the field has the cursor: what is typed next is its text
+    LNPressKey(self.app, @"f", XCUIKeyModifierCommand);
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [[LNElement(self.app, @"name") valueForKey:@"hasKeyboardFocus"] boolValue]; }),
+                  @"cmd-F did not put the cursor in the field");
+    [self.app typeText:@"Ada"];
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(LNElement(self.app, @"greeting")) isEqualToString:@"Hello, Ada"]; }),
+                  @"typed after cmd-F: %@", LNText(LNElement(self.app, @"greeting")));
+    // a key with command is a key while a field is being typed in, and pressed once it counts once
+    LNPressKey(self.app, @"k", XCUIKeyModifierCommand);
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(count) isEqualToString:@"Count: 2"]; }), @"after cmd-K in the field: %@", LNText(count));
+    XCTAssertFalse(LNPoll(1, 0.1, ^BOOL{ return ![LNText(count) isEqualToString:@"Count: 2"]; }), @"one press counted twice: %@", LNText(count));
+    // in the columns: a bar's button has its key, and cmd-[ is the screen's back
+    if (!LNTap(self.app, @"openColumns") || !LNWait(self.app, @"box-1")) return;
+    BOOL wide = LNAppears(LNElement(self.app, @"columnItem"), 2);
+    if (!LNTap(self.app, @"box-1") || !LNWait(self.app, @"item-2")) return;
+    if (!LNTap(self.app, @"item-2") || !LNWait(self.app, @"columnItem")) return;
+    LNPressKey(self.app, @"k", XCUIKeyModifierCommand);
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(LNElement(self.app, @"columnCount")) isEqualToString:@"Count: 3"]; }),
+                  @"after cmd-K in the column: %@", LNText(LNElement(self.app, @"columnCount")));
+    if (!wide) {
+        LNPressKey(self.app, @"[", XCUIKeyModifierCommand);
+        XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return !LNElement(self.app, @"columnItem").exists; }), @"cmd-[ did not go back from the item");
+        if (!LNWait(self.app, @"item-0")) return;
+        LNPressKey(self.app, @"[", XCUIKeyModifierCommand);
+        XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return !LNElement(self.app, @"item-0").exists; }), @"cmd-[ did not go back from the list");
+    }
+    if (!LNTap(self.app, @"closeColumns") || !LNWait(self.app, @"count")) return;
+    XCTAssertEqualObjects(LNText(count), @"Count: 3");
+}
+
 /// The columns (`Html.split`): side by side in a wide window (a Mac, an iPad), one at a time in a narrow one (a
 /// phone), where a choice shows the next column and going back from one is its screen's own `onBack`.
 - (void)testColumnsSideBySideOrOneAtATime {

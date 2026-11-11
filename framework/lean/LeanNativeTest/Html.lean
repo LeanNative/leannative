@@ -18,10 +18,12 @@ def wire (h : Html Nat) : Json := h.toWire.toJson
 
 /-- The node's `"decor"` on the wire, with any field not given its default. -/
 def decorJson (tone : String := "standard") (mono badge centered : Bool := false) (symbol : String := "")
-    (chevron : Bool := false) (swipe : String := "none") (selected : Bool := false) : Json :=
+    (chevron : Bool := false) (swipe : String := "none") (selected : Bool := false) (menu : Bool := false)
+    (key : String := "") : Json :=
   Json.mkObj [("tone", Json.str tone), ("mono", Json.bool mono), ("badge", Json.bool badge),
               ("centered", Json.bool centered), ("symbol", Json.str symbol), ("chevron", Json.bool chevron),
-              ("swipe", Json.str swipe), ("selected", Json.bool selected)]
+              ("swipe", Json.str swipe), ("selected", Json.bool selected), ("menu", Json.bool menu),
+              ("key", Json.str key)]
 
 def label : Html Nat := .text "1,000 sats" .body
 
@@ -124,11 +126,36 @@ def swipes : IO Unit := do
     (Json.mkObj [("t", Json.str "button"), ("label", Json.str "Snooze"), ("role", Json.str "plain"),
       ("enabled", Json.bool false), ("decor", decorJson (swipe := "leading"))])
 
+/-- A row's menu item and a key equivalent are decorations too: the node, its click and its place in the tree
+are what they were, so a journey presses a menu's button by its identifier and a shell that knows neither field
+draws the button. -/
+def menusAndKeys : IO Unit := do
+  let done : Html Nat := Html.inMenu (Html.swipe .trailing (Html.symbol "checkmark" (.identified "done" (.button "Done" .plain (some 7)))))
+  let row : Html Nat := .col [.text "A message" .body, done, Html.inMenu (.button "Report" .destructive (some 8))]
+  check "a click on a menu's button is its message" (row.dispatch [1] .click == some 7 && row.dispatch [2] .click == some 8)
+  check "and the wire advertises it" (row.toWire.advertises [1] .click)
+  same "a button that is a swipe action and a menu item: one decor" done
+    (Json.mkObj [("t", Json.str "button"), ("label", Json.str "Done"), ("role", Json.str "plain"),
+      ("enabled", Json.bool true), ("id", Json.str "done"), ("decor", decorJson (symbol := "checkmark") (swipe := "trailing") (menu := true))])
+  let sync : Html Nat := Html.key "cmd+r" (.identified "sync" (.button "Sync" .plain (some 3)))
+  same "a button with a key: the button's own keys, its id and one decor" sync
+    (Json.mkObj [("t", Json.str "button"), ("label", Json.str "Sync"), ("role", Json.str "plain"),
+      ("enabled", Json.bool true), ("id", Json.str "sync"), ("decor", decorJson (key := "cmd+r"))])
+  check "a key changes nothing a click does" (sync.dispatch [] .click == some 3)
+  -- on a screen the key is its pull to refresh, the screen's own click; on an input it is the cursor, no event
+  let screen : Html Nat := Html.key "cmd+shift+n" (.screen "Inbox" none [Html.key "cmd+f" (.input .plain "" "Search" "" (fun _ => 1) none)] (onRefresh := some 5))
+  check "a screen with a key: its click is its refresh" (screen.dispatch [] .click == some 5)
+  check "the screen's JSON has the key" (((screen.toWire.toJson.getObjVal? "decor").toOption.bind (·.getObjValAs? String "key" |>.toOption)) == some "cmd+shift+n")
+  let both : Html Nat := Html.key "cmd+k" (Html.key "cmd+j" (Html.inMenu (.button "B" .plain (some 1))))
+  check "an outer key replaces an inner one, and keeps the rest"
+    ((both.toWire.toJson.getObjVal? "decor").toOption == some (decorJson (menu := true) (key := "cmd+k")))
+
 def main : IO UInt32 := do
   composition
   controls
   swipes
   columns
+  menusAndKeys
   let n ← failures.get
   IO.println (if n == 0 then "html: all passed" else s!"html: {n} FAILED")
   return if n == 0 then 0 else 1

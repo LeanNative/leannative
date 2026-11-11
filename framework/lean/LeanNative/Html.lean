@@ -93,6 +93,21 @@ structure Decor where
   /-- a list's row is the one chosen (the mailbox whose mail is listed, the message being read): drawn as the
   platform's selection, and read as selected. On the row's own node. -/
   selected : Bool := false
+  /-- a button inside a list's row is an item of the row's context menu: a right click on a Mac, a long press on a
+  phone. The item has the button's label, its `symbol` and its click, red when the button is `destructive` and
+  greyed when it is disabled, in the tree's order. A button that is only a menu item is not drawn in its row, as
+  a swipe action is not; one button may be both. Outside a list's row, and in a shell that does not know the
+  field, it is the button it was. -/
+  menu : Bool := false
+  /-- a key equivalent, for a keyboard: `"cmd+r"`, `"cmd+shift+n"`, `"ctrl+cmd+a"`, `"escape"`. The modifiers
+  `cmd`, `shift`, `alt` and `ctrl`, joined with `+`, then one key: a character, or `return`, `escape`, `tab`,
+  `space`, `delete`, `up`, `down`, `left`, `right`. Pressed, it is the node's `click`: an enabled button's, or a
+  screen's pull to refresh. On an `input` or a `field`, which has no click, it puts the cursor in it. A key
+  reaches what is on top: with a sheet up only the sheet's nodes, with an alert up none. A Mac lists the keys in
+  its menu bar, each under its node's label. A key with neither `cmd` nor `ctrl` is text while a field is being
+  typed in, and does nothing then. The shell has two keys of its own, which an app's same key replaces: `cmd+[`
+  goes back from a screen and `escape` closes a sheet. -/
+  key : String := ""
   deriving Repr, DecidableEq, Inhabited
 
 /-- `outer`'s fields where they are set, else `inner`'s. -/
@@ -104,7 +119,9 @@ def Decor.merge (inner outer : Decor) : Decor :=
     symbol := if outer.symbol.isEmpty then inner.symbol else outer.symbol
     chevron := inner.chevron || outer.chevron
     swipe := if outer.swipe == .none then inner.swipe else outer.swipe
-    selected := inner.selected || outer.selected }
+    selected := inner.selected || outer.selected
+    menu := inner.menu || outer.menu
+    key := if outer.key.isEmpty then inner.key else outer.key }
 
 inductive ButtonRole where
   | plain
@@ -328,6 +345,10 @@ def navigates (h : Html msg) : Html msg := decor { chevron := true } h
 def swipe (edge : Swipe) (h : Html msg) : Html msg := decor { swipe := edge } h
 /-- A list's row as the chosen one when `on` (`Decor.selected`). -/
 def chosen (on : Bool) (h : Html msg) : Html msg := if on then decor { selected := true } h else h
+/-- A button as an item of its list row's context menu (`Decor.menu`). -/
+def inMenu (h : Html msg) : Html msg := decor { menu := true } h
+/-- A node with a key equivalent (`Decor.key`): `(button …).key "cmd+r"`. -/
+def key (k : String) (h : Html msg) : Html msg := decor { key := k } h
 
 end Html
 end LeanNative
