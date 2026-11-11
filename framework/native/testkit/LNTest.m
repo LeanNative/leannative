@@ -30,7 +30,15 @@ void LNFail(NSString *file, NSUInteger line, NSString *message) {
 }
 
 XCUIElement *LNElement(XCUIApplication *app, NSString *identifier) {
+#if TARGET_OS_MACCATALYST
+    // never the menu bar's: a Mac names a menu's item after its title (Name is `name`), and a key's item
+    // (`decor.key`) has its node's label, which is often what the app calls the node too
+    NSArray<NSNumber *> *menus = @[@(XCUIElementTypeMenuBar), @(XCUIElementTypeMenuBarItem), @(XCUIElementTypeMenu), @(XCUIElementTypeMenuItem)];
+    NSPredicate *node = [NSPredicate predicateWithFormat:@"identifier == %@ AND NOT (elementType IN %@)", identifier, menus];
+    return [[app descendantsMatchingType:XCUIElementTypeAny] matchingPredicate:node].firstMatch;
+#else
     return [[app descendantsMatchingType:XCUIElementTypeAny] matchingIdentifier:identifier].firstMatch;
+#endif
 }
 
 BOOL LNPoll(NSTimeInterval timeout, NSTimeInterval interval, BOOL (^condition)(void)) {
@@ -242,6 +250,51 @@ NSString *_Nullable LNSwipeAction(XCUIApplication *app, XCUIElement *element, NS
     [action tap];
     return nil;
 #endif
+}
+
+XCUIElement *LNMenuItem(XCUIApplication *app, NSString *title) {
+#if TARGET_OS_MACCATALYST
+    // the menu bar has items too (Edit's Delete), in menus that are closed: the open menu's is the one in reach
+    XCUIElementQuery *named = [app.menuItems matchingPredicate:[NSPredicate predicateWithFormat:@"title == %@ OR label == %@", title, title]];
+    for (XCUIElement *item in named.allElementsBoundByIndex) if (item.exists && item.hittable) return item;
+    return app.menus[@"no menu is open"].menuItems[title].firstMatch;
+#else
+    // the one in reach: not a button of the same label that is on the screen under the menu
+    XCUIElementQuery *named = [app.buttons matchingPredicate:[NSPredicate predicateWithFormat:@"label == %@", title]];
+    for (XCUIElement *item in named.allElementsBoundByIndex) if (item.exists && item.hittable) return item;
+    return named.firstMatch;
+#endif
+}
+
+NSString *_Nullable LNOpenMenu(XCUIApplication *app, XCUIElement *element, NSString *name, NSString *first) {
+    if (!LNAppears(element, LNAppearTimeout)) return [NSString stringWithFormat:@"%@ does not appear within %.0f s", name, LNAppearTimeout];
+    if (!LNScrollTo(app, element)) return [NSString stringWithFormat:@"%@ could not be scrolled into view", name];
+#if TARGET_OS_MACCATALYST
+    [element rightClick];
+#else
+    [element pressForDuration:1.0];
+#endif
+    // looked for again each time: on the Mac the item is the open menu's, which is not there yet
+    if (!LNPoll(5, 0.1, ^BOOL{ return LNMenuItem(app, first).exists; }))
+        return [NSString stringWithFormat:@"%@: its menu has no item named %@", name, first];
+    return nil;
+}
+
+NSString *_Nullable LNMenuAction(XCUIApplication *app, XCUIElement *element, NSString *name, NSString *title) {
+    NSString *why = LNOpenMenu(app, element, name, title);
+    if (why) return why;
+    XCUIElement *item = LNMenuItem(app, title);
+    if (!item.enabled) return [NSString stringWithFormat:@"%@: the menu's %@ is disabled", name, title];
+#if TARGET_OS_MACCATALYST
+    [item click];
+#else
+    [item tap];
+#endif
+    return nil;
+}
+
+void LNPressKey(XCUIApplication *app, NSString *key, XCUIKeyModifierFlags flags) {
+    [app typeKey:key modifierFlags:flags];
 }
 
 BOOL LNTypeAt(XCUIApplication *app, NSString *identifier, NSString *text, NSString *file, NSUInteger line) {

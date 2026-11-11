@@ -228,10 +228,11 @@ def cmds : Msg → Model → List Cmd
 def demoView (m : Model) : Html Msg :=
   .col ([ .text "Native mode" .title
         , .text "This screen is Lean compiled to C, running inside the iOS app." .caption
-        , .row [.identified "count" (.text s!"Count: {m.count}" .body), .spacer, .identified "inc" (.button "+1" .primary (some .inc))]
+        , .row [.identified "count" (.text s!"Count: {m.count}" .body), .spacer, Html.key "cmd+k" (.identified "inc" (.button "+1" .primary (some .inc)))]
         , .row [.text s!"Ticks from a Lean task: {m.ticks}" .body, .spacer,
                 .identified "startTicks" (.button "Start" .plain (if m.ticking then none else some .startTicks))]
-        , .identified "name" (.input .plain "Name" "Who is asking" m.name Msg.name none)
+        -- keys (`Decor.key`): cmd-K is +1's click, and cmd-F, the system's Find, puts the cursor in the field
+        , Html.key "cmd+f" (.identified "name" (.input .plain "Name" "Who is asking" m.name Msg.name none))
         , .identified "greeting" (.text (if m.name.isEmpty then "Nobody yet" else s!"Hello, {m.name}") .body)
         , .row [.identified "faceID" (.button "Face ID" .plain (some .authenticate)), .button "TCP echo" .plain (some .echo)]
         , .identified "openColumns" (.button "Columns" .plain (some (.columns (some 0)))) ]
@@ -250,16 +251,20 @@ def widgets (m : Model) : Html Msg :=
                                 , .disclosure "Details" m.details Msg.details [.text "Hidden until expanded." .body] ]
       , .section "Share" "" [ .qr "bitcoin:tb1qexample", .share "Share address" "tb1qexample"
                              , .button "Open sheet" .primary (some .openSheet) ]
-      -- a row's swipe actions (`Decor.swipe`): buttons of the row that are not drawn in it. The list's last
-      -- section, so the rows above stand where the journeys and tests expect them. A full swipe from
-      -- the trailing edge archives; the disabled one is no action
-      , .section "Swipe" "Swipe the row from either edge."
+      -- a row's swipe actions (`Decor.swipe`) and its context menu (`Decor.menu`): buttons of the row that are
+      -- not drawn in it. The list's last section, so the rows above stand where the journeys and tests expect
+      -- them. A full swipe from the trailing edge archives; the disabled one is no swipe action. The menu (a
+      -- right click on a Mac, a long press on a phone) has Archive and Delete too, one of its own, and a disabled
+      -- one, greyed
+      , .section "Swipe" "Swipe the row from either edge, or open its menu."
           [ .col [ .identified "swipeRow" (.text "A row with swipe actions" .body)
                  , .identified "swipedValue" (Html.tone .secondary (.text m.swiped .caption))
-                 , Html.swipe .trailing (Html.symbol "archivebox" (.identified "swipe-archive" (.button "Archive" .primary (some (.swiped "Archived")))))
-                 , Html.swipe .trailing (Html.symbol "trash" (.identified "swipe-delete" (.button "Delete" .destructive (some (.swiped "Deleted")))))
+                 , Html.inMenu (Html.swipe .trailing (Html.symbol "archivebox" (.identified "swipe-archive" (.button "Archive" .primary (some (.swiped "Archived"))))))
+                 , Html.inMenu (Html.swipe .trailing (Html.symbol "trash" (.identified "swipe-delete" (.button "Delete" .destructive (some (.swiped "Deleted"))))))
                  , Html.swipe .trailing (.button "Never" .plain none)
-                 , Html.swipe .leading (Html.symbol "flag" (Html.tone .warning (.identified "swipe-flag" (.button "Flag" .plain (some (.swiped "Flagged")))))) ] ] ]
+                 , Html.swipe .leading (Html.symbol "flag" (Html.tone .warning (.identified "swipe-flag" (.button "Flag" .plain (some (.swiped "Flagged"))))))
+                 , Html.inMenu (Html.symbol "envelope.badge" (.identified "menu-unread" (.button "Mark unread" .plain (some (.swiped "Marked unread")))))
+                 , Html.inMenu (.identified "menu-locked" (.button "Locked" .plain none)) ] ] ]
     , (if m.sheet then .sheet "A sheet" (some .closeSheet) [.text "Swipe down or tap Close." .body, .button "Close" .plain (some .closeSheet)] else .spacer)
     , (if m.alert then .alert "An alert" "Rendered from a Lean `alert` node." [.button "OK" .plain (some .closeAlert)] else .spacer) ]
 
@@ -292,7 +297,7 @@ def columnsView (m : Model) (shown : Nat) : Html Msg :=
             Html.chosen (i == m.item) (.identified s!"item-{i}" (.button s!"{box} item {i + 1}" .plain (some (.item i))))) ] ]
         (largeTitle := false)
     , .screen s!"Item {m.item + 1}" (some (.columns (some 1)))
-        [ .toolbar [ Html.symbol "plus" (.identified "columnInc" (.button "+1" .plain (some .inc))) ]
+        [ .toolbar [ Html.key "cmd+k" (Html.symbol "plus" (.identified "columnInc" (.button "+1" .plain (some .inc)))) ]
         , .identified "columnItem" (.text s!"{box} item {m.item + 1}" .title)
         , .identified "columnCount" (.text s!"Count: {m.count}" .body) ]
         (largeTitle := false) ]

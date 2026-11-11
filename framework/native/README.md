@@ -483,15 +483,20 @@ screenshot and writes it only where an explicit `LNScreenshots` says (`inDirecto
 | `LNTap` | tap | click |
 | `LNScrollTo` (and the scrolling in the actions) | a drag in the middle of the screen | the scroll wheel over the window |
 | `LNType` | tap, delete the old text, type, then the shell's Done bar or return | click, Command-A, type (the field keeps focus) |
-| `LNElement`, `LNWait`, `LNExpect*`, `LNShot`, `LNText`, `LNPoll` | the same | the same |
+| `LNSwipeAction` (a row's `decor.swipe`) | a drag across the row, then the action | not there: a Mac swipes with a trackpad |
+| `LNOpenMenu`, `LNMenuItem`, `LNMenuAction` (a row's `decor.menu`) | a long press, then the item | a right click, then the item |
+| `LNPressKey` (`decor.key`) | the key on a hardware keyboard | the key |
+| `LNElement` | the element with the identifier | the same, never an item of the menu bar (a Mac names one after its title, and a key's item has its node's label) |
+| `LNWait`, `LNExpect*`, `LNShot`, `LNText`, `LNPoll` | the same | the same |
 
 native-demo's `UITests/NativeDemoUITests.m` drives them against its real controls: a counter, text
 replacement and clearing, a control the view disables, missing and disabled controls (the failures are
 expected and the test checks nothing was tapped), the last button of a list below the fold, a list's end
 that always needs scrolling (down to the oldest log row, back up to the first probe), Face ID in the
 session's EffectScope ended by going to the background (the system's dismissal or a dropped stale answer),
-the selftest through the shell (two BackgroundRuns, an EffectScope drain, the typed clients), and
-screenshots written and refused.
+the selftest through the shell (two BackgroundRuns, an EffectScope drain, the typed clients),
+screenshots written and refused, a row's swipe actions and its context menu, and keys (a button's, a bar
+button's, an input's, and cmd-[ back from a screen).
 
 ### Journeys: UI tests as Lean programs on the host
 
@@ -678,6 +683,17 @@ a page gives it the remaining space instead of scrolling),
 constructor has its `Sat` case, so `advertises_iff` and the `Spec`/`CmdSpec` theorems cover them.
 While the scene is not active the shell covers the window (app-switcher snapshots never show it).
 A screen whose title changes is a new screen to the renderer: it starts scrolled to its top.
+
+**A mouse and a keyboard.** Two decorations are for them (`Html.inMenu`, `Html.key`; PROTOCOL.md has their
+grammar). A list row's buttons with `decor.menu` are its context menu, a right click on a Mac and a long press
+on a phone (`tableView:contextMenuConfigurationForRowAtIndexPath:`): the same buttons a swipe action is made of,
+so one button can be both, and a Mac, where a row is swiped only with a trackpad, has every action under the
+pointer. A node's `decor.key` is a key equivalent. The shell keeps the keys of what is on top as commands of the
+main menu (`UIKeyCommand`s in a menu named Actions, built again when the keys or their labels change), so a Mac
+shows them in its menu bar and an iPad in the list it shows while command is held; a key is looked up in the view
+as it is when pressed, so a disabled button's does nothing. The shell adds cmd-[ for a screen's back and escape
+for a sheet's close. What UIKit gives with no key at all: return in a field is its `submit`, return and escape
+answer an alert, and the edit keys work in a field.
 
 ## What is trusted
 

@@ -109,7 +109,7 @@ which the shell sets as the node's `accessibilityIdentifier` (on its control, el
 image). It is not a node of its own: the object is `child`'s, with `child`'s children and events, so
 paths and events pass through it.
 
-Any node may also carry `"decor":{"tone","mono","badge","centered","symbol","chevron","swipe","selected"}` (`Html.decorated d child`, native mode):
+Any node may also carry `"decor":{"tone","mono","badge","centered","symbol","chevron","swipe","selected","menu","key"}` (`Html.decorated d child`, native mode):
 how it is drawn beyond its kind. `tone` is `"standard"` (the node's own colour), `"secondary"`, `"tint"`,
 `"positive"` (green), `"negative"` (red) or `"warning"` (orange); `mono` is monospaced text wrapped at any
 character; `badge` draws a text as a capsule in its tone; `centered` centres a text; `symbol` is an SF Symbols name drawn before a button's, a labeled row's or a text's
@@ -120,8 +120,20 @@ button's label and `symbol` in its tone (else red for `destructive`, the tint fo
 `click`. An edge's actions are in the tree's order, the first nearest the edge and what a full swipe does; a
 disabled button is no action. Outside a list's row it is the button it was. `selected`, on a list's row, says
 it is the chosen one (the mailbox whose mail is listed, the message being read): it is drawn on the platform's
-selection colour and read as selected. Every field's default
-(`"standard"`, `false`, `"none"`) changes nothing, and a shell decodes an absent `decor` or field as its default, so
+selection colour and read as selected. `menu` makes a button inside a list's row an item of that row's context
+menu (a right click on a Mac, a long press on a phone): like a swipe action it is not drawn in the row, and the
+item shows the button's label and `symbol`, red for `destructive` and greyed when disabled, and sends its `click`;
+the items are in the tree's order, and one button may be a swipe action and a menu item. `key` is a key
+equivalent, for a keyboard: the modifiers `cmd`, `shift`, `alt` and `ctrl` joined with `+`, then one key (a
+character, or `return`, `escape`, `tab`, `space`, `delete`, `up`, `down`, `left`, `right`), as in `"cmd+r"` or
+`"ctrl+cmd+a"`. Pressed, it sends the node's `click` (an enabled button's, a refreshable screen's); on an `input`
+or a `field`, which has none, it puts the cursor in the field. A key reaches what is on top: with a sheet up only
+the sheet's nodes, with an alert up none; of two nodes with one key the first in the tree has it; and a key with
+neither `cmd` nor `ctrl` does nothing while a field is being typed in. A Mac lists the keys in its menu bar under
+each node's label, where a system command of the same key gives way. Two keys are the shell's own unless a node
+takes them: `cmd+[` sends the `dismiss` of the screen a person would go back from, and `escape` that of a
+dismissable sheet. Every field's default
+(`"standard"`, `false`, `"none"`, `""`) changes nothing, and a shell decodes an absent `decor` or field as its default, so
 old and new trees and shells read each other. Like `id` it is not a node: the object, children and events
 are `child`'s. `Html.decor` merges decorations, so `(body s).tone .positive |>.mono` is one `decor`.
 

@@ -51,7 +51,8 @@ def AlertStyle.str : AlertStyle → String
 def Decor.toJson (d : Decor) : Json :=
   Json.mkObj [("tone", Json.str d.tone.str), ("mono", Json.bool d.mono), ("badge", Json.bool d.badge),
               ("centered", Json.bool d.centered), ("symbol", Json.str d.symbol), ("chevron", Json.bool d.chevron),
-              ("swipe", Json.str d.swipe.str), ("selected", Json.bool d.selected)]
+              ("swipe", Json.str d.swipe.str), ("selected", Json.bool d.selected), ("menu", Json.bool d.menu),
+              ("key", Json.str d.key)]
 
 def ButtonRole.str : ButtonRole → String
   | .plain => "plain"

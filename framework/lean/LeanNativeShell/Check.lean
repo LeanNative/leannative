@@ -116,7 +116,8 @@ def identifiedProblems (w : Wire) : List String :=
 the kind the shell decodes. -/
 def decoratedProblems (w : Wire) : List String :=
   let tag := kindTag w
-  let d : Decor := { tone := .positive, mono := true, badge := true, centered := true, symbol := "s", chevron := true, swipe := .trailing, selected := true }
+  let d : Decor := { tone := .positive, mono := true, badge := true, centered := true, symbol := "s", chevron := true, swipe := .trailing, selected := true,
+                     menu := true, key := "cmd+k" }
   match w.toJson, (Wire.decorated d w).toJson with
   | .obj plain, j@(.obj kvs) =>
     (if kvs.toList.map (·.1) == ((plain.insert decorKey .null).toList.map (·.1))
