@@ -52,6 +52,8 @@ structure Model where
   details : Bool := false
   secret : String := ""
   sheet : Bool := false
+  /-- the screen the sheet's button opens, pushed over the Widgets tab's -/
+  pushed : Bool := false
   alert : Bool := false
   name : String := ""
   /-- the selftest's lines, newest first -/
@@ -103,6 +105,8 @@ inductive Msg where
   | secret (s : String)
   | openSheet
   | closeSheet
+  | openPushed
+  | closePushed
   | openAlert
   | closeAlert
   | probe (i : Nat)
@@ -187,6 +191,9 @@ def update : Msg → Model → Model
   | .secret s, m => { m with secret := s }
   | .openSheet, m => { m with sheet := true }
   | .closeSheet, m => { m with sheet := false }
+  -- the sheet's button: the sheet goes and a screen is pushed, in one view
+  | .openPushed, m => { m with sheet := false, pushed := true }
+  | .closePushed, m => { m with pushed := false }
   | .openAlert, m => { m with alert := true }
   | .closeAlert, m => { m with alert := false }
   | .name s, m => { m with name := s }
@@ -212,6 +219,8 @@ def cmds : Msg → Model → List Cmd
   | .startTicks, m => if m.ticking then [] else [.ticker]
   | .authenticate, _ => [.auth]
   | .echo, m => [.echo s!"ping {m.count}"]
+  -- its answer is a second view within milliseconds, while the sheet is still on its way out
+  | .openPushed, _ => [.echo "pushed"]
   | .probe i, _ => match probes[i]? with
     | some (l, n, a) => [.probe l n a]
     | none => []
@@ -265,8 +274,18 @@ def widgets (m : Model) : Html Msg :=
                  , Html.swipe .leading (Html.symbol "flag" (Html.tone .warning (.identified "swipe-flag" (.button "Flag" .plain (some (.swiped "Flagged"))))))
                  , Html.inMenu (Html.symbol "envelope.badge" (.identified "menu-unread" (.button "Mark unread" .plain (some (.swiped "Marked unread")))))
                  , Html.inMenu (.identified "menu-locked" (.button "Locked" .plain none)) ] ] ]
-    , (if m.sheet then .sheet "A sheet" (some .closeSheet) [.text "Swipe down or tap Close." .body, .button "Close" .plain (some .closeSheet)] else .spacer)
+    , (if m.sheet then .sheet "A sheet" (some .closeSheet)
+        [ .text "Swipe down or tap Close." .body, .button "Close" .plain (some .closeSheet)
+        , .identified "sheetPush" (.button "Open a screen" .plain (some .openPushed)) ] else .spacer)
     , (if m.alert then .alert "An alert" "Rendered from a Lean `alert` node." [.button "OK" .plain (some .closeAlert)] else .spacer) ]
+
+/-- The screen the sheet's button opens, pushed over the Widgets tab's (`depth`): with the newest line of the
+log, which is the echo's answer once the view after the push has come. -/
+def pushedView (m : Model) : Html Msg :=
+  .screen "Pushed" (some .closePushed)
+    [ .identified "pushedText" (.text "Opened from the sheet." .body)
+    , .identified "pushedLog" (.text (m.log.head?.getD "Nothing yet") .caption) ]
+    (largeTitle := false) (depth := 1)
 
 def probesView (m : Model) : Html Msg :=
   .screen "Probes" none
@@ -305,7 +324,7 @@ def columnsView (m : Model) (shown : Nat) : Html Msg :=
 def view (m : Model) : Html Msg :=
   if let some shown := m.columns then columnsView m shown else
   .tabs ["Demo", "Widgets", "Probes"] ["sparkles", "slider.horizontal.3", "stethoscope"] m.tab Msg.tab
-    [if m.tab == 0 then .screen "Native mode" none [demoView m] else if m.tab == 1 then widgets m else probesView m]
+    [if m.tab == 0 then .screen "Native mode" none [demoView m] else if m.tab == 1 then (if m.pushed then pushedView m else widgets m) else probesView m]
 
 open Std Async Net in
 def echoOnce (port : UInt16) (text : String) : IO String := do
