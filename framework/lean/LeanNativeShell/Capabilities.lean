@@ -78,18 +78,25 @@ def capabilities : List Capability :=
       .l "OSStatus status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);",
       .l "answer(@{@\"ok\": @((BOOL)(status == errSecSuccess)), @\"status\": @(status), @\"exists\": @((BOOL)(status == errSecDuplicateItem))});"] },
   { name := "keychain.set", args := "`key`, `value` or `hex`, `service`?, `synchronizable`?",
-    result := "`{\"ok\":…,\"status\":…}` (the `OSStatus`; `-50` for bad hex); this device only, while unlocked; with `synchronizable`, iCloud Keychain (`kSecAttrSynchronizable`), while unlocked",
+    result := "`{\"ok\":…,\"status\":…}` (the `OSStatus`; `-50` for bad hex): the item's value is replaced in place (`SecItemUpdate`; `SecItemAdd` when there is no item), so a write that fails leaves the old value; this device only, while unlocked; with `synchronizable`, iCloud Keychain (`kSecAttrSynchronizable`), while unlocked",
     body := [
       .l "NSString *hex = LNArgString(args, @\"hex\");",
       .l "NSData *data = hex ? LNDataOf(hex) : [(LNArgString(args, @\"value\") ?: @\"\") dataUsingEncoding:NSUTF8StringEncoding];",
       .l "if (!data) { answer(@{@\"ok\": @NO, @\"status\": @(errSecParam)}); return; }",
-      .l "SecItemDelete((__bridge CFDictionaryRef)[self base:args]);",
-      .l "NSMutableDictionary *query = [self base:args];",
-      .l "query[(__bridge id)kSecValueData] = data;",
       .l "// an item that syncs cannot be this-device-only",
-      .l "query[(__bridge id)kSecAttrAccessible] = [self synchronizable:args] ? (__bridge id)kSecAttrAccessibleWhenUnlocked",
-      .l "                                                                    : (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly;",
-      .l "OSStatus status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);",
+      .l "id accessible = [self synchronizable:args] ? (__bridge id)kSecAttrAccessibleWhenUnlocked",
+      .l "                                           : (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly;",
+      .l "NSDictionary *changes = @{(__bridge id)kSecValueData: data, (__bridge id)kSecAttrAccessible: accessible};",
+      .l "// in place, never a delete and then an add: a write the Keychain refuses (the device locked, say) leaves",
+      .l "// the old value where it was",
+      .l "OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)[self base:args], (__bridge CFDictionaryRef)changes);",
+      b "if (status == errSecItemNotFound) {" [
+          .l "NSMutableDictionary *item = [self base:args];",
+          .l "[item addEntriesFromDictionary:changes];",
+          .l "status = SecItemAdd((__bridge CFDictionaryRef)item, NULL);",
+          .l "// added by another writer in between: theirs is the item to update",
+          .l "if (status == errSecDuplicateItem)",
+          .l "    status = SecItemUpdate((__bridge CFDictionaryRef)[self base:args], (__bridge CFDictionaryRef)changes);"],
       .l "answer(@{@\"ok\": @((BOOL)(status == errSecSuccess)), @\"status\": @(status)});"] },
   { name := "keychain.delete", args := "`key`, `service`?, `synchronizable`?", result := "`{\"ok\":…,\"status\":…}`",
     body := [
@@ -156,7 +163,7 @@ def capabilities : List Capability :=
       .l "    ok = [NSFileManager.defaultManager setAttributes:@{NSFileProtectionKey: NSFileProtectionComplete} ofItemAtPath:url.path error:nil];",
       .l "answer(@{@\"ok\": @(ok)});"] },
   { name := "http.get", args := "`url`, `maxBytes`, `timeout` (s), `accept`?, `socks`? (`{\"host\",\"port\"}`)",
-    result := "`{\"status\":…,\"body\":hex}` or `{\"error\":…}` (`bad-url`, `bad-proxy`, `tooLarge`, `response`, or the system's description with its `code` and `domain`); ephemeral session, no cookies or cache, redirects only within the same host and never from https to http; with `socks`, through that SOCKS5 proxy only (names resolved by the proxy, no direct fallback)",
+    result := "`{\"status\":…,\"body\":hex}` or `{\"error\":…}` (`bad-url`, `bad-proxy`, `tooLarge`, `response`, or the system's description with its `code` and `domain`); ephemeral session, no cookies or cache, a body over `maxBytes` is refused as soon as it is known to be (the length the server declares, else the bytes as they arrive: the transfer is cancelled, not buffered); redirects only within the same origin (scheme, host and port, so never from https to http); with `socks`, through that SOCKS5 proxy only (names resolved by the proxy, no direct fallback)",
     body := [
       .l "NSURL *url = [NSURL URLWithString:LNArgString(args, @\"url\") ?: @\"\"];",
       .l "NSString *scheme = url.scheme.lowercaseString ?: @\"\";",
@@ -169,20 +176,9 @@ def capabilities : List Capability :=
       .l "request.timeoutInterval = LNArgNumber(args, @\"timeout\") ? [LNArgNumber(args, @\"timeout\") doubleValue] : (proxied ? 90 : 30);",
       .l "NSString *accept = LNArgString(args, @\"accept\");",
       .l "if (accept) [request setValue:accept forHTTPHeaderField:@\"Accept\"];",
-      b "[[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {" [
-          .l "NSDictionary *result;",
-          .blk [("if (error) {", [
-                .l "result = @{@\"error\": error.localizedDescription ?: @\"\", @\"code\": @(error.code), @\"domain\": error.domain ?: @\"\"};"]), ("} else if ([response isKindOfClass:NSHTTPURLResponse.class] && data) {", [
-                .blk [("if ((NSInteger)data.length > maxBytes) {", [
-                      .l "result = @{@\"error\": @\"tooLarge\"};"]), ("} else {", [
-                      .l "NSMutableString *hex = [NSMutableString stringWithCapacity:data.length * 2];",
-                      .l "const unsigned char *bytes = data.bytes;",
-                      .l "for (NSUInteger i = 0; i < data.length; i++) [hex appendFormat:@\"%02x\", bytes[i]];",
-                      .l "result = @{@\"status\": @(((NSHTTPURLResponse *)response).statusCode), @\"body\": hex};"])] "}"]), ("} else {", [
-                .l "result = @{@\"error\": @\"response\"};"])] "}",
-          .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}] resume];"] },
+      .l "[LNHTTPFetch fetch:request session:session maxBytes:maxBytes answer:answer];"] },
   { name := "http.request", args := "`url`, `method` (GET, POST, PUT, PATCH, DELETE), `headers`? (string values), `body`? (hex, at most 1 MiB), `maxBytes`?, `timeout`? (s), `socks`?",
-    result := "`{\"status\":…,\"body\":hex}` or `{\"error\":…}`; ephemeral session, no cookies or cache, redirects only within the same host and never from https to http",
+    result := "`{\"status\":…,\"body\":hex}` or `{\"error\":…}`; ephemeral session, no cookies or cache, the body bounded by `maxBytes` and redirects followed as `http.get` does",
     body := [
       .l "NSURL *url = [NSURL URLWithString:LNArgString(args, @\"url\") ?: @\"\"];",
       .l "NSString *scheme = url.scheme.lowercaseString ?: @\"\";",
@@ -210,15 +206,7 @@ def capabilities : List Capability :=
       .l "    if (!body) { answer(@{@\"error\": @\"bad-body\"}); return; }",
       .l "    request.HTTPBody = body;",
       .l "}",
-      b "[[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {" [
-          .l "NSDictionary *result;",
-          .blk [("if (error) {", [
-                .l "result = @{@\"error\": error.localizedDescription ?: @\"\", @\"code\": @(error.code), @\"domain\": error.domain ?: @\"\"};"]), ("} else if ([response isKindOfClass:NSHTTPURLResponse.class] && data) {", [
-                .blk [("if ((NSInteger)data.length > maxBytes) {", [
-                      .l "result = @{@\"error\": @\"tooLarge\"};"]), ("} else {", [
-                      .l "result = @{@\"status\": @(((NSHTTPURLResponse *)response).statusCode), @\"body\": LNHexOf(data)};"])] "}"]), ("} else {", [
-                .l "result = @{@\"error\": @\"response\"};"])] "}",
-          .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}] resume];"] },
+      .l "[LNHTTPFetch fetch:request session:session maxBytes:maxBytes answer:answer];"] },
   { name := "app.invoke", args := "app-defined JSON object",
     result := "app-defined JSON object; `{\"error\":\"unsupported\"}` when no `LeanNativeAppCapabilities` class is linked",
     body := [
@@ -312,14 +300,41 @@ def capsBefore : List Stmt := [
     .pp "#import <mach-o/getsect.h>",
     .pp "#import <mach-o/loader.h>",
     .blank,
-    .l "/// The ephemeral URLSessions of `http.get`: no cookies, no cache, redirects only within the same host and",
-    .l "/// never from https down to http. One shared session without a proxy, and one per SOCKS5 proxy (`host:port`),",
-    .l "/// kept for the life of the app (a session is never invalidated while a request might still use it).",
-    .l "@interface LNHTTPFetch : NSObject <NSURLSessionTaskDelegate>",
-    .l "+ (nullable NSURLSession *)session:(nullable id)socks;",
+    .l "/// One request's receiving: its limit, the body so far, whether it passed the limit, and its answer. Touched",
+    .l "/// only on its session's delegate queue once the task has started.",
+    .l "@interface LNHTTPTransfer : NSObject",
+    .l "@property (nonatomic) NSInteger maxBytes;",
+    .l "@property (nonatomic, strong, nullable) NSMutableData *body;",
+    .l "@property (nonatomic) BOOL tooLarge;",
+    .l "@property (nonatomic, copy) void (^answer)(NSDictionary *);",
     .l "@end",
     .blank,
-    .l "@implementation LNHTTPFetch",
+    .l "@implementation LNHTTPTransfer",
+    .l "@end",
+    .blank,
+    .l "/// The ephemeral URLSessions of `http.get` and `http.request`: no cookies, no cache, redirects only within the",
+    .l "/// same origin (scheme, host and port). One shared session without a proxy, and one per SOCKS5 proxy",
+    .l "/// (`host:port`), kept for the life of the app (a session is never invalidated while a request might still use",
+    .l "/// it). Each session's delegate is its own `LNHTTPFetch`, which receives the bodies: a body is counted as it",
+    .l "/// arrives and its transfer cancelled once it passes the request's `maxBytes`, so no more than that is held.",
+    .l "@interface LNHTTPFetch : NSObject <NSURLSessionDataDelegate>",
+    .l "+ (nullable NSURLSession *)session:(nullable id)socks;",
+    .l "+ (void)fetch:(NSURLRequest *)request session:(NSURLSession *)session maxBytes:(NSInteger)maxBytes answer:(void (^)(NSDictionary *))answer;",
+    .l "@end",
+    .blank,
+    .l "/// The port a URL is reached on: the one written, else its scheme's (443 for https, 80 for http).",
+    b "static NSInteger LNPortOf(NSURL *url) {" [
+        .l "if (url.port) return url.port.integerValue;",
+        .l "NSString *scheme = url.scheme.lowercaseString;",
+        .l "return [scheme isEqualToString:@\"https\"] ? 443 : [scheme isEqualToString:@\"http\"] ? 80 : -1;"],
+    .blank,
+    b "@implementation LNHTTPFetch {" [
+        .l "/// the requests in flight on this delegate's session, by task identifier",
+        .l "NSMutableDictionary<NSNumber *, LNHTTPTransfer *> *_transfers;"],
+    .blank,
+    b "- (instancetype)init {" [
+        .l "if ((self = [super init])) _transfers = [NSMutableDictionary dictionary];",
+        .l "return self;"],
     .blank,
     b "+ (NSURLSessionConfiguration *)configuration {" [
         .l "NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];",
@@ -361,12 +376,71 @@ def capsBefore : List Stmt := [
             .l "proxied[key] = session;",
             .l "return session;"]],
     .blank,
+    .l "/// Runs `request` on `session` (one of `session:`'s) and answers on the main queue: `{status, body}`, or",
+    .l "/// `{error}`: `tooLarge` once the body is known to pass `maxBytes`, `response` for no HTTP response, else the",
+    .l "/// system's error with its `code` and `domain`.",
+    b "+ (void)fetch:(NSURLRequest *)request session:(NSURLSession *)session maxBytes:(NSInteger)maxBytes answer:(void (^)(NSDictionary *))answer {" [
+        .l "LNHTTPFetch *fetch = (LNHTTPFetch *)session.delegate;",
+        .l "LNHTTPTransfer *transfer = [LNHTTPTransfer new];",
+        .l "transfer.maxBytes = maxBytes;",
+        .l "transfer.body = [NSMutableData data];",
+        .l "transfer.answer = answer;",
+        .l "NSURLSessionDataTask *task = [session dataTaskWithRequest:request];",
+        .l "@synchronized (fetch) { fetch->_transfers[@(task.taskIdentifier)] = transfer; }",
+        .l "[task resume];"],
+    .blank,
+    b "- (nullable LNHTTPTransfer *)transfer:(NSURLSessionTask *)task {" [
+        .l "@synchronized (self) { return _transfers[@(task.taskIdentifier)]; }"],
+    .blank,
+    .l "- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveResponse:(NSURLResponse *)response",
+    b "        completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {" [
+        .l "LNHTTPTransfer *transfer = [self transfer:dataTask];",
+        .l "// a body the server declares to be over the limit is refused before any of it is received. The declared",
+        .l "// length of an encoded body (gzip) is not the length of what arrives, so that one is only counted.",
+        .l "NSString *encoding = [response isKindOfClass:NSHTTPURLResponse.class] ? [(NSHTTPURLResponse *)response valueForHTTPHeaderField:@\"Content-Encoding\"] : nil;",
+        .l "BOOL plain = encoding.length == 0 || [encoding caseInsensitiveCompare:@\"identity\"] == NSOrderedSame;",
+        b "if (transfer && plain && response.expectedContentLength > (long long)transfer.maxBytes) {" [
+            .l "transfer.tooLarge = YES;",
+            .l "completionHandler(NSURLSessionResponseCancel);",
+            .l "return;"],
+        .l "completionHandler(NSURLSessionResponseAllow);"],
+    .blank,
+    b "- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {" [
+        .l "LNHTTPTransfer *transfer = [self transfer:dataTask];",
+        .l "if (!transfer || transfer.tooLarge) return;",
+        .l "// past the limit: nothing more is received or kept",
+        b "if ((NSInteger)(transfer.body.length + data.length) > transfer.maxBytes) {" [
+            .l "transfer.tooLarge = YES;",
+            .l "transfer.body = nil;",
+            .l "[dataTask cancel];",
+            .l "return;"],
+        .l "[transfer.body appendData:data];"],
+    .blank,
+    b "- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {" [
+        .l "LNHTTPTransfer *transfer;",
+        b "@synchronized (self) {" [
+            .l "transfer = _transfers[@(task.taskIdentifier)];",
+            .l "[_transfers removeObjectForKey:@(task.taskIdentifier)];"],
+        .l "if (!transfer) return;",
+        .l "NSDictionary *result;",
+        .blk [("if (transfer.tooLarge || (NSInteger)transfer.body.length > transfer.maxBytes) {", [
+              .l "result = @{@\"error\": @\"tooLarge\"};"]), ("} else if (error) {", [
+              .l "result = @{@\"error\": error.localizedDescription ?: @\"\", @\"code\": @(error.code), @\"domain\": error.domain ?: @\"\"};"]), ("} else if ([task.response isKindOfClass:NSHTTPURLResponse.class]) {", [
+              .l "result = @{@\"status\": @(((NSHTTPURLResponse *)task.response).statusCode), @\"body\": LNHexOf(transfer.body)};"]), ("} else {", [
+              .l "result = @{@\"error\": @\"response\"};"])] "}",
+        .l "void (^answer)(NSDictionary *) = transfer.answer;",
+        .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"],
+    .blank,
+    .l "/// A redirect is followed only to the origin it came from: the same scheme, host and port (the scheme's own",
+    .l "/// port when none is written). Another port of the same host is another server, which the request's headers",
+    .l "/// (a bearer token, say) were not meant for; and a change of scheme is refused with it, https to http included.",
     .l "- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task willPerformHTTPRedirection:(NSHTTPURLResponse *)response",
     b "        newRequest:(NSURLRequest *)request completionHandler:(void (^)(NSURLRequest *))completionHandler {" [
         .l "NSURL *to = request.URL, *from = response.URL;",
-        .l "BOOL sameHost = to.host && from.host && [to.host.lowercaseString isEqualToString:from.host.lowercaseString];",
-        .l "BOOL downgrade = [from.scheme isEqualToString:@\"https\"] && ![to.scheme isEqualToString:@\"https\"];",
-        .l "completionHandler(sameHost && !downgrade ? request : nil);"],
+        .l "BOOL sameScheme = to.scheme && from.scheme && [to.scheme caseInsensitiveCompare:from.scheme] == NSOrderedSame;",
+        .l "BOOL sameHost = to.host && from.host && [to.host caseInsensitiveCompare:from.host] == NSOrderedSame;",
+        .l "BOOL samePort = LNPortOf(to) == LNPortOf(from);",
+        .l "completionHandler(sameScheme && sameHost && samePort ? request : nil);"],
     .blank,
     .l "@end",
     .blank,

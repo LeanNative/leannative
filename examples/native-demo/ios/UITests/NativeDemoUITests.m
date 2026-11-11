@@ -313,6 +313,19 @@
     }
     XCTAssertEqualObjects(said[@"typed http.get ftp"], @"failed bad-url");
     XCTAssertTrue([said[@"typed http.get unreachable"] hasPrefix:@"failed system"], @"unreachable: %@", said[@"typed http.get unreachable"]);
+    // http.* against the selftest's own two servers on 127.0.0.1. A redirect is followed within its origin and
+    // not to another port of the same host: the answer is then the redirect itself, not the page behind it
+    XCTAssertNil(said[@"http selftest"], @"the selftest's servers: %@", said[@"http selftest"]);
+    XCTAssertEqualObjects(said[@"typed http.get redirect within the origin"], @"ok 200 landed");
+    XCTAssertEqualObjects(said[@"typed http.get redirect to another port"], @"ok 302 moved");
+    // maxBytes: a body declared to be over it is refused when its head arrives (the server never sends the rest:
+    // a shell that waited for the body would answer a timeout), one exactly at it is read, and one without an
+    // end is refused once it has passed it, the transfer cancelled (a shell that buffered it would have the
+    // server send all 64 MiB)
+    XCTAssertEqualObjects(said[@"typed http.get declared over maxBytes"], @"failed tooLarge");
+    XCTAssertEqualObjects(said[@"typed http.request declared over maxBytes"], @"failed tooLarge");
+    XCTAssertEqualObjects(said[@"typed http.get within maxBytes"], @"ok 200 landed");
+    XCTAssertEqualObjects(said[@"typed http.get endless body"], @"failed tooLarge, the server cut short");
     // an ad-hoc build has no iCloud entitlement
     XCTAssertEqualObjects(said[@"typed cloudkit.account"], @"unsupported missingEntitlement");
     // the Keychain: an iOS app (the simulator's ad-hoc signature included) and a team-signed Mac app have an
@@ -328,6 +341,14 @@
         XCTAssertEqualObjects(said[@"typed keychain.get"], @"ok 010203");
         XCTAssertTrue([said[@"typed keychain.delete"] hasPrefix:@"ok"], @"delete: %@", said[@"typed keychain.delete"]);
         XCTAssertEqualObjects(said[@"typed keychain.get after delete"], @"ok none");
+        // keychain.set: makes the item, then gives it (and one `add` made) its new value in place
+        XCTAssertEqualObjects(said[@"typed keychain.set"], @"ok set");
+        XCTAssertEqualObjects(said[@"typed keychain.get after set"], @"ok 0a0b");
+        XCTAssertEqualObjects(said[@"typed keychain.set again"], @"ok set");
+        XCTAssertEqualObjects(said[@"typed keychain.get after set again"], @"ok 0c");
+        XCTAssertEqualObjects(said[@"typed keychain.set over add"], @"ok set");
+        XCTAssertEqualObjects(said[@"typed keychain.get after set over add"], @"ok 0d0e");
+        XCTAssertEqualObjects(said[@"typed keychain.get after set and delete"], @"ok none");
     } else {
         XCTAssertEqualObjects(said[@"typed keychain.add"], @"unsupported status -34018 (-34018)");
     }

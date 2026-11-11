@@ -6,7 +6,9 @@ Objective-C renderer draws the view tree with UIKit on iOS and Mac Catalyst on m
 commands in Lean (`perform`: TCP, files, timers, tasks) and requests platform services through
 capabilities. No Swift is compiled in the shell, and none per app unless its manifest declares a bridge
 (`swiftSources`, below). The native runtime calls `Session.step`,
-so its state-transition theorems apply to the transition used by the running app. The renderer and
+so its state-transition theorems apply to the transition used by the running app. A `perform` that throws
+fails that command alone: the runtime writes the error to stderr and goes on with the step's other commands
+and with the host answers queued behind it (`LeanNativeTest/NativeRuntime.lean`, `make check`). The renderer and
 platform effects remain trusted and tested separately.
 
 ## How an app is built
@@ -326,7 +328,8 @@ tests, not proofs.
 What only iOS can do, by name, for any app: `auth` (Face ID / passcode; a failure answers the `LAError` as
 `name` and `code` beside the system's text, so a cancellation is told from a denial), `build` (`{"debug":…}`: test hooks read their launch environment only in a Debug build, `#if DEBUG`), `keychain.get/set/add/delete/clear` (`clear` empties a service: a test namespace's reset; `add` creates an
 item only if there is none, one `SecItemAdd` that answers `-25299` with `"exists":true` otherwise, where
-`set` replaces whatever is there)
+`set` replaces whatever is there, in place: `SecItemUpdate`, and `SecItemAdd` only when there is no item, so a
+write the Keychain refuses leaves the old value)
 (`get`, `set`, `add` and `delete` answer the `OSStatus` too, `-25300` for no such item; the simulator build is ad-hoc signed, since an unsigned app has
 no Keychain entitlement and every write fails with -34018; items are this device only unless the request
 says `synchronizable`: true, which names iCloud Keychain items instead, accessible while unlocked, and
@@ -334,7 +337,11 @@ matches only those; `set` takes raw bytes as `hex` in place of a UTF-8 `value`, 
 answers `{"hex":…|null}`, for keys that are not text),
 `clipboard.get/set` (`set` takes `localOnly` and `expiresIn` seconds: kept off Universal Clipboard and
 cleared after that time), `paths`, `exclude-from-backup` (with `complete`: also `FileProtectionType.complete`), `documents` (the Documents path, for Lean's file I/O), `http.get` (HTTPS through
-URLSession: ephemeral, same-host redirects only, never https→http — Lean's runtime has no TLS; with
+URLSession: ephemeral; a redirect is followed only within its origin, the same scheme, host and port (the
+scheme's own port when none is written), so never https→http and never to another port of the same host, and
+the answer is then the redirect itself; a body over `maxBytes` answers `tooLarge` as soon as it is known to
+be, by the length the server declares or by the bytes as they arrive, and the transfer is cancelled there, so
+no more than `maxBytes` of a body is ever held — Lean's runtime has no TLS; with
 `"socks":{"host":…,"port":…}` the request goes through that SOCKS5 proxy, a Tor daemon say: the hostname
 is sent to the proxy unresolved, there is no fallback to a direct connection, request and resource time
 out after 90 s and 180 s, and a host that is not a string or a port outside 1…65535 answers
@@ -399,11 +406,15 @@ then a write. The raw `Effects.ask`/`cap` stay for everything else. The `name`/`
 answers above that leave every existing field as it was. `LeanNativeTest/Clients.lean` (`make check`) reads
 `LeanNativeTest/fixtures/clients.json`, written from this section and the capability table rather than from
 the decoders, and checks that every capability it names is one the shell offers; native-demo's selftest
-calls them against the shell (iOS 27 simulator: `add` then `alreadyExists`, read, delete; Mac Catalyst
-ad-hoc: Keychain writes `unsupported`, -34018). The clients check what the shell answers, not what the
+calls them against the shell (iOS 27 simulator: `add` then `alreadyExists`, read, delete; `set` making an
+item and then replacing its value, and one `add` made; Mac Catalyst
+ad-hoc: Keychain writes `unsupported`, -34018), and `http.get` and `http.request` against two servers of its
+own on two ports of 127.0.0.1: a redirect within the origin followed, one to the other port answered as the
+302 it is, a body declared over `maxBytes` refused though the server never sends it, and a body without an end
+refused with the server's sending cut short. The clients check what the shell answers, not what the
 platform did: the native side stays trusted.
 
-`http.request` uses the same ephemeral session and redirect policy as `http.get`. It accepts GET, POST,
+`http.request` uses the same ephemeral session, redirect policy and `maxBytes` bound as `http.get`. It accepts GET, POST,
 PUT, PATCH and DELETE, string headers, and an optional hex-encoded body of at most 1 MiB. The typed
 client is `LeanNative.Native.Client.Http.send`, in its own module
 (`LeanNative.Native.Client.HttpRequest`, so an app importing `Http` for `get` alone need not list

@@ -32,11 +32,14 @@ protocol:
 
 # The optional native support modules (LeanNative/Native/*), headless: BackgroundRun's lifecycle, the typed
 # clients against wire fixtures, EffectScope's invalidation, and the app manifest's checks and spec; the journey
-# driver's text patterns (Journey.Regex, escapeRegex) and Html's chained decorations on the wire.
+# driver's text patterns (Journey.Regex, escapeRegex) and Html's chained decorations on the wire; and the native
+# runtime itself (Native.runtime) with a `perform` that throws.
 native-support:
 	cd lean && lake build background-run-test clients-test effect-scope-test manifest-test regex-test html-test \
+	  native-runtime-test \
 	  && .lake/build/bin/background-run-test && .lake/build/bin/clients-test && .lake/build/bin/effect-scope-test \
-	  && .lake/build/bin/manifest-test && .lake/build/bin/regex-test && .lake/build/bin/html-test
+	  && .lake/build/bin/manifest-test && .lake/build/bin/regex-test && .lake/build/bin/html-test \
+	  && .lake/build/bin/native-runtime-test
 
 # The release tool (LeanNativeRelease) against openssl, plutil, codesign and clang on this Mac: tokens, the
 # policy, a small signed app through the bundle checks, and every App Store Connect step but `upload` against
