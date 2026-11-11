@@ -34,7 +34,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (instancetype)fromEnvironment:(NSString *)name;
 @end
 
-/// The element with this accessibility identifier, of any type (a node's control, label or image).
+/// The element with this accessibility identifier, of any type (a node's control, label or image). Never an item
+/// of a Mac's menu bar, which is named after its title: a key's item (`decor.key`) has its node's label.
 XCUIElement *LNElement(XCUIApplication *app, NSString *identifier);
 
 /// Polls `condition` every `interval` seconds until it holds or `timeout` passes; the last check is after the timeout.

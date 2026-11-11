@@ -456,7 +456,8 @@ screenshot and writes it only where an explicit `LNScreenshots` says (`inDirecto
 | `LNSwipeAction` (a row's `decor.swipe`) | a drag across the row, then the action | not there: a Mac swipes with a trackpad |
 | `LNOpenMenu`, `LNMenuItem`, `LNMenuAction` (a row's `decor.menu`) | a long press, then the item | a right click, then the item |
 | `LNPressKey` (`decor.key`) | the key on a hardware keyboard | the key |
-| `LNElement`, `LNWait`, `LNExpect*`, `LNShot`, `LNText`, `LNPoll` | the same | the same |
+| `LNElement` | the element with the identifier | the same, never an item of the menu bar (a Mac names one after its title, and a key's item has its node's label) |
+| `LNWait`, `LNExpect*`, `LNShot`, `LNText`, `LNPoll` | the same | the same |
 
 native-demo's `UITests/NativeDemoUITests.m` drives them against its real controls: a counter, text
 replacement and clearing, a control the view disables, missing and disabled controls (the failures are

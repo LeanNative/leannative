@@ -30,7 +30,15 @@ void LNFail(NSString *file, NSUInteger line, NSString *message) {
 }
 
 XCUIElement *LNElement(XCUIApplication *app, NSString *identifier) {
+#if TARGET_OS_MACCATALYST
+    // never the menu bar's: a Mac names a menu's item after its title (Name is `name`), and a key's item
+    // (`decor.key`) has its node's label, which is often what the app calls the node too
+    NSArray<NSNumber *> *menus = @[@(XCUIElementTypeMenuBar), @(XCUIElementTypeMenuBarItem), @(XCUIElementTypeMenu), @(XCUIElementTypeMenuItem)];
+    NSPredicate *node = [NSPredicate predicateWithFormat:@"identifier == %@ AND NOT (elementType IN %@)", identifier, menus];
+    return [[app descendantsMatchingType:XCUIElementTypeAny] matchingPredicate:node].firstMatch;
+#else
     return [[app descendantsMatchingType:XCUIElementTypeAny] matchingIdentifier:identifier].firstMatch;
+#endif
 }
 
 BOOL LNPoll(NSTimeInterval timeout, NSTimeInterval interval, BOOL (^condition)(void)) {
