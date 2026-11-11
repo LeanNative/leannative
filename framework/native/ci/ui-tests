@@ -21,7 +21,8 @@
 #   UI_OUT          the evidence directory (default $IOS_DIR/build/ui-tests); emptied first, one run at a time
 #   UI_NAME         the result bundle's and recording's name (default ui-tests)
 #   UI_SIMULATOR    (simulator) an existing simulator to use instead (a name or UDID; it is not deleted)
-#   UI_RUNTIME      (simulator) the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest)
+#   UI_RUNTIME      (simulator) the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest
+#                   that has UI_DEVICE_TYPE)
 #   UI_DEVICE_TYPE  (simulator) the iPhone model (default iPhone 17 Pro), so screenshots keep their size from run to run;
 #                   a runtime without it fails the run; device.json records it (framework/native/ci/simulator)
 #   UI_PREPARED=1   the app's sources and project are ready (build-ios Debug just built them on this platform), so
