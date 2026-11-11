@@ -9,9 +9,10 @@
 #                                                 introduction (on a hosted runner, a fresh keyboard with them took
 #                                                 100 s to type three letters); after the first boot, which resets them
 #
-#   UI_RUNTIME      the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest)
+#   UI_RUNTIME      the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest that has
+#                   UI_DEVICE_TYPE; a device-specific runtime, such as one made for a single new iPhone, may not)
 #   UI_DEVICE_TYPE  the iPhone model (default iPhone 17 Pro), so screenshots keep their size from run to run;
-#                   a runtime without it fails
+#                   a named runtime without it, or no runtime with it, fails
 #
 # `create` returns once the boot is asked for, not once it is done: the caller waits for it
 # (`xcrun simctl bootstatus <udid> -b`) and deletes it when it ends (ui-tests, test-mode-check). Neither is
@@ -29,7 +30,13 @@ if wanted:
     runtimes = [r for r in runtimes if r["identifier"] == wanted]
     if not runtimes: sys.exit("no available runtime " + wanted)
 if not runtimes: sys.exit("no available iOS runtime")
-runtime = max(runtimes, key=lambda r: [int(p) for p in r["version"].split(".") if p.isdigit()])
+version = lambda r: [int(p) for p in r["version"].split(".") if p.isdigit()]
+has = lambda r: any(t["name"] == os.environ["UI_DEVICE_TYPE"] for t in r.get("supportedDeviceTypes", []))
+# unnamed, the newest runtime that has the model: a newer one without it (iOS 27.1 for a single new iPhone, beside
+# 27.0) is passed over; when none has it, the newest, so the error below names the models there are
+if not wanted and any(has(r) for r in runtimes):
+    runtimes = [r for r in runtimes if has(r)]
+runtime = max(runtimes, key=version)
 iphones = [t for t in runtime.get("supportedDeviceTypes", []) if t["name"].startswith("iPhone")]
 if not iphones: sys.exit("no iPhone for " + runtime["identifier"])
 chosen = next((t for t in iphones if t["name"] == os.environ["UI_DEVICE_TYPE"]), None)
