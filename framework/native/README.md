@@ -324,7 +324,9 @@ URLSession: ephemeral, same-host redirects only, never https→http — Lean's r
 is sent to the proxy unresolved, there is no fallback to a direct connection, request and resource time
 out after 90 s and 180 s, and a host that is not a string or a port outside 1…65535 answers
 `{"error":"bad-proxy"}`; a system error answers its text with its `code` and `domain`),
-`open` (a URL outside the app), `timezone` (the device's zone: its identifier and its seconds east of UTC, now or
+`open` (a URL outside the app), `device` (the kind of machine, `{"idiom":"phone"|"pad"|"mac"}`: a Mac is a Mac
+Catalyst build or the iPad app on a Mac, so an app can lay itself out for a window and a keyboard, in columns
+say), `timezone` (the device's zone: its identifier and its seconds east of UTC, now or
 at `at` in Unix seconds, so a list can say `09:12` as the person's clock does; ask again when the app comes back
 to the front, since a person travels), `webauth` (a sign-in in the system browser, `ASWebAuthenticationSession`: the
 URL to open and the callback it ends at, https — iOS 17.4 and later, the host among the app's `webcredentials:`
@@ -635,7 +637,10 @@ proxy; the renderer and the UI tests, which run on the simulator and under Catal
 ## View nodes
 
 Native mode renders the original eight nodes plus `input` (plain / secure / multiline / number / decimal),
-`list`, `section`, `labeled`, `screen` (title, back, `toolbar`, pull to refresh: a `click` on the screen; the spinner stays until the next view after its reply, at most 10 s), `tabs`, `sheet`, `alert`, `picker`,
+`list`, `section`, `labeled`, `screen` (title, back, `toolbar`, pull to refresh: a `click` on the screen; the spinner stays until the next view after its reply, at most 10 s), `tabs`,
+`split` (two or three columns at the root, each a screen: `UISplitViewController`, the first column a sidebar; side
+by side in a wide window, and in a narrow one, a phone say, the column `shown` on a stack of the ones before it,
+where the back button is that screen's `dismiss`; a column beside the others has no back button), `sheet`, `alert`, `picker`,
 `progress`, `icon`, `qr`, `share` (text, or a file by path), `link`, `page` (a bundled HTML file: scripts off, every
 non-file request blocked by a content rule list, `embedded` added to `<body>`; a screen or sheet holding
 a page gives it the remaining space instead of scrolling),

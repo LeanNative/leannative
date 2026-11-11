@@ -90,6 +90,9 @@ structure Decor where
   tree's order, the first is nearest the edge and is what a full swipe does; a disabled button is no action.
   Outside a list's row, and in a shell that does not know the field, it is the button it was. -/
   swipe : Swipe := .none
+  /-- a list's row is the one chosen (the mailbox whose mail is listed, the message being read): drawn as the
+  platform's selection, and read as selected. On the row's own node. -/
+  selected : Bool := false
   deriving Repr, DecidableEq, Inhabited
 
 /-- `outer`'s fields where they are set, else `inner`'s. -/
@@ -100,7 +103,8 @@ def Decor.merge (inner outer : Decor) : Decor :=
     centered := inner.centered || outer.centered
     symbol := if outer.symbol.isEmpty then inner.symbol else outer.symbol
     chevron := inner.chevron || outer.chevron
-    swipe := if outer.swipe == .none then inner.swipe else outer.swipe }
+    swipe := if outer.swipe == .none then inner.swipe else outer.swipe
+    selected := inner.selected || outer.selected }
 
 inductive ButtonRole where
   | plain
@@ -158,6 +162,12 @@ inductive Html (msg : Type) where
   | toolbar (children : List (Html msg)) (placement : Placement := .trailing)
   /-- A tab bar: one label and icon per tab, the selected index, and the selected tab's content. -/
   | tabs (labels icons : List String) (selected : Nat) (onSelect : Nat → msg) (children : List (Html msg))
+  /-- Columns side by side where the window is wide enough: a sidebar, then a list, then what the list's choice
+  shows (two children: a sidebar and its content). Each child is a `screen`, with its own title and `toolbar`.
+  Where the window is too narrow for them (a phone, a narrow Mac or iPad window) one column shows at a time,
+  `shown` naming which (the child's index), and going back from it sends that screen's `dismiss`. Only at the
+  root, as `tabs` is. -/
+  | split (shown : Nat) (children : List (Html msg))
   /-- A sheet presented over the screen; `onDismiss = none` cannot be swiped away. -/
   | sheet (title : String) (onDismiss : Option msg) (children : List (Html msg)) (largeTitle : Bool := false)
       (size : SheetSize := .large)
@@ -215,6 +225,7 @@ def children : Html msg → List (Html msg)
   | .screen _ _ cs _ _ _ => cs
   | .toolbar cs _ => cs
   | .tabs _ _ _ _ cs => cs
+  | .split _ cs => cs
   | .sheet _ _ cs _ _ => cs
   | .alert _ _ cs _ => cs
   | .picker .. => []
@@ -281,6 +292,7 @@ inductive Sat (P : msg → Prop) : Html msg → Prop
   | toolbar (cs : List (Html msg)) (p : Placement) : (∀ c ∈ cs, Sat P c) → Sat P (.toolbar cs p)
   | tabs (ls is : List String) (sel : Nat) (f : Nat → msg) (cs : List (Html msg)) :
       (∀ n, P (f n)) → (∀ c ∈ cs, Sat P c) → Sat P (.tabs ls is sel f cs)
+  | split (sh : Nat) (cs : List (Html msg)) : (∀ c ∈ cs, Sat P c) → Sat P (.split sh cs)
   | sheet (t : String) (d : Option msg) (cs : List (Html msg)) (lt : Bool) (sz : SheetSize) :
       (∀ m, d = some m → P m) → (∀ c ∈ cs, Sat P c) → Sat P (.sheet t d cs lt sz)
   | alert (t m : String) (cs : List (Html msg)) (st : AlertStyle) : (∀ c ∈ cs, Sat P c) → Sat P (.alert t m cs st)
@@ -314,6 +326,8 @@ def symbol (name : String) (h : Html msg) : Html msg := decor { symbol := name }
 def navigates (h : Html msg) : Html msg := decor { chevron := true } h
 /-- A button as its list row's swipe action on `edge` (`Decor.swipe`). -/
 def swipe (edge : Swipe) (h : Html msg) : Html msg := decor { swipe := edge } h
+/-- A list's row as the chosen one when `on` (`Decor.selected`). -/
+def chosen (on : Bool) (h : Html msg) : Html msg := if on then decor { selected := true } h else h
 
 end Html
 end LeanNative

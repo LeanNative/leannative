@@ -51,7 +51,7 @@ def AlertStyle.str : AlertStyle → String
 def Decor.toJson (d : Decor) : Json :=
   Json.mkObj [("tone", Json.str d.tone.str), ("mono", Json.bool d.mono), ("badge", Json.bool d.badge),
               ("centered", Json.bool d.centered), ("symbol", Json.str d.symbol), ("chevron", Json.bool d.chevron),
-              ("swipe", Json.str d.swipe.str)]
+              ("swipe", Json.str d.swipe.str), ("selected", Json.bool d.selected)]
 
 def ButtonRole.str : ButtonRole → String
   | .plain => "plain"
@@ -96,6 +96,8 @@ def Wire.toJson : Wire → Json
   | .tabs ls is sel cs =>
     Json.mkObj [("t", Json.str "tabs"), ("labels", strs ls), ("icons", strs is), ("selected", Lean.toJson sel),
                 ("c", Json.arr (cs.map Wire.toJson).toArray)]
+  | .split sh cs =>
+    Json.mkObj [("t", Json.str "split"), ("shown", Lean.toJson sh), ("c", Json.arr (cs.map Wire.toJson).toArray)]
   | .sheet t d cs lt sz =>
     Json.mkObj [("t", Json.str "sheet"), ("title", Json.str t), ("dismissable", Json.bool d), ("largeTitle", Json.bool lt),
                 ("size", Json.str sz.str),

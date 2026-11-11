@@ -110,6 +110,14 @@ def capabilities : List Capability :=
       .l "id at = args[@\"at\"];",
       .l "NSDate *when = [at isKindOfClass:NSNumber.class] ? [NSDate dateWithTimeIntervalSince1970:[at doubleValue]] : [NSDate date];",
       .l "answer(@{@\"id\": zone.name ?: @\"\", @\"offset\": @([zone secondsFromGMTForDate:when])});"] },
+  { name := "device", args := "—", result := "`{\"idiom\":…}` the kind of machine: `phone`, `pad` or `mac` (a Mac Catalyst build, or the iPad app on a Mac), so an app can lay itself out for a window and a keyboard",
+    body := [
+      .pp "#if TARGET_OS_MACCATALYST",
+      .l "answer(@{@\"idiom\": @\"mac\"});",
+      .pp "#else",
+      .l "BOOL pad = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;",
+      .l "answer(@{@\"idiom\": NSProcessInfo.processInfo.isiOSAppOnMac ? @\"mac\" : pad ? @\"pad\" : @\"phone\"});",
+      .pp "#endif"] },
   { name := "build", args := "—", result := "`{\"debug\":…}` whether this is a Debug build (`#if DEBUG`): test hooks stay off in Release",
     body := [
       .pp "#if DEBUG",

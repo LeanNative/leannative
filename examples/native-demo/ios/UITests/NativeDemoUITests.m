@@ -127,6 +127,41 @@
 }
 #endif
 
+/// The columns (`Html.split`): side by side in a wide window (a Mac, an iPad), one at a time in a narrow one (a
+/// phone), where a choice shows the next column and going back from one is its screen's own `onBack`.
+- (void)testColumnsSideBySideOrOneAtATime {
+    if (!LNTap(self.app, @"openColumns") || !LNWait(self.app, @"box-1")) return;
+    // a wide window has the sidebar, the list and the item at once; a narrow one has the sidebar alone
+    BOOL wide = LNAppears(LNElement(self.app, @"columnItem"), 2);
+    if (!wide) XCTAssertFalse(LNElement(self.app, @"item-0").exists, @"a narrow window shows the list beside the sidebar");
+    if (!LNTap(self.app, @"box-1") || !LNWait(self.app, @"item-2")) return;
+    if (!LNTap(self.app, @"item-2") || !LNWait(self.app, @"columnItem")) return;
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(LNElement(self.app, @"columnItem")) isEqualToString:@"Archive item 3"]; }),
+                  @"the item's column: %@", LNText(LNElement(self.app, @"columnItem")));
+    // a button in a column's bar is that screen's
+    if (!LNTap(self.app, @"columnInc")) return;
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(LNElement(self.app, @"columnCount")) isEqualToString:@"Count: 1"]; }),
+                  @"the count in the column: %@", LNText(LNElement(self.app, @"columnCount")));
+    if (wide) {
+        XCTAssertTrue(LNElement(self.app, @"box-1").exists && LNElement(self.app, @"item-0").exists, @"a wide window lost a column");
+        // the chosen rows read as selected
+        XCTAssertTrue(LNElement(self.app, @"box-1").selected, @"the chosen box is not selected");
+        XCTAssertFalse(LNElement(self.app, @"box-0").selected, @"the other box is selected");
+        XCTAssertTrue(LNElement(self.app, @"item-2").selected, @"the chosen item is not selected");
+    } else {
+        // back from the item is the list, and back from the list is the sidebar
+        XCTAssertNil(LNTapElement(self.app, self.app.navigationBars.buttons.firstMatch, @"Back (from the item)"));
+        if (!LNWait(self.app, @"item-0")) return;
+        XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return !LNElement(self.app, @"columnItem").exists; }), @"the item is still up after going back");
+        XCTAssertNil(LNTapElement(self.app, self.app.navigationBars.buttons.firstMatch, @"Back (from the list)"));
+        if (!LNWait(self.app, @"box-0")) return;
+        XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return !LNElement(self.app, @"item-0").exists; }), @"the list is still up after going back");
+    }
+    // and the tabs again, with what the column's button counted
+    if (!LNTap(self.app, @"closeColumns") || !LNWait(self.app, @"count")) return;
+    XCTAssertEqualObjects(LNText(LNElement(self.app, @"count")), @"Count: 1");
+}
+
 - (void)testScrollingToTheLastProbe {
     if (![self openTab:@"Probes"]) return;
     // the last capability button (16 probes: probe-15) is below the fold on a phone: LNTap scrolls to it first
@@ -182,6 +217,8 @@
     XCTAssertEqualObjects(said[@"effect scope"], @"started, drained true, late result delivered false, now 0 tasks");
     // the device's time zone, asked of the shell
     XCTAssertEqualObjects(said[@"timezone"], @"an identifier and an offset");
+    // and what kind of machine this is
+    XCTAssertEqualObjects(said[@"device"], @"an idiom");
     // the typed clients: every answer decoded (ok, or a classified error; never malformed)
     NSRegularExpression *decoded = [NSRegularExpression regularExpressionWithPattern:@"^(ok|denied|cancelled|unsupported|failed)( .*)?$" options:0 error:nil];
     for (NSString *key in said) {

@@ -20,6 +20,7 @@ inductive Wire where
       (depth : Nat := 0)
   | toolbar (children : List Wire) (placement : Placement := .trailing)
   | tabs (labels icons : List String) (selected : Nat) (children : List Wire)
+  | split (shown : Nat) (children : List Wire)
   | sheet (title : String) (dismissable : Bool) (children : List Wire) (largeTitle : Bool := false)
       (size : SheetSize := .large)
   | alert (title message : String) (children : List Wire) (style : AlertStyle := .alert)
@@ -57,6 +58,7 @@ def children : Wire → List Wire
   | .screen _ _ cs _ _ _ => cs
   | .toolbar cs _ => cs
   | .tabs _ _ _ cs => cs
+  | .split _ cs => cs
   | .sheet _ _ cs _ _ => cs
   | .alert _ _ cs _ => cs
   | .picker .. => []

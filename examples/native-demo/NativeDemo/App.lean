@@ -44,6 +44,11 @@ structure Model where
   copies : Nat := 1
   /-- what the swipe row's last action was -/
   swiped : String := "Nothing yet"
+  /-- the columns (`Html.split`) in place of the tabs, and which of them a narrow window shows -/
+  columns : Option Nat := none
+  /-- the box chosen in the sidebar, and the item chosen in its list -/
+  box : Nat := 0
+  item : Nat := 0
   details : Bool := false
   secret : String := ""
   sheet : Bool := false
@@ -91,6 +96,9 @@ inductive Msg where
   | fee (i : Nat)
   | copies (n : Nat)
   | swiped (what : String)
+  | columns (shown : Option Nat)
+  | box (i : Nat)
+  | item (i : Nat)
   | details (b : Bool)
   | secret (s : String)
   | openSheet
@@ -171,6 +179,10 @@ def update : Msg → Model → Model
   | .fee i, m => { m with fee := i }
   | .copies n, m => { m with copies := n }
   | .swiped what, m => { m with swiped := what }
+  | .columns shown, m => { m with columns := shown }
+  -- a choice in one column shows the next (which is all a narrow window has room for)
+  | .box i, m => { m with box := i, item := 0, columns := some 1 }
+  | .item i, m => { m with item := i, columns := some 2 }
   | .details b, m => { m with details := b }
   | .secret s, m => { m with secret := s }
   | .openSheet, m => { m with sheet := true }
@@ -221,7 +233,8 @@ def demoView (m : Model) : Html Msg :=
                 .identified "startTicks" (.button "Start" .plain (if m.ticking then none else some .startTicks))]
         , .identified "name" (.input .plain "Name" "Who is asking" m.name Msg.name none)
         , .identified "greeting" (.text (if m.name.isEmpty then "Nobody yet" else s!"Hello, {m.name}") .body)
-        , .row [.identified "faceID" (.button "Face ID" .plain (some .authenticate)), .button "TCP echo" .plain (some .echo)] ]
+        , .row [.identified "faceID" (.button "Face ID" .plain (some .authenticate)), .button "TCP echo" .plain (some .echo)]
+        , .identified "openColumns" (.button "Columns" .plain (some (.columns (some 0)))) ]
         -- one element a line (an accessibility label has no line breaks): selftest-0, selftest-1, …
         ++ m.selftest.reverse.zipIdx.map (fun (l, i) => .identified s!"selftest-{i}" (.text l .caption))
         ++ [.divider] ++ m.log.map (fun s => .text s .caption))
@@ -263,7 +276,29 @@ def probesView (m : Model) : Html Msg :=
           | none => [])
       ++ [.section "Log" "Newest first, with system events." (m.log.map (fun s => .text s .caption))]) ]
 
+def boxes : List String := ["Inbox", "Archive"]
+
+/-- `Html.split`: a sidebar, a list and what the list's choice shows, side by side in a wide window (an iPad, a
+Mac), one at a time in a narrow one, where going back from a column is that screen's `onBack`. -/
+def columnsView (m : Model) (shown : Nat) : Html Msg :=
+  let box := boxes[m.box]?.getD "?"
+  .split shown
+    [ .screen "Boxes" none
+        [ .list [ .section "" "" (boxes.zipIdx.map fun (l, i) =>
+            Html.chosen (i == m.box) (.identified s!"box-{i}" (.button l .plain (some (.box i)))))
+                , .section "" "" [ .identified "closeColumns" (.button "Back to the tabs" .plain (some (.columns none))) ] ] ]
+    , .screen box (some (.columns (some 0)))
+        [ .list [ .section "" "" ((List.range 3).map fun i =>
+            Html.chosen (i == m.item) (.identified s!"item-{i}" (.button s!"{box} item {i + 1}" .plain (some (.item i))))) ] ]
+        (largeTitle := false)
+    , .screen s!"Item {m.item + 1}" (some (.columns (some 1)))
+        [ .toolbar [ Html.symbol "plus" (.identified "columnInc" (.button "+1" .plain (some .inc))) ]
+        , .identified "columnItem" (.text s!"{box} item {m.item + 1}" .title)
+        , .identified "columnCount" (.text s!"Count: {m.count}" .body) ]
+        (largeTitle := false) ]
+
 def view (m : Model) : Html Msg :=
+  if let some shown := m.columns then columnsView m shown else
   .tabs ["Demo", "Widgets", "Probes"] ["sparkles", "slider.horizontal.3", "stethoscope"] m.tab Msg.tab
     [if m.tab == 0 then .screen "Native mode" none [demoView m] else if m.tab == 1 then widgets m else probesView m]
 
@@ -437,6 +472,10 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         let zoneOk := (zone.getObjValAs? String "id").isOk &&
           ((zone.getObjValAs? Int "offset").toOption.map fun o => -86400 < o && o < 86400).getD false
         say s!"timezone: {if zoneOk then "an identifier and an offset" else zone.compress}"
+        -- the kind of machine: a phone, a pad or a Mac
+        let device ← IO.wait (← fx.ask "device" (Json.mkObj []))
+        let idiom := (device.getObjValAs? String "idiom").toOption.getD ""
+        say s!"device: {if ["phone", "pad", "mac"].contains idiom then "an idiom" else device.compress}"
         for (l, n, a) in probes do
           let j ← IO.wait (← fx.ask n a)
           say s!"{l}: {j.compress}"
