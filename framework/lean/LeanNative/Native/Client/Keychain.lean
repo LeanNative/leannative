@@ -10,7 +10,7 @@ the others this device's only, while unlocked (`WhenUnlockedThisDeviceOnly`).
 |---|---|---|
 | `get item` | `{"hex":…\|null,"status":n}` | the bytes, or `none` for `errSecItemNotFound` |
 | `getText item` | `{"value":…\|null,"status":n}` | the UTF-8 text, or `none`; an item that is not UTF-8 is `failed notText` |
-| `set item bytes` | `{"ok","status"}` | replaces any item of that name (delete, then add: not atomic) |
+| `set item bytes` | `{"ok","status"}` | replaces the value of any item of that name, in place (an update; an add when there is none): a write that fails leaves the old value |
 | `add item bytes` | `{"ok","status","exists"}` | `.added`, or `.alreadyExists` and the item is untouched |
 | `delete item` | `{"ok","status"}` | also succeeds when there was no item |
 | `clear service` | `{"ok","status"}` | every item of the service (a test namespace's reset) |

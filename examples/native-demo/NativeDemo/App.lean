@@ -4,6 +4,7 @@ import LeanNative.Native.BackgroundRun
 import LeanNative.Native.EffectScope
 import LeanNative.Native.Client.Keychain
 import LeanNative.Native.Client.Http
+import LeanNative.Native.Client.HttpRequest
 import LeanNative.Native.Client.CloudKit
 import LeanNative.Native.Client.Bluetooth
 
@@ -18,7 +19,8 @@ import LeanNative.Native.Client.Bluetooth
 * a background task iOS launches runs as a `BackgroundRun` (`LeanNative.Native.BackgroundRun`): a short
   job that stops when expired, answered with `bgtask.complete` when it is over;
 * the selftest (`NATIVEDEMO_SELFTEST=1` at launch) runs two `BackgroundRun`s, a scoped task an
-  invalidation drains, and the typed clients (`LeanNative.Native.Client.*`) against the real shell; its lines
+  invalidation drains, and the typed clients (`LeanNative.Native.Client.*`) against the real shell, `http.*`
+  against two servers of its own on 127.0.0.1 that redirect and send more than was asked for; its lines
   are printed and shown on the Demo tab (`selftest-<n>`), so UI tests read them on iOS and Mac Catalyst alike;
 * Face ID runs in an `EffectScope` the app's going to the background ends: an answer that comes back
   after that is dropped; going to the background and coming back from it are logged; each answer, a
@@ -345,6 +347,50 @@ def echoOnce (port : UInt16) (text : String) : IO String := do
   let reply ← ask.block
   pure (String.fromUTF8! (reply.getD .empty))
 
+open Std Async Net in
+/-- The head of an HTTP request, read from a connection: up to its blank line, or what came before the end. -/
+partial def requestHead (c : TCP.Socket.Client) (head : ByteArray := .empty) : Async ByteArray := do
+  if (((String.fromUTF8? head).getD "").splitOn "\r\n\r\n").length > 1 then return head
+  match ← c.recv? 4096 with
+  | some more => requestHead c (head ++ more)
+  | none => return head
+
+open Std Async Net in
+/-- A local HTTP server for the selftest, on a free port of 127.0.0.1 (the simulator shares the Mac's ports):
+one connection at a time, `respond` writing the answer to the request's path, a failure being that
+connection's alone. Answers its port and what stops it. -/
+def localHttp (respond : String → TCP.Socket.Client → Async Unit) : IO (UInt16 × IO Unit) := do
+  let addr (port : UInt16) : SocketAddress := .v4 ⟨IPv4Addr.ofParts 127 0 0 1, port⟩
+  let server ← TCP.Socket.Server.mk
+  server.bind (addr 0)
+  server.listen 8
+  let port := (← server.getSockName).port
+  let stopped ← IO.mkRef false
+  let answerOne (c : TCP.Socket.Client) : Async Unit := do
+    let head := (String.fromUTF8? (← requestHead c)).getD ""
+    respond ((head.splitOn " ")[1]?.getD "") c
+    c.shutdown
+  let rec serve : Nat → Async Unit
+    | 0 => pure ()
+    | left + 1 => do
+      let c ← server.accept
+      if ← stopped.get then return
+      try answerOne c catch _ => pure ()
+      serve left
+  -- a thread of its own: it waits in `accept` between requests
+  discard <| IO.asTask (prio := .dedicated) (serve 64).block
+  -- the server leaves `accept` at the next connection: this one
+  let stop : IO Unit := do
+    stopped.set true
+    let c ← TCP.Socket.Client.mk
+    (c.connect (addr port)).block
+  pure (port, stop)
+
+/-- An HTTP/1.1 answer's head (the connection closes after it) and its body. -/
+def httpAnswer (status : String) (headers : List String) (body : String) : ByteArray :=
+  ("\r\n".intercalate ([s!"HTTP/1.1 {status}", "Content-Type: application/octet-stream", "Connection: close"] ++ headers)
+    ++ "\r\n\r\n" ++ body).toUTF8
+
 /-- The session: what runs while the app is in front. Going to the background ends it. -/
 initialize session : EffectScope ← EffectScope.new
 
@@ -389,6 +435,77 @@ def typedSelftest (fx : Effects Host) (say : String → IO Unit) : IO Unit := do
   say s!"typed http.get ftp: {shown (← (Client.Http.get { url := "ftp://example.com/" }).call fx) fun r => toString r.status}"
   say s!"typed http.get unreachable: {shown (← (Client.Http.get { url := "http://127.0.0.1:1/", timeout := some 5 }).call fx) fun r => toString r.status}"
   say s!"typed cloudkit.account: {shown (← (Client.CloudKit.account).call fx) fun a => (a.user.getD "no user")}"
+
+/-- `keychain.set` against the real Keychain: an item that is not there is made, one that is there is given its
+new value in place, and what `get` reads afterwards is what was set. (That a refused write leaves the old value
+cannot be shown here: nothing makes the simulator's Keychain refuse one.) -/
+def keychainSetSelftest (fx : Effects Host) (say : String → IO Unit) : IO Unit := do
+  let item : Client.Keychain.Item := { key := "typed-set", service := some "art.fralex.leannative.nativedemo.probe" }
+  let hex := fun (b : Option ByteArray) => (b.map Client.hexOf).getD "none"
+  discard <| (Client.Keychain.delete item).call fx
+  say s!"typed keychain.set: {shown (← (Client.Keychain.set item (ByteArray.mk #[10, 11])).call fx) fun _ => "set"}"
+  say s!"typed keychain.get after set: {shown (← (Client.Keychain.get item).call fx) hex}"
+  say s!"typed keychain.set again: {shown (← (Client.Keychain.set item (ByteArray.mk #[12])).call fx) fun _ => "set"}"
+  say s!"typed keychain.get after set again: {shown (← (Client.Keychain.get item).call fx) hex}"
+  -- an item `add` made is `set`'s to replace too, and stays the only one of its name
+  discard <| (Client.Keychain.delete item).call fx
+  discard <| (Client.Keychain.add item (ByteArray.mk #[1])).call fx
+  say s!"typed keychain.set over add: {shown (← (Client.Keychain.set item (ByteArray.mk #[13, 14])).call fx) fun _ => "set"}"
+  say s!"typed keychain.get after set over add: {shown (← (Client.Keychain.get item).call fx) hex}"
+  discard <| (Client.Keychain.delete item).call fx
+  say s!"typed keychain.get after set and delete: {shown (← (Client.Keychain.get item).call fx) hex}"
+
+open Std Async Net in
+/-- The shell's `http.*` against two servers of the selftest's own, `site` and `other`, on two ports of
+127.0.0.1: a redirect within `site` is followed and one from `other` to `site` (the same host, another port) is
+not; a body the server declares to be over `maxBytes` is refused without waiting for it; and a body that never
+ends is refused once it has passed `maxBytes`, the server's sending cut short (it would send `whole` bytes). -/
+def httpSelftest (fx : Effects Host) (say : String → IO Unit) : IO Unit := do
+  let whole := 64 * 1024 * 1024
+  let sent ← IO.mkRef (none : Option Nat)
+  let (site, stopSite) ← localHttp fun path c => do
+    match path with
+    | "/hop" => c.send (httpAnswer "302 Found" ["Location: /landed", "Content-Length: 5"] "moved")
+    | "/landed" => c.send (httpAnswer "200 OK" ["Content-Length: 6"] "landed")
+    | "/declared" =>
+      -- five megabytes promised, sixteen bytes sent; then it waits for the client to go
+      c.send (httpAnswer "200 OK" ["Content-Length: 5000000"] "0123456789abcdef")
+      discard <| c.recv? 1
+    | "/endless" =>
+      -- no length: the body is whatever comes until the connection closes
+      c.send (httpAnswer "200 OK" [] "")
+      let chunk := ByteArray.mk (Array.replicate 65536 120)
+      let mut n := 0
+      try
+        while n < whole do
+          c.send chunk
+          n := n + chunk.size
+      catch _ => pure ()
+      sent.set (some n)
+    | _ => c.send (httpAnswer "404 Not Found" ["Content-Length: 0"] "")
+  let (other, stopOther) ← localHttp fun _ c =>
+    c.send (httpAnswer "302 Found" [s!"Location: http://127.0.0.1:{site}/landed", "Content-Length: 5"] "moved")
+  let page := fun (r : Client.Http.Response) => s!"{r.status} {(String.fromUTF8? r.body).getD "?"}"
+  let get (url : String) (maxBytes : Nat := 1000) : IO (Client.Result Client.Http.Response) :=
+    (Client.Http.get { url, maxBytes, timeout := some 5 }).call fx
+  say s!"typed http.get redirect within the origin: {shown (← get s!"http://127.0.0.1:{site}/hop") page}"
+  say s!"typed http.get redirect to another port: {shown (← get s!"http://127.0.0.1:{other}/") page}"
+  say s!"typed http.get declared over maxBytes: {shown (← get s!"http://127.0.0.1:{site}/declared") page}"
+  let request := (Client.Http.send { url := s!"http://127.0.0.1:{site}/declared", httpMethod := "POST", body := some "x".toUTF8, maxBytes := 1000, timeout := some 5 }).call fx
+  say s!"typed http.request declared over maxBytes: {shown (← request) page}"
+  say s!"typed http.get within maxBytes: {shown (← get s!"http://127.0.0.1:{site}/landed" 6) page}"
+  let endless ← get s!"http://127.0.0.1:{site}/endless"
+  -- the server stops when its connection is closed under it: at once if the shell cancelled the transfer
+  let mut waited := 0
+  while (← sent.get).isNone && waited < 100 do
+    IO.sleep 100
+    waited := waited + 1
+  let server := match ← sent.get with
+    | some n => if n < whole then "the server cut short" else "the server sent it all"
+    | none => "the server still sending"
+  say s!"typed http.get endless body: {shown endless page}, {server}"
+  stopSite
+  stopOther
 
 def bleStateName : Client.Bluetooth.State → String
   | .poweredOn => "poweredOn" | .poweredOff => "poweredOff" | .unauthorized => "unauthorized"
@@ -491,6 +608,8 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         let late ← scope.deliver token (pure ())
         say s!"effect scope: {if spawned matches .started _ then "started" else "stale"}, drained {← drained.get}, late result delivered {late}, now {← scope.liveTasks} tasks"
         typedSelftest fx say
+        keychainSetSelftest fx say
+        try httpSelftest fx say catch e => say s!"http selftest: failed: {e}"
         -- the device's time zone: an identifier, and seconds east of UTC within a day either way
         let zone ← IO.wait (← fx.ask "timezone" (Json.mkObj []))
         let zoneOk := (zone.getObjValAs? String "id").isOk &&

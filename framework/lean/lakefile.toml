@@ -34,6 +34,12 @@ root = "LeanNativeTest.Clients"
 name = "effect-scope-test"
 root = "LeanNativeTest.EffectScope"
 
+# Native.runtime: a `perform` that throws loses neither the step's other commands nor the answers queued behind
+# it (`make check`; not a default target).
+[[lean_exe]]
+name = "native-runtime-test"
+root = "LeanNativeTest.NativeRuntime"
+
 # The app manifest: what generation refuses for each capability family, and the spec it writes (`make check`;
 # not a default target).
 [[lean_exe]]

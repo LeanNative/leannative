@@ -2,15 +2,16 @@ import LeanNative.Native.Client
 
 /-! # HTTPS fetch (`http.get`)
 
-One GET on an ephemeral session (no cookies or cache), redirects only within the same host and never
-from https to http; with `socks`, through that SOCKS5 proxy only (names resolved by the proxy, no
+One GET on an ephemeral session (no cookies or cache), redirects only within the same origin (scheme,
+host and port, so never from https to http, and never to another port of the same host: the answer is
+then the redirect itself); with `socks`, through that SOCKS5 proxy only (names resolved by the proxy, no
 direct fallback). The shell answers `{"status":n,"body":hex}` or `{"error":name}`:
 
 | `error` | means | kind |
 |---|---|---|
 | `bad-url` | not an http(s) URL | `failed` |
 | `bad-proxy` | `socks` is not a host and a port in 1…65535 | `failed` |
-| `tooLarge` | the body is over `maxBytes` | `failed` |
+| `tooLarge` | the body is over `maxBytes`: refused as soon as it is known to be (the declared length, else the bytes as they arrive), the transfer cancelled | `failed` |
 | `response` | no HTTP response | `failed` |
 | the system's text, with `code` and `domain` | the `NSError` (`NSURLErrorDomain`, …) | `cancelled` for `NSURLErrorCancelled` (-999), else `failed` named `system` |
 

@@ -43,7 +43,12 @@ structure App (Model Msg Cmd Host : Type) extends CmdApp Model Msg Cmd Host wher
   /-- Run one command. Called on the shell's main thread: start a task for anything slow. A task that runs
   for the app's life (a timer, a sync loop) takes `IO.asTask (prio := .dedicated)`, a thread of its own: at
   the default priority it holds a worker of Lean's shared task pool for good, and in Lean 4.35 a task queued
-  just after it can then wait for ever (native-demo's ticker did that to the headless journeys' socket). -/
+  just after it can then wait for ever (native-demo's ticker did that to the headless journeys' socket).
+
+  An exception it throws is that command's alone: the runtime writes it to stderr (the error, never the
+  command, which may hold a secret) and goes on, so the commands after it still run and the host answers
+  queued behind it are still applied. The model has already taken the message; an app that must hear of a
+  failure catches it in `perform` and posts a host answer. -/
   perform : Cmd → Effects Host → IO Unit
   /-- Commands run once, at start. -/
   boot : List Cmd := []
@@ -108,7 +113,11 @@ def runtime [ToJson Cmd] (app : App Model Msg Cmd Host) : IO Runtime := do
         let p ← IO.Promise.new
         request name args (fun j => p.resolve j)
         pure p.result! }
-  let runCmds (cs : List Cmd) : IO Unit := cs.forM fun c => app.perform c effects
+  -- a command's failure is its own: it is reported, the step's other commands run, the reply is still the view,
+  -- and the answers queued behind it are still applied (an exception here used to end the whole drain)
+  let runCmds (cs : List Cmd) : IO Unit := cs.forM fun c => do
+    try app.perform c effects
+    catch e => try IO.eprintln s!"LeanNative: a command's perform threw: {e}" catch _ => pure ()
   -- the shell receives the capability requests queued so far with every reply
   let takeCaps : IO (Array CapRequest) :=
     shared.atomically (modifyGet fun s => (s.caps, { s with caps := #[] }))
