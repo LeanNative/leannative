@@ -259,7 +259,10 @@ XCUIElement *LNMenuItem(XCUIApplication *app, NSString *title) {
     for (XCUIElement *item in named.allElementsBoundByIndex) if (item.exists && item.hittable) return item;
     return app.menus[@"no menu is open"].menuItems[title].firstMatch;
 #else
-    return app.buttons[title].firstMatch;
+    // the one in reach: not a button of the same label that is on the screen under the menu
+    XCUIElementQuery *named = [app.buttons matchingPredicate:[NSPredicate predicateWithFormat:@"label == %@", title]];
+    for (XCUIElement *item in named.allElementsBoundByIndex) if (item.exists && item.hittable) return item;
+    return named.firstMatch;
 #endif
 }
 
