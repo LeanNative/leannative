@@ -5,7 +5,9 @@ import LeanNativeRelease.Run
 `verifyApp` checks an archived or exported `.app`: the identity the release asked for (bundle identifier,
 team, version and build number), export compliance declared in Info.plist, the icon from the asset catalog,
 a valid signature with the team's application identifier, the iCloud container when the app has one
-(production iCloud for distribution), debugging off for distribution, arm64 only, and no Swift.
+(production iCloud for distribution), debugging off for distribution, arm64 only, and no Swift but what the
+app declares: with no `LNSwiftSources` in Info.plist (a manifest's `swiftSources`) no Swift library may be
+linked or bundled; with it, the system's Swift libraries may be linked, and none bundled.
 `verifyIpa` opens the exported package, checks its one app for distribution and records the package's
 SHA-256 beside it (`<ipa>.verified.sha256`), which the upload step checks first, so what is uploaded is what
 was verified. -/
@@ -34,6 +36,25 @@ def entitlements (app : System.FilePath) : IO Json := do
   let out ← run "codesign" #["-d", "--entitlements", ":-", app.toString]
   let file ← tempFile out.stdout.toUTF8
   try plistJson file finally IO.FS.removeFile file
+
+/-- The Info.plist key a manifest's `swiftSources` are written under (`LeanNativeShell.swiftSourcesKey`): the
+Swift the app means to have. -/
+def swiftSourcesKey : String := "LNSwiftSources"
+
+/-- The libraries `otool -L` lists (their install names) whose name says Swift. -/
+def swiftLibraries (otool : String) : List String :=
+  (otool.splitOn "\n").filter (·.startsWith "\t") |>.map (fun l => trim ((l.splitOn " (").headD l))
+    |>.filter (·.toLower.contains "swift")
+
+/-- What is wrong with the Swift an app links (`linked`, install names) and bundles (`bundled`, file names in
+Frameworks), given the sources its Info.plist declares. Undeclared, any Swift library is; declared, one that
+is not the system's: a bridge to a system framework links `/usr/lib/swift` and bundles nothing. -/
+def swiftProblems (declared linked bundled : List String) : List String :=
+  let system (l : String) := l.startsWith "/usr/lib/swift/" || l.startsWith "/System/Library/"
+  (if declared.isEmpty then linked.map fun l =>
+      s!"the app links a Swift library ({l}), and its Info.plist declares no Swift ({swiftSourcesKey}, from the manifest's swiftSources)"
+   else (linked.filter (!system ·)).map fun l => s!"the app links a Swift library that is not the system's ({l})") ++
+  bundled.map fun b => s!"the app bundles a Swift library ({b})"
 
 def verifyApp (app : System.FilePath) (id : Identity) (distribution : Bool) : IO Unit := do
   let info ← plistJson (app / "Info.plist")
@@ -71,13 +92,17 @@ def verifyApp (app : System.FilePath) (id : Identity) (distribution : Bool) : IO
   let binary := app / infoStr "CFBundleExecutable"
   let archs := ((← run "lipo" #["-archs", binary.toString]).stdout.splitOn " ").map trim |>.filter (· != "")
   check (archs == ["arm64"]) s!"the app must contain only the arm64 executable, not {archs}"
-  check (!((← run "otool" #["-L", binary.toString]).stdout.toLower.contains "swift")) "the app links a Swift library"
+  let declared := (arrOf (info.getObjValD swiftSourcesKey)).toList.map strOf
+  let linked := swiftLibraries (← run "otool" #["-L", binary.toString]).stdout
   let frameworks := app / "Frameworks"
-  if ← frameworks.pathExists then
-    for entry in ← frameworks.readDir do
-      check (!entry.fileName.toLower.contains "swift") s!"the app bundles a Swift library ({entry.fileName})"
-  say (if distribution then "Distribution identity, signature, iCloud, arm64 and no Swift verified."
-       else "Archive identity, signature, iCloud, arm64 and no Swift verified; the export is checked separately.")
+  let bundled ← if ← frameworks.pathExists then
+      pure ((← frameworks.readDir).toList.map (·.fileName) |>.filter (·.toLower.contains "swift"))
+    else pure []
+  if let problem :: _ := swiftProblems declared linked bundled then fail problem
+  let swift := if declared.isEmpty then "no Swift"
+    else s!"no Swift but the declared {", ".intercalate declared} (system libraries only)"
+  say (if distribution then s!"Distribution identity, signature, iCloud, arm64 and {swift} verified."
+       else s!"Archive identity, signature, iCloud, arm64 and {swift} verified; the export is checked separately.")
 
 def verifyIpa (ipa : System.FilePath) (id : Identity) : IO Unit := do
   let work ← IO.FS.createTempDir

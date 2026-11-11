@@ -9,7 +9,8 @@ Objective-C shell renders its views with UIKit on iOS and Mac Catalyst on macOS.
 The same state-transition functions you test and reason about run in the app. You can add proofs of
 your application's invariants and have Lean check them when you build. The application follows the Elm
 architecture (`Model`, `Msg`, `update`, `view`), with explicit commands for effects. No Swift is compiled
-or written per app.
+or written per app, unless the app declares a Swift bridge of its own to a Swift-only framework
+([docs/BRIDGES.md](docs/BRIDGES.md)).
 
 ## What you get
 
@@ -49,6 +50,14 @@ screenshots and recordings.
   The [native platform guide](framework/native/README.md) records the validation performed and the
   remaining device and platform limitations. The reusable app workflow currently covers iOS builds
   and simulator tests; Mac Catalyst validation is documented separately.
+* **Swift-only frameworks need a bridge the app declares.** Nothing in the shell or the examples is
+  Swift, and CI and the release checks refuse Swift an app has not declared. Frameworks with Objective-C
+  interfaces (Core ML, Vision, NaturalLanguage, …) are reachable through an app's own `app.invoke` bridge in
+  Objective-C. Swift-only ones (Foundation Models, StoreKit 2, Live Activities, …) work through the same
+  bridge written in Swift: the manifest names the file (`swiftSources`), and the checks then allow that
+  file and the system's Swift libraries, nothing else. [docs/BRIDGES.md](docs/BRIDGES.md) lists them, with
+  what each bridge has to get right and how it is tested. No example ships a Swift bridge, and none has
+  been through a release.
 
 ## Names, and migrating from the ElmLean names
 
@@ -258,7 +267,7 @@ xcodebuild, codesign, altool, openssl and curl:
 |---|---|
 | `policy <notes> [tag]` | a stable `vMAJOR.MINOR.PATCH` tag, and What to Test present and at most 4,000 characters (App Store Connect refuses more only after the upload) |
 | `append-notes <notes> <line>` | a last paragraph for What to Test (what the build bundles, say), on the runner only |
-| `verify-app <app> [--distribution]` | the bundle identifier, team, version and build number asked for; export compliance declared; the asset-catalog icon; the signature and its application identifier; the iCloud container when there is one (production for distribution); debugging off; arm64 only; no Swift |
+| `verify-app <app> [--distribution]` | the bundle identifier, team, version and build number asked for; export compliance declared; the asset-catalog icon; the signature and its application identifier; the iCloud container when there is one (production for distribution); debugging off; arm64 only; no Swift library linked or bundled, or with `LNSwiftSources` in Info.plist (the manifest's `swiftSources`) the system's Swift libraries linked and none bundled |
 | `verify-ipa <ipa>` | the exported package's one app, for distribution, and its SHA-256 recorded for the upload to check |
 | `testflight <step>` | App Store Connect: `wait-processing`, `notes`, `internal`, `check` (read only), `status`, `external` (beta review, a person's step), `register-bundle-id`, `create-app`, `upload`, and the App Store version's `appstore-status`, `appstore-attach`, `appstore-notes`, `appstore-submit` |
 | `jwt` | an App Store Connect API token (ES256, 20 minutes) for a person's own requests |
@@ -346,6 +355,7 @@ paragraph after it.
 README.md, PROTOCOL.md      this file; the wire protocol (nodes, events, seq, errors)
 Makefile                    check: the framework's checks
 docs/ISSUES.md              issues moved from posix4e/elmlean
+docs/BRIDGES.md             capabilities that need an app-owned bridge (Swift-only frameworks, ML), and their tests
 .github/workflows/
   ios-app.yml               the reusable CI workflow for an app
   ios-release.yml           the reusable release workflow for an app (TestFlight, GitHub release)

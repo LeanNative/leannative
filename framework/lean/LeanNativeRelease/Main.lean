@@ -5,7 +5,7 @@ import LeanNativeRelease.Asc
 
     leannative-release policy <notes file> [tag]          a stable tag and What to Test that fits
     leannative-release append-notes <notes file> <line>   a last paragraph for What to Test, checked again
-    leannative-release verify-app <app> [--distribution]  identity, signature, iCloud, arm64, no Swift
+    leannative-release verify-app <app> [--distribution]  identity, signature, iCloud, arm64, no undeclared Swift
     leannative-release verify-ipa <ipa>                   the exported package's app, its SHA-256 recorded
     leannative-release jwt                                an App Store Connect token, for a person's own calls
     leannative-release testflight <step>                  App Store Connect (LeanNativeRelease.Asc)

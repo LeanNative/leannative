@@ -1,27 +1,67 @@
 #!/bin/bash
-# A LeanNative app has no Swift: none in its repository, none compiled, none linked or bundled.
+# A LeanNative app has no Swift but what its manifest declares: none in its repository, none compiled, none
+# linked or bundled, unless the app names its Swift sources.
 #
 #   framework/native/ci/check-no-swift <xcodebuild log> <App.app>
 #
-# The repository is the one the current directory is in.
+# The repository is the one the current directory is in. The declaration is the built app's own:
+# LNSwiftSources in its Info.plist, written from the manifest's `swiftSources` (an app's bridge to a
+# framework with no Objective-C interface, docs/BRIDGES.md), each a path relative to the app's ios directory.
+# Without it, as before: no Swift source in the tree, no Swift compile step, no Swift library linked or
+# bundled. With it, exactly those sources: a .swift file in the tree or a compiled one that is not declared
+# is refused, the Swift libraries linked are the system's (/usr/lib/swift, /System/Library), and none is
+# bundled.
 set -euo pipefail
 LOG="${1:?xcodebuild log}"; APP="${2:?the .app}"
 fail=0
-swift_files=$(git ls-files '*.swift')
-if [ -n "$swift_files" ]; then echo "Swift sources in the tree:"; echo "$swift_files"; fail=1; fi
-compiles=$(grep -c '^SwiftCompile\|^SwiftDriver' "$LOG" || true)
-if [ "$compiles" != 0 ]; then echo "$compiles Swift compile steps in $LOG"; fail=1; fi
 # an iOS bundle is flat; a Mac Catalyst bundle keeps Info.plist under Contents/ and its executable in MacOS/
 if [ -f "$APP/Contents/Info.plist" ]; then
-  bin="$APP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+  plist="$APP/Contents/Info.plist"
+  bin="$APP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")"
   frameworks="$APP/Contents/Frameworks"
 else
-  bin="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+  plist="$APP/Info.plist"
+  bin="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")"
   frameworks="$APP/Frameworks"
+fi
+declared=()
+count=$(plutil -extract LNSwiftSources raw -o - "$plist" 2>/dev/null || true)
+case "$count" in ''|*[!0-9]*) count=0 ;; esac
+for ((i = 0; i < count; i++)); do declared+=("$(plutil -extract "LNSwiftSources.$i" raw -o - "$plist")"); done
+# a path is declared when it is a declared source, or ends in one below a directory (the app's ios directory)
+is_declared() {
+  local d
+  for d in ${declared[@]+"${declared[@]}"}; do
+    if [ "$1" = "$d" ] || [ "${1%"/$d"}" != "$1" ]; then return 0; fi
+  done
+  return 1
+}
+undeclared() { local f out=""; while IFS= read -r f; do [ -n "$f" ] && ! is_declared "$f" && out+="$f"$'\n'; done; printf %s "$out"; }
+
+swift_files=$(git ls-files '*.swift' | undeclared)
+if [ -n "$swift_files" ]; then echo "Swift sources in the tree that the app does not declare (swiftSources):"; echo "$swift_files"; fail=1; fi
+compiles=$(grep -c '^SwiftCompile\|^SwiftDriver' "$LOG" || true)
+if [ "$count" = 0 ]; then
+  if [ "$compiles" != 0 ]; then echo "$compiles Swift compile steps in $LOG"; fail=1; fi
+else
+  # `SwiftCompile normal arm64 Compiling\ A.swift /path/A.swift (in target …)`: the files are the words that
+  # are absolute paths (a space in a path is written `\ `)
+  compiled=$(grep '^SwiftCompile ' "$LOG" | sed $'s/\\\\ /\001/g' | tr ' ' '\n' | grep '^/.*\.swift$' | tr '\001' ' ' | sort -u || true)
+  extra=$(printf '%s\n' "$compiled" | undeclared)
+  if [ -n "$extra" ]; then echo "Swift compiled that the app does not declare (swiftSources):"; echo "$extra"; fail=1; fi
 fi
 # a Debug build's code is in <name>.debug.dylib beside a stub executable (Xcode's ENABLE_DEBUG_DYLIB)
 bins=("$bin"); [ -f "$bin.debug.dylib" ] && bins+=("$bin.debug.dylib")
-if otool -L "${bins[@]}" | grep -v ':$' | grep -i swift; then echo "the app links Swift libraries"; fail=1; fi
+# the libraries, without otool's line for each file it reads
+linked=$(for b in "${bins[@]}"; do otool -L "$b" | tail -n +2; done | awk '{print $1}' | grep -i swift | sort -u || true)
+if [ "$count" != 0 ]; then linked=$(printf '%s\n' "$linked" | grep -v '^/usr/lib/swift/\|^/System/Library/' || true); fi
+if [ -n "$linked" ]; then
+  if [ "$count" = 0 ]; then echo "the app links Swift libraries:"; else echo "the app links Swift libraries that are not the system's:"; fi
+  echo "$linked"; fail=1
+fi
 if [ -d "$frameworks" ] && ls "$frameworks" | grep -i swift; then echo "the app bundles Swift libraries"; fail=1; fi
-[ "$fail" = 0 ] && echo "no Swift: 0 sources, 0 compile steps, no Swift library linked or bundled"
+if [ "$fail" = 0 ]; then
+  if [ "$count" = 0 ]; then echo "no Swift: 0 sources, 0 compile steps, no Swift library linked or bundled"
+  else echo "no Swift but the app's own: $count declared (${declared[*]}), $compiles compile steps, the system's Swift libraries linked, none bundled"; fi
+fi
 exit "$fail"
