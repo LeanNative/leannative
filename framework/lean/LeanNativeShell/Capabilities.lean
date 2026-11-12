@@ -125,6 +125,15 @@ def capabilities : List Capability :=
       .l "BOOL pad = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;",
       .l "answer(@{@\"idiom\": NSProcessInfo.processInfo.isiOSAppOnMac ? @\"mac\" : pad ? @\"pad\" : @\"phone\"});",
       .pp "#endif"] },
+  { name := "appearance", args := "`style`", result := "`{\"ok\":true}` draws the app `light`, `dark` or as the system is (`system`, or any other style), every window now and from the first frame of the next launch (remembered), so an app can offer the choice in its settings",
+    body := [
+      .l "NSString *style = LNArgString(args, @\"style\") ?: @\"system\";",
+      .l "[NSUserDefaults.standardUserDefaults setObject:style forKey:@\"LNAppearance\"];",
+      .l "UIUserInterfaceStyle chosen = LNAppearance();",
+      b "for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {" [
+          .l "if (![scene isKindOfClass:UIWindowScene.class]) continue;",
+          .l "for (UIWindow *w in ((UIWindowScene *)scene).windows) w.overrideUserInterfaceStyle = chosen;"],
+      .l "answer(@{@\"ok\": @YES});"] },
   { name := "build", args := "—", result := "`{\"debug\":…}` whether this is a Debug build (`#if DEBUG`): test hooks stay off in Release",
     body := [
       .pp "#if DEBUG",

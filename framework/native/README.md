@@ -348,7 +348,7 @@ out after 90 s and 180 s, and a host that is not a string or a port outside 1…
 `{"error":"bad-proxy"}`; a system error answers its text with its `code` and `domain`),
 `open` (a URL outside the app), `device` (the kind of machine, `{"idiom":"phone"|"pad"|"mac"}`: a Mac is a Mac
 Catalyst build or the iPad app on a Mac, so an app can lay itself out for a window and a keyboard, in columns
-say), `timezone` (the device's zone: its identifier and its seconds east of UTC, now or
+say), `appearance` (`style`: `light`, `dark` or `system`: every window drawn so now, and remembered so the next launch's first frame is too, for an app that offers the choice in its settings; ask again at launch with the app's own saved choice), `timezone` (the device's zone: its identifier and its seconds east of UTC, now or
 at `at` in Unix seconds, so a list can say `09:12` as the person's clock does; ask again when the app comes back
 to the front, since a person travels), `webauth` (a sign-in in the system browser, `ASWebAuthenticationSession`: the
 URL to open and the callback it ends at, https — iOS 17.4 and later, the host among the app's `webcredentials:`
@@ -679,6 +679,23 @@ schedules by itself (lldb asks for each launch and expiry); Face ID's failure an
 peripheral's protocol, Winnow's); CloudKit and iCloud Keychain sync between devices (native-demo has no
 iCloud container: `cloudkit.*` answers `missingEntitlement`); the HTTP probes, which need the Mac's SOCKS
 proxy; the renderer and the UI tests, which run on the simulator and under Catalyst. CI does not run it.
+
+## The app's font and shape
+
+Text is the system font unless the app names a family in Info.plist's `LNFontFamily` (`info` in the manifest)
+that the device has: one iOS ships (`Hiragino Sans`, say), or one the app bundles, any .otf or .ttf at the
+bundle's root or in its `Fonts` folder, registered for the process at the first text drawn. The name may be
+the start of a family's (`Degular` matches `Degular Text`). Then every text style, button title, list header
+and footer, field, navigation bar title, toolbar item, tab bar item and segmented control is drawn in it at
+the style's weight (bold where the style is), scaled with Dynamic Type as the system font is; monospaced text,
+alerts and the system's own controls keep the system font. A family the device does not have changes nothing.
+
+Info.plist's `LNShape` set to `square` trades the system's rounded look for a squarer one: a list's rows sit
+on the page, divided by their separators, with a hairline under each section header in the label colour,
+instead of on rounded cards; buttons are rectangles, filled in the tint for `primary` and outlined for the
+rest (a `plain` button outside a list stays its tinted label), instead of capsules and Liquid Glass; toolbar
+items are their text without iOS 26's shared glass; badges and text areas round their corners by 2 pt.
+Absent or any other value, nothing changes.
 
 ## View nodes
 
