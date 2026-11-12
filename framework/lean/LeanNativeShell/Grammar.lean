@@ -193,6 +193,7 @@ def nodes : List NodeKind :=
       .l "c.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithTextStyle:UIFontTextStyleFootnote];",
       .l "c.baseForegroundColor = UIColor.secondaryLabelColor;",
       .l "c.contentInsets = NSDirectionalEdgeInsetsZero;",
+      .l "LNButtonFont(c, NO);",
       .l "UIButton *b = [UIButton buttonWithConfiguration:c primaryAction:nil];",
       .l "b.menu = [UIMenu menuWithChildren:actions];",
       .l "b.showsMenuAsPrimaryAction = YES;",

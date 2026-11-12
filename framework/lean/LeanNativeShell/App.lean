@@ -66,7 +66,10 @@ def appFile : List Stmt := [
         .l "UIView *_cover;"],
     .blank,
     b "- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options {" [
+        .l "LNApplyFontAppearance();",
         .l "self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];",
+        .l "// the appearance the app last chose, from the first frame",
+        .l "self.window.overrideUserInterfaceStyle = LNAppearance();",
         .l "self.window.rootViewController = [LNRootController new];",
         .l "_cover = [UIView new];",
         .l "_cover.backgroundColor = UIColor.systemBackgroundColor;",
