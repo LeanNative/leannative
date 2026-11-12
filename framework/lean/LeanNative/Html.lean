@@ -108,6 +108,13 @@ structure Decor where
   typed in, and does nothing then. The shell has two keys of its own, which an app's same key replaces: `cmd+[`
   goes back from a screen and `escape` closes a sheet. -/
   key : String := ""
+  /-- a button inside a list's row is what a click on the row does with a modifier key held: `"cmd"` (the
+  command key, or control) or `"shift"`. The click is the button's own, so `update` hears the message it
+  already has for it; a disabled one does nothing, and the row's plain click is not done then. Such a button
+  is not drawn in its row, as a swipe action is not. What a list does with it is the app's: picking a row
+  beside the others, picking a run of rows. Outside a list's row, and in a shell that does not know the field,
+  it is the button it was; with a finger there is no modifier, and the row's click is the plain one. -/
+  pointer : String := ""
   deriving Repr, DecidableEq, Inhabited
 
 /-- `outer`'s fields where they are set, else `inner`'s. -/
@@ -121,7 +128,8 @@ def Decor.merge (inner outer : Decor) : Decor :=
     swipe := if outer.swipe == .none then inner.swipe else outer.swipe
     selected := inner.selected || outer.selected
     menu := inner.menu || outer.menu
-    key := if outer.key.isEmpty then inner.key else outer.key }
+    key := if outer.key.isEmpty then inner.key else outer.key
+    pointer := if outer.pointer.isEmpty then inner.pointer else outer.pointer }
 
 inductive ButtonRole where
   | plain
@@ -349,6 +357,9 @@ def chosen (on : Bool) (h : Html msg) : Html msg := if on then decor { selected 
 def inMenu (h : Html msg) : Html msg := decor { menu := true } h
 /-- A node with a key equivalent (`Decor.key`): `(button …).key "cmd+r"`. -/
 def key (k : String) (h : Html msg) : Html msg := decor { key := k } h
+/-- A button in a list's row as the row's click with a modifier key held (`Decor.pointer`): `"cmd"` or
+`"shift"`. -/
+def onClickWith (modifier : String) (h : Html msg) : Html msg := decor { pointer := modifier } h
 
 end Html
 end LeanNative

@@ -19,11 +19,11 @@ def wire (h : Html Nat) : Json := h.toWire.toJson
 /-- The node's `"decor"` on the wire, with any field not given its default. -/
 def decorJson (tone : String := "standard") (mono badge centered : Bool := false) (symbol : String := "")
     (chevron : Bool := false) (swipe : String := "none") (selected : Bool := false) (menu : Bool := false)
-    (key : String := "") : Json :=
+    (key : String := "") (pointer : String := "") : Json :=
   Json.mkObj [("tone", Json.str tone), ("mono", Json.bool mono), ("badge", Json.bool badge),
               ("centered", Json.bool centered), ("symbol", Json.str symbol), ("chevron", Json.bool chevron),
               ("swipe", Json.str swipe), ("selected", Json.bool selected), ("menu", Json.bool menu),
-              ("key", Json.str key)]
+              ("key", Json.str key), ("pointer", Json.str pointer)]
 
 def label : Html Nat := .text "1,000 sats" .body
 
@@ -142,6 +142,12 @@ def menusAndKeys : IO Unit := do
     (Json.mkObj [("t", Json.str "button"), ("label", Json.str "Sync"), ("role", Json.str "plain"),
       ("enabled", Json.bool true), ("id", Json.str "sync"), ("decor", decorJson (key := "cmd+r"))])
   check "a key changes nothing a click does" (sync.dispatch [] .click == some 3)
+  -- a row's click with a modifier held is a button of the row, with its own click
+  let pick : Html Nat := Html.onClickWith "cmd" (.identified "pick" (.button "Pick" .plain (some 4)))
+  same "a button for a modifier's click: the button's own keys, its id and one decor" pick
+    (Json.mkObj [("t", Json.str "button"), ("label", Json.str "Pick"), ("role", Json.str "plain"),
+      ("enabled", Json.bool true), ("id", Json.str "pick"), ("decor", decorJson (pointer := "cmd"))])
+  check "a modifier's click is the button's own click" (pick.dispatch [] .click == some 4)
   -- on a screen the key is its pull to refresh, the screen's own click; on an input it is the cursor, no event
   let screen : Html Nat := Html.key "cmd+shift+n" (.screen "Inbox" none [Html.key "cmd+f" (.input .plain "" "Search" "" (fun _ => 1) none)] (onRefresh := some 5))
   check "a screen with a key: its click is its refresh" (screen.dispatch [] .click == some 5)

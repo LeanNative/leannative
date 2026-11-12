@@ -155,6 +155,32 @@
     XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(value) isEqualToString:@"Deleted"]; }), @"after Delete: %@", LNText(value));
 }
 
+/// A row's click with a modifier key held (`decor.pointer`): plain, the row's own click; with command or control,
+/// or with shift, the button of the row that names the key, which is not drawn in the row.
+- (void)testARowsClickWithAModifierKey {
+    if (![self openTab:@"Widgets"]) return;
+    XCUIElement *row = LNElement(self.app, @"pickRow"), *value = LNElement(self.app, @"swipedValue");
+    XCTAssertTrue(LNScrollTo(self.app, row), @"the row cannot be scrolled into view");
+    XCTAssertFalse(LNElement(self.app, @"pick-one").exists || LNElement(self.app, @"pick-run").exists, @"a modifier's button is drawn in the row");
+    void (^press)(void) = ^{
+#if TARGET_OS_MACCATALYST
+        [row click];
+#else
+        [row tap];
+#endif
+    };
+    press();
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(value) isEqualToString:@"Opened"]; }), @"a plain click: %@", LNText(value));
+    [XCUIElement performWithKeyModifiers:XCUIKeyModifierCommand block:press];
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(value) isEqualToString:@"Picked"]; }), @"a click with command held: %@", LNText(value));
+    [XCUIElement performWithKeyModifiers:XCUIKeyModifierShift block:press];
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(value) isEqualToString:@"Picked to here"]; }), @"a click with shift held: %@", LNText(value));
+    press();
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(value) isEqualToString:@"Opened"]; }), @"a plain click after them: %@", LNText(value));
+    [XCUIElement performWithKeyModifiers:XCUIKeyModifierControl block:press];
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(value) isEqualToString:@"Picked"]; }), @"a click with control held: %@", LNText(value));
+}
+
 /// Keys (`decor.key`): a button's key is its click, in the page or in a bar, an input's puts the cursor in it
 /// (here cmd-F, the system's Find), and cmd-[ goes back from a screen.
 - (void)testKeysDoWhatTheirNodesDo {
