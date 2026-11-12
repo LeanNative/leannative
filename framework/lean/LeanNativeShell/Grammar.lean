@@ -79,6 +79,9 @@ def nodes : List NodeKind :=
   { tag := "button", fields := [str "label", enum "role" "Role" "plain", bool "enabled" true],
     render := [
       .l "if ([box.mode isEqualToString:@\"cell\"]) LNPin(LNRowButton(n, path), box, UIEdgeInsetsZero);",
+      .l "// a link is a row's title: its box's width, its label wrapping inside it (at its own width, a long",
+      .l "// title squeezed it and spilled past both its edges)",
+      .l "else if ([n[@\"decor\"][@\"chevron\"] boolValue]) LNPin(LNButton(n, path, box.mode), box, UIEdgeInsetsZero);",
       .l "else LNPinLeading(LNButton(n, path, box.mode), box);"] },
   { tag := "field", fields := [str "placeholder", str "value", bool "submits"],
     render := [
@@ -192,7 +195,7 @@ def nodes : List NodeKind :=
       .l "c.imagePadding = 4;",
       .l "c.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithTextStyle:UIFontTextStyleFootnote];",
       .l "c.baseForegroundColor = UIColor.secondaryLabelColor;",
-      .l "c.contentInsets = NSDirectionalEdgeInsetsZero;",
+      .l "LNNoInsets(c);",
       .l "LNButtonFont(c, NO);",
       .l "UIButton *b = [UIButton buttonWithConfiguration:c primaryAction:nil];",
       .l "b.menu = [UIMenu menuWithChildren:actions];",
@@ -247,7 +250,7 @@ def nodes : List NodeKind :=
       .l "if ([decor[@\"symbol\"] length] == 0) decor[@\"symbol\"] = @\"square.and.arrow.up\";",
       .l "BOOL row = [box.mode isEqualToString:@\"cell\"];",
       .l "UIButtonConfiguration *c = LNButtonStyle(@\"plain\", decor, row ? @\"\" : box.mode);",
-      .l "if (row) { c.contentInsets = NSDirectionalEdgeInsetsZero; c.imagePadding = 12; }",
+      .l "if (row) { LNNoInsets(c); c.imagePadding = 12; }",
       .l "c.title = n[@\"label\"];",
       .l "BOOL file = [n[@\"file\"] boolValue];",
       .l "NSString *text = n[@\"text\"];",
@@ -265,7 +268,7 @@ def nodes : List NodeKind :=
       .blk [("if (url) {", [
             .l "UIButtonConfiguration *c = UIButtonConfiguration.plainButtonConfiguration;",
             .l "c.title = n[@\"label\"];",
-            .l "c.contentInsets = NSDirectionalEdgeInsetsZero;",
+            .l "LNNoInsets(c);",
             b "UIButton *b = [UIButton buttonWithConfiguration:c primaryAction:[UIAction actionWithHandler:^(UIAction *a) {" [
                 .l "[UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];"] "}]];",
             .l "LNPinLeading(b, box);"]), ("} else {", [
@@ -301,7 +304,7 @@ def nodes : List NodeKind :=
       .l "UIStackView *s = LNStack(UILayoutConstraintAxisVertical, 12);",
       .l "UIButtonConfiguration *c = UIButtonConfiguration.plainButtonConfiguration;",
       .l "c.imagePlacement = NSDirectionalRectEdgeTrailing;",
-      .l "c.contentInsets = NSDirectionalEdgeInsetsZero;",
+      .l "LNNoInsets(c);",
       .l "c.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithTextStyle:UIFontTextStyleFootnote];",
       .l "UIButton *header = [UIButton buttonWithConfiguration:c primaryAction:nil];",
       .l "header.contentHorizontalAlignment = UIControlContentHorizontalAlignmentFill;",

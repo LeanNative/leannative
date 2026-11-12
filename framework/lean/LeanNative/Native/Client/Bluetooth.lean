@@ -1,6 +1,6 @@
 import LeanNative.Native.Client
 
-/-! # Bluetooth LE GATT (`ble.state/connect/subscribe/write/read/close`)
+/-! # Bluetooth LE GATT (`ble.state/scan/connect/subscribe/write/read/close`)
 
 Generic: a peripheral by the services it offers, characteristics by UUID, values as bytes. The
 services, characteristics, framing and timeouts of a particular device are the app's.
@@ -51,6 +51,34 @@ def state : Request State :=
       match State.ofName? s with
       | some st => pure st
       | none => throw (malformed s!"state {s}") }
+
+/-- A peripheral a scan saw advertising one of the services asked for. -/
+structure Advertisement where
+  /-- The peripheral (the same id a later `connect` reports for it). -/
+  id : String
+  /-- Its advertised local name, else the name the system knows it by. -/
+  name : Option String := none
+  /-- The signal strength in dBm; none for a peripheral the system already holds connected. -/
+  rssi : Option Int := none
+  deriving Repr, BEq, Inhabited
+
+/-- Looks for peripherals advertising one of `services` for `seconds` (the shell's default, 4; at most 30),
+without connecting to any: every one seen, once. -/
+def scan (services : List String) (seconds : Option Nat := none) : Request (Array Advertisement) :=
+  { capability := "ble.scan"
+    args := obj [("services", some (Json.arr (services.toArray.map Json.str))), ("seconds", seconds.map toJson)]
+    decode := fun j => do
+      decodeOk j
+      let devices ← match j.getObjVal? "devices" with
+        | .ok (.arr ds) => pure ds
+        | _ => throw (malformed "no `devices`")
+      devices.mapM fun d => do
+        let rssi ← match d.getObjVal? "rssi" with
+          | .ok .null | .error _ => pure none
+          | .ok v => match v.getInt? with
+            | .ok n => pure (some n)
+            | .error _ => throw (malformed "an `rssi` is not an integer")
+        return { id := ← reqString d "id", name := ← optString d "name", rssi } }
 
 structure Connection where
   /-- The peripheral, for the other requests. -/

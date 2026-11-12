@@ -356,7 +356,8 @@ associated domains — or a custom scheme; answers `{"ok":true,"url":…}`, the 
 `ASWebAuthenticationSessionError` as `name` and `code`, `canceledLogin` when the person closes the sheet; one at a
 time, and the browser's cookies are shared unless `ephemeral`), `bgtask.schedule/complete/refreshStatus/continue/progress` (background tasks, above),
 `cloudkit.account/query/save/load/delete` (below), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
-`ble.connect` (a peripheral the system already holds connected, else the first a scan finds; answers its
+`ble.scan` (the peripherals advertising a service within a few seconds, with name and RSSI, without
+connecting: a nearby device offered before anything is opened), `ble.connect` (a peripheral the system already holds connected, else the first a scan finds; answers its
 characteristics), `ble.subscribe` (notifications on; iOS pairs here, so it may wait on the user),
 `ble.write` (hex, with or without response), `ble.read` (the next notified value, in arrival order per
 characteristic) and `ble.close`. Framing and UUIDs are the app's (a Ledger's transport is Winnow's Lean);
