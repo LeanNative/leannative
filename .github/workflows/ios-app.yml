@@ -308,6 +308,13 @@ jobs:
       - name: ffmpeg, installing while the app builds
         if: inputs.ui-tests && inputs.journey-media != '' && matrix.shard == ''
         run: &ffmpeg |
+          # Homebrew's own directory, for this step and the later ones: a runner started as a service has the
+          # system's PATH, without it, and then neither ffmpeg nor brew is found (a restarted laptop runner
+          # failed the media step with "brew: command not found")
+          for d in /opt/homebrew/bin /usr/local/bin; do
+            case ":$PATH:" in *":$d:"*) continue ;; esac
+            if [ -x "$d/brew" ]; then echo "$d" >> "$GITHUB_PATH"; PATH="$d:$PATH"; fi
+          done
           if command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; then echo 0 > "$RUNNER_TEMP/ffmpeg.done"; exit 0; fi
           # shellcheck disable=SC2016 # the inner bash expands them
           nohup bash -c 'HOMEBREW_NO_AUTO_UPDATE=1 brew install ffmpeg > "$RUNNER_TEMP/ffmpeg.log" 2>&1; echo $? > "$RUNNER_TEMP/ffmpeg.done"' \
