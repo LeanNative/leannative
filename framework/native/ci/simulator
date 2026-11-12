@@ -1,5 +1,5 @@
 #!/bin/bash
-# The throwaway iPhone simulator a CI step runs on, chosen the same way every time:
+# The throwaway simulator (an iPhone, or an iPad) a CI step runs on, chosen the same way every time:
 #
 #   framework/native/ci/simulator pick            the runtime and model a new one gets, as device.json's record
 #   framework/native/ci/simulator create <name>   a new one, already booting: prints its UDID
@@ -11,8 +11,9 @@
 #
 #   UI_RUNTIME      the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest that has
 #                   UI_DEVICE_TYPE; a device-specific runtime, such as one made for a single new iPhone, may not)
-#   UI_DEVICE_TYPE  the iPhone model (default iPhone 17 Pro), so screenshots keep their size from run to run;
-#                   a named runtime without it, or no runtime with it, fails
+#   UI_DEVICE_TYPE  the model (default iPhone 17 Pro), so screenshots keep their size from run to run: an iPhone,
+#                   or an iPad such as "iPad Pro 11-inch (M5)" for a wide window; a named runtime without it,
+#                   or no runtime with it, fails
 #
 # `create` returns once the boot is asked for, not once it is done: the caller waits for it
 # (`xcrun simctl bootstatus <udid> -b`) and deletes it when it ends (ui-tests, test-mode-check). Neither is
@@ -37,12 +38,12 @@ has = lambda r: any(t["name"] == os.environ["UI_DEVICE_TYPE"] for t in r.get("su
 if not wanted and any(has(r) for r in runtimes):
     runtimes = [r for r in runtimes if has(r)]
 runtime = max(runtimes, key=version)
-iphones = [t for t in runtime.get("supportedDeviceTypes", []) if t["name"].startswith("iPhone")]
-if not iphones: sys.exit("no iPhone for " + runtime["identifier"])
-chosen = next((t for t in iphones if t["name"] == os.environ["UI_DEVICE_TYPE"]), None)
+models = [t for t in runtime.get("supportedDeviceTypes", []) if t["name"].startswith(("iPhone", "iPad"))]
+if not models: sys.exit("no iPhone or iPad for " + runtime["identifier"])
+chosen = next((t for t in models if t["name"] == os.environ["UI_DEVICE_TYPE"]), None)
 if chosen is None:
     sys.exit(os.environ["UI_DEVICE_TYPE"] + " is not available on " + runtime["identifier"] + "; set UI_DEVICE_TYPE to one of: "
-             + ", ".join(t["name"] for t in iphones))
+             + ", ".join(t["name"] for t in models))
 print(json.dumps({"name": chosen["name"], "type": chosen["identifier"], "runtime": runtime["identifier"],
                   "os": runtime["name"]}))'
 }
