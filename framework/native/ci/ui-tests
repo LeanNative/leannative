@@ -23,8 +23,9 @@
 #   UI_SIMULATOR    (simulator) an existing simulator to use instead (a name or UDID; it is not deleted)
 #   UI_RUNTIME      (simulator) the iOS runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5 (default: the newest
 #                   that has UI_DEVICE_TYPE)
-#   UI_DEVICE_TYPE  (simulator) the iPhone model (default iPhone 17 Pro), so screenshots keep their size from run to run;
-#                   a runtime without it fails the run; device.json records it (framework/native/ci/simulator)
+#   UI_DEVICE_TYPE  (simulator) the model (default iPhone 17 Pro), so screenshots keep their size from run to run:
+#                   an iPhone, or an iPad such as "iPad Pro 11-inch (M5)"; a runtime without it fails the run;
+#                   device.json records it (framework/native/ci/simulator)
 #   UI_PREPARED=1   the app's sources and project are ready (build-ios Debug just built them on this platform), so
 #                   they are not prepared again
 #   UI_BEFORE       a command run as `$UI_BEFORE <UI_OUT>` once the device is chosen: the app's fixture
