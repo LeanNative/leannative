@@ -7,6 +7,7 @@
 // test-env); otherwise to a temporary directory, so writing them is always tested.
 #import <XCTest/XCTest.h>
 #import "LNTest.h"
+#include <math.h>
 
 @interface NativeDemoUITests : XCTestCase
 @property (nonatomic, strong) XCUIApplication *app;
@@ -64,6 +65,31 @@
     if (!LNType(self.app, @"name", @"")) return;
     XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(LNElement(self.app, @"greeting")) isEqualToString:@"Nobody yet"]; }),
                   @"greeting: %@", LNText(LNElement(self.app, @"greeting")));
+}
+
+/// Callouts retain their controls and clear their padding when the decoration changes in place.
+/// Checking the measured height also catches a shell decoder that silently drops the new field.
+- (void)testCalloutUpdatesInLightAndDark {
+    for (NSString *appearance in @[@"light", @"dark"]) {
+        [self.app terminate];
+        self.app.launchArguments = @[@"-LNAppearance", appearance];
+        [self.app launch];
+        if (![self openTab:@"Widgets"]) return;
+        XCUIElement *action = LNElement(self.app, @"calloutAction");
+        XCTAssertTrue(LNScrollTo(self.app, action));
+        XCUIElement *panel = LNElement(self.app, @"calloutPanel");
+        CGFloat padded = panel.frame.size.height;
+        if (!LNTap(self.app, @"calloutAction")) return;
+        XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{
+            return [LNText(LNElement(self.app, @"calloutValue")) isEqualToString:@"Count: 1"] &&
+                   panel.frame.size.height < padded - 25;
+        }), @"%@ panel did not remove its 32 pt vertical padding", appearance);
+        if (!LNTap(self.app, @"calloutAction")) return;
+        XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{
+            return [LNText(LNElement(self.app, @"calloutValue")) isEqualToString:@"Count: 2"] &&
+                   fabs(panel.frame.size.height - padded) < 2;
+        }), @"%@ panel did not restore its padding", appearance);
+    }
 }
 
 - (void)testDisabledControl {
