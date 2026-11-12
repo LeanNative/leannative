@@ -275,7 +275,12 @@ def widgets (m : Model) : Html Msg :=
                  , Html.swipe .trailing (.button "Never" .plain none)
                  , Html.swipe .leading (Html.symbol "flag" (Html.tone .warning (.identified "swipe-flag" (.button "Flag" .plain (some (.swiped "Flagged"))))))
                  , Html.inMenu (Html.symbol "envelope.badge" (.identified "menu-unread" (.button "Mark unread" .plain (some (.swiped "Marked unread")))))
-                 , Html.inMenu (.identified "menu-locked" (.button "Locked" .plain none)) ] ] ]
+                 , Html.inMenu (.identified "menu-locked" (.button "Locked" .plain none)) ] ]
+      , .section "Callout" "The button changes the same column between a panel and plain content."
+          [.identified "calloutPanel" ((if m.count % 2 == 0 then Html.callout else Html.col)
+            [.text "A clear warning" .headline,
+             .identified "calloutValue" (.text s!"Count: {m.count}" .body),
+             .identified "calloutAction" (.button "Change panel" .primary (some .inc))])] ]
     , (if m.sheet then .sheet "A sheet" (some .closeSheet)
         [ .text "Swipe down or tap Close." .body, .button "Close" .plain (some .closeSheet)
         , .identified "sheetPush" (.button "Open a screen" .plain (some .openPushed)) ] else .spacer)

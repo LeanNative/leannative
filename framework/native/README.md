@@ -698,6 +698,20 @@ rest (a `plain` button outside a list stays its tinted label), instead of capsul
 items are their text without iOS 26's shared glass; badges and text areas round their corners by 2 pt.
 Absent or any other value, nothing changes.
 
+With `LNShape = square`, an app can set `LNButtonCornerRadius` to a number from 0 to 32 pt
+(default 0), and `LNPrimaryBackgroundColor` / `LNPrimaryForegroundColor` to colour-asset names.
+These let a bright primary fill keep dark, readable text in both appearances. Missing or invalid
+assets keep the existing colours. Non-primary and destructive buttons keep their roles.
+
+`Html.callout children` draws a column with 16 pt padding (19 pt on the left, including a 3 pt rule),
+12 pt between children, and 10 pt rounding on the right corners. The rule stays on the left in both
+layout directions. The panel uses `LNCalloutBackgroundColor` and the rule uses
+`LNCalloutAccentColor` (colour-asset names in Info.plist; defaults: secondary system grouped background
+and system orange). A tone on the callout overrides only the rule colour. Text and controls keep
+their own colours, Dynamic Type, identifiers and event paths. The rule is decorative and is not
+announced by VoiceOver; include an explicit title or warning text. Geometry is identical in light
+and dark mode. Existing columns and shells without this decoration retain their previous behavior.
+
 ## View nodes
 
 Native mode renders the original eight nodes plus `input` (plain / secure / multiline / number / decimal),
