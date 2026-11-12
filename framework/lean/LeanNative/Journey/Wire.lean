@@ -196,7 +196,7 @@ def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
     return Json.mkObj [("error", Json.str "The Internet connection appears to be offline."), ("code", toJson (-1009 : Int)),
                        ("domain", Json.str "NSURLErrorDomain")]
   | "ble.state" => return Json.mkObj [("state", Json.str "unsupported")]
-  | "ble.connect" | "ble.subscribe" | "ble.write" | "ble.close" =>
+  | "ble.scan" | "ble.connect" | "ble.subscribe" | "ble.write" | "ble.close" =>
     return Json.mkObj [("ok", false), ("error", Json.str "unsupported")]
   | "ble.read" => return Json.mkObj [("error", Json.str "disconnected")]
   | "bgtask.schedule" | "bgtask.complete" => return Json.mkObj [("ok", true)]

@@ -234,6 +234,9 @@ def capabilities : List Capability :=
   { name := "ble.state", args := "—",
     result := "`{\"state\":…}`: `poweredOn`, `poweredOff`, `unauthorized`, `unsupported`, `resetting` or `unknown`",
     body := [.l "[[LNBluetooth shared] state:answer];"] },
+  { name := "ble.scan", args := "`services` (UUIDs), `seconds`? (s, 4)",
+    result := "`{\"ok\":true,\"devices\":[{\"id\",\"name\",\"rssi\"}]}` (`name` the advertised local name, else the peripheral's, or null; `rssi` in dBm, null for a peripheral the system already holds connected) for every peripheral advertising one of the services within `seconds` (at most 30), without connecting; or `{\"ok\":false,\"error\":…}` (a Bluetooth state, `busy` while another scan or a connection is being made, `no-services`)",
+    body := [.l "[[LNBluetooth shared] scan:args answer:answer];"] },
   { name := "ble.connect", args := "`services` (UUIDs), `timeout`? (s, 45)",
     result := "`{\"ok\":true,\"id\",\"name\",\"service\",\"characteristics\"}` (`name` the peripheral's advertised name, or null) for the first peripheral offering one of the services (one the system already holds connected, else the first found by a scan), or `{\"ok\":false,\"error\":…}` (a Bluetooth state, `timeout`, `refused`, `busy`, …)",
     body := [.l "[[LNBluetooth shared] connect:args answer:answer];"] },
@@ -607,6 +610,7 @@ def bluetoothClass : List Stmt := [
     .l "@interface LNBluetooth : NSObject <CBCentralManagerDelegate, CBPeripheralDelegate>",
     .l "+ (instancetype)shared;",
     .l "- (void)state:(LNAnswer)answer;",
+    .l "- (void)scan:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "- (void)connect:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "- (void)subscribe:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "- (void)write:(NSDictionary *)args answer:(LNAnswer)answer;",
@@ -640,6 +644,9 @@ def bluetoothClass : List Stmt := [
         .l "NSArray<CBUUID *> *_connectServices;",
         .l "CBPeripheral *_connecting;",
         .l "LNPending *_connect;",
+        .l "// the scan being made (no connection): what it has seen, by peripheral id, and its answer",
+        .l "NSMutableDictionary<NSString *, NSDictionary *> *_scanSeen;",
+        .l "LNPending *_scan;",
         .l "// per \"peripheral id|characteristic uuid\": requests in flight, and notified values not yet read",
         .l "NSMutableDictionary<NSString *, LNPending *> *_subscribes;",
         .l "NSMutableDictionary<NSString *, NSMutableArray<LNPending *> *> *_writes;",
@@ -707,6 +714,29 @@ def bluetoothClass : List Stmt := [
     .blank,
     b "- (void)state:(LNAnswer)answer {" [
         .l "[self ready:^{ answer(@{@\"state\": LNStateName(self->_central.state)}); }];"],
+    .blank,
+    b "- (void)scan:(NSDictionary *)args answer:(LNAnswer)answer {" [
+        .l "NSArray<CBUUID *> *services = ELUUIDs(args[@\"services\"]);",
+        .l "if (services.count == 0) { answer(@{@\"ok\": @NO, @\"error\": @\"no-services\"}); return; }",
+        .l "if (_scan || _connect) { answer(@{@\"ok\": @NO, @\"error\": @\"busy\"}); return; }",
+        .l "NSTimeInterval seconds = MIN(MAX(LNSeconds(args, @\"seconds\", 4), 0.5), 30);",
+        b "[self ready:^{" [
+            b "if (self->_central.state != CBManagerStatePoweredOn) {" [
+                .l "answer(@{@\"ok\": @NO, @\"error\": LNStateName(self->_central.state)});",
+                .l "return;"],
+            .l "if (self->_scan || self->_connect) { answer(@{@\"ok\": @NO, @\"error\": @\"busy\"}); return; }",
+            .l "self->_scanSeen = [NSMutableDictionary dictionary];",
+            .l "// the peripherals the system already holds connected do not advertise: they are reported as they are",
+            b "for (CBPeripheral *p in [self->_central retrieveConnectedPeripheralsWithServices:services]) {" [
+                .l "self->_scanSeen[p.identifier.UUIDString] = @{@\"id\": p.identifier.UUIDString, @\"name\": (id)p.name ?: NSNull.null, @\"rssi\": NSNull.null};"],
+            b "self->_scan = [self pending:answer timeout:seconds onTimeout:^(LNPending *p) {" [
+                .l "// a connection begun meanwhile scans for its own peripheral: its scan is left running",
+                .l "if (!self->_connect) [self->_central stopScan];",
+                .l "NSArray *devices = self->_scanSeen.allValues;",
+                .l "self->_scan = nil;",
+                .l "self->_scanSeen = nil;",
+                .l "[self settle:p with:@{@\"ok\": @YES, @\"devices\": devices}];"] "}];",
+            .l "[self->_central scanForPeripheralsWithServices:services options:@{CBCentralManagerScanOptionAllowDuplicatesKey: @NO}];"] "}];"],
     .blank,
     b "- (void)connect:(NSDictionary *)args answer:(LNAnswer)answer {" [
         .l "NSArray<CBUUID *> *services = ELUUIDs(args[@\"services\"]);",
@@ -815,10 +845,19 @@ def bluetoothClass : List Stmt := [
         .l "for (void (^then)(void) in waiting) then();",
         b "if (central.state != CBManagerStatePoweredOn) {" [
             .l "if (_connect) [self endConnect:@{@\"ok\": @NO, @\"error\": LNStateName(central.state)}];",
+            b "if (_scan) {" [
+                .l "LNPending *p = _scan;",
+                .l "_scan = nil;",
+                .l "_scanSeen = nil;",
+                .l "[self settle:p with:@{@\"ok\": @NO, @\"error\": LNStateName(central.state)}];"],
             .l "for (NSString *id_ in _peripherals.allKeys) [self drop:id_];"]],
     .blank,
     .l "- (void)centralManager:(CBCentralManager *)central didDiscoverPeripheral:(CBPeripheral *)peripheral",
     b "     advertisementData:(NSDictionary<NSString *, id> *)advertisementData RSSI:(NSNumber *)RSSI {" [
+        b "if (_scanSeen) {" [
+            .l "NSString *id_ = peripheral.identifier.UUIDString;",
+            .l "id name = advertisementData[CBAdvertisementDataLocalNameKey] ?: peripheral.name;",
+            .l "_scanSeen[id_] = @{@\"id\": id_, @\"name\": name ?: NSNull.null, @\"rssi\": RSSI ?: NSNull.null};"],
         .l "if (!_connect || _connecting) return;",
         .l "[central stopScan];",
         .l "[self attach:peripheral];"],
