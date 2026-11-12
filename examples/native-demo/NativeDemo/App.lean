@@ -275,7 +275,13 @@ def widgets (m : Model) : Html Msg :=
                  , Html.swipe .trailing (.button "Never" .plain none)
                  , Html.swipe .leading (Html.symbol "flag" (Html.tone .warning (.identified "swipe-flag" (.button "Flag" .plain (some (.swiped "Flagged"))))))
                  , Html.inMenu (Html.symbol "envelope.badge" (.identified "menu-unread" (.button "Mark unread" .plain (some (.swiped "Marked unread")))))
-                 , Html.inMenu (.identified "menu-locked" (.button "Locked" .plain none)) ] ] ]
+                 , Html.inMenu (.identified "menu-locked" (.button "Locked" .plain none)) ]
+            -- a row's click with a modifier key held (`Decor.pointer`): the row opens on a plain click, and with
+            -- command (or control) or shift held it does the button of the row that names that key, which is not
+            -- drawn. The disabled one does nothing, and the plain click is not done in its place
+          , .col [ .row [ Html.decor { chevron := true } (.identified "pickRow" (.button "A row to pick" .plain (some (.swiped "Opened")))) ]
+                 , Html.onClickWith "cmd" (.identified "pick-one" (.button "Pick" .plain (some (.swiped "Picked"))))
+                 , Html.onClickWith "shift" (.identified "pick-run" (.button "Pick to here" .plain (some (.swiped "Picked to here")))) ] ] ]
     , (if m.sheet then .sheet "A sheet" (some .closeSheet)
         [ .text "Swipe down or tap Close." .body, .button "Close" .plain (some .closeSheet)
         , .identified "sheetPush" (.button "Open a screen" .plain (some .openPushed)) ] else .spacer)

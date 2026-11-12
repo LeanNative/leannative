@@ -62,7 +62,7 @@ def decorFields : List Field :=
   [{ key := "tone", ty := .enum "Tone" "standard" }, { key := "mono", ty := .bool }, { key := "badge", ty := .bool },
    { key := "centered", ty := .bool }, { key := "symbol", ty := .str }, { key := "chevron", ty := .bool },
    { key := "swipe", ty := .enum "Swipe" "none" }, { key := "selected", ty := .bool }, { key := "menu", ty := .bool },
-   { key := "key", ty := .str }]
+   { key := "key", ty := .str }, { key := "pointer", ty := .str }]
 
 set_option maxRecDepth 8000 in
 def nodes : List NodeKind :=

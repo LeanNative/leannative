@@ -712,8 +712,11 @@ constructor has its `Sat` case, so `advertises_iff` and the `Spec`/`CmdSpec` the
 While the scene is not active the shell covers the window (app-switcher snapshots never show it).
 A screen whose title changes is a new screen to the renderer: it starts scrolled to its top.
 
-**A mouse and a keyboard.** Two decorations are for them (`Html.inMenu`, `Html.key`; PROTOCOL.md has their
-grammar). A list row's buttons with `decor.menu` are its context menu, a right click on a Mac and a long press
+**A mouse and a keyboard.** Three decorations are for them (`Html.inMenu`, `Html.key`, `Html.onClickWith`;
+PROTOCOL.md has their grammar). A row's buttons with `decor.pointer` are its click with command (or control) or
+shift held: the table reads the keys from the touch that selects the row (`touchesEnded:withEvent:`), and a row
+that has one is clicked as a row, its own button letting the touch through, since that button would do the plain
+click whatever key is held. A list row's buttons with `decor.menu` are its context menu, a right click on a Mac and a long press
 on a phone (`tableView:contextMenuConfigurationForRowAtIndexPath:`): the same buttons a swipe action is made of,
 so one button can be both, and a Mac, where a row is swiped only with a trackpad, has every action under the
 pointer. A node's `decor.key` is a key equivalent. The shell keeps the keys of what is on top as commands of the
