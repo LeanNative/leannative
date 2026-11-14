@@ -19,11 +19,11 @@ def wire (h : Html Nat) : Json := h.toWire.toJson
 /-- The node's `"decor"` on the wire, with any field not given its default. -/
 def decorJson (tone : String := "standard") (mono badge centered : Bool := false) (symbol : String := "")
     (chevron : Bool := false) (swipe : String := "none") (selected : Bool := false) (menu : Bool := false)
-    (key : String := "") (pointer : String := "") : Json :=
+    (key : String := "") (pointer : String := "") (callout : Bool := false) : Json :=
   Json.mkObj [("tone", Json.str tone), ("mono", Json.bool mono), ("badge", Json.bool badge),
               ("centered", Json.bool centered), ("symbol", Json.str symbol), ("chevron", Json.bool chevron),
               ("swipe", Json.str swipe), ("selected", Json.bool selected), ("menu", Json.bool menu),
-              ("key", Json.str key), ("pointer", Json.str pointer)]
+              ("key", Json.str key), ("pointer", Json.str pointer), ("callout", Json.bool callout)]
 
 def label : Html Nat := .text "1,000 sats" .body
 
@@ -156,12 +156,31 @@ def menusAndKeys : IO Unit := do
   check "an outer key replaces an inner one, and keeps the rest"
     ((both.toWire.toJson.getObjVal? "decor").toOption == some (decorJson (menu := true) (key := "cmd+k")))
 
+def callouts : IO Unit := do
+  let action : Html Nat := .identified "retry" (.button "Retry" .primary (some 7))
+  let content := [label, action]
+  let panel := Html.tone .warning (.identified "warning" (Html.callout content))
+  check "callout merges through an identifier without changing the children"
+    (match panel.toWire with
+     | .identified "warning" (.decorated d (.col kids)) =>
+       d == { tone := .warning, callout := true } &&
+       kids.map Wire.toJson == (Html.col content).toWire.children.map Wire.toJson
+     | _ => false)
+  check "callout flag reaches the native shell"
+    ((panel.toWire.toJson.getObjVal? "decor" >>= (·.getObjValAs? Bool "callout")).toOption == some true)
+  check "a default outer decoration preserves a callout" (({ callout := true } : Decor).merge {}).callout
+  check "a callout preserves its button handler"
+    ((Html.callout content).dispatch [1] .click == some 7)
+  check "a disabled callout button stays disabled"
+    ((Html.callout [.button "Retry" .primary none] : Html Nat).dispatch [0] .click == none)
+
 def main : IO UInt32 := do
   composition
   controls
   swipes
   columns
   menusAndKeys
+  callouts
   let n ← failures.get
   IO.println (if n == 0 then "html: all passed" else s!"html: {n} FAILED")
   return if n == 0 then 0 else 1

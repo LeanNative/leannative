@@ -80,6 +80,9 @@ structure Decor where
   badge : Bool := false
   /-- centred text (under a QR code, say) -/
   centered : Bool := false
+  /-- A column in a neutral panel with a left accent rule. Its children, identifiers and events stay
+  unchanged. Other node kinds ignore it. A shell without support draws the ordinary column. -/
+  callout : Bool := false
   /-- an SF Symbols name drawn before a button's or a labeled row's label, or a text -/
   symbol : String := ""
   /-- the button opens something (a screen, a sheet): drawn as a link, and in a list its whole row is the
@@ -123,6 +126,7 @@ def Decor.merge (inner outer : Decor) : Decor :=
     mono := inner.mono || outer.mono
     badge := inner.badge || outer.badge
     centered := inner.centered || outer.centered
+    callout := inner.callout || outer.callout
     symbol := if outer.symbol.isEmpty then inner.symbol else outer.symbol
     chevron := inner.chevron || outer.chevron
     swipe := if outer.swipe == .none then inner.swipe else outer.swipe
@@ -347,6 +351,8 @@ def tone (t : Tone) (h : Html msg) : Html msg := decor { tone := t } h
 def mono (h : Html msg) : Html msg := decor { mono := true } h
 def badge (h : Html msg) : Html msg := decor { badge := true } h
 def centered (h : Html msg) : Html msg := decor { centered := true } h
+/-- A padded column with a left accent rule; its tone colours the rule, not the children's text. -/
+def callout (children : List (Html msg)) : Html msg := decor { callout := true } (.col children)
 def symbol (name : String) (h : Html msg) : Html msg := decor { symbol := name } h
 def navigates (h : Html msg) : Html msg := decor { chevron := true } h
 /-- A button as its list row's swipe action on `edge` (`Decor.swipe`). -/

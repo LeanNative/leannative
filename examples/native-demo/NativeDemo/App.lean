@@ -281,7 +281,12 @@ def widgets (m : Model) : Html Msg :=
             -- drawn. The disabled one does nothing, and the plain click is not done in its place
           , .col [ .row [ Html.decor { chevron := true } (.identified "pickRow" (.button "A row to pick" .plain (some (.swiped "Opened")))) ]
                  , Html.onClickWith "cmd" (.identified "pick-one" (.button "Pick" .plain (some (.swiped "Picked"))))
-                 , Html.onClickWith "shift" (.identified "pick-run" (.button "Pick to here" .plain (some (.swiped "Picked to here")))) ] ] ]
+                 , Html.onClickWith "shift" (.identified "pick-run" (.button "Pick to here" .plain (some (.swiped "Picked to here")))) ] ]
+      , .section "Callout" "The button changes the same column between a panel and plain content."
+          [.identified "calloutPanel" ((if m.count % 2 == 0 then Html.callout else Html.col)
+            [.text "A clear warning" .headline,
+             .identified "calloutValue" (.text s!"Count: {m.count}" .body),
+             .identified "calloutAction" (.button "Change panel" .primary (some .inc))])] ]
     , (if m.sheet then .sheet "A sheet" (some .closeSheet)
         [ .text "Swipe down or tap Close." .body, .button "Close" .plain (some .closeSheet)
         , .identified "sheetPush" (.button "Open a screen" .plain (some .openPushed)) ] else .spacer)
