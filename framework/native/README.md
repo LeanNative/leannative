@@ -566,7 +566,9 @@ innermost sheet, under its alert), its text what XCTest reads from the view the 
 event the node advertises, sent through `Session.step` as the shell sends a touch; a node that advertises no
 event, or a disabled control, is refused. `shot` writes the visible tree as `<name>.wire.json`. No simulator, no
 XCTest, no `ui-tests`: a step costs a tree walk, so an app's journeys belong beside its other headless tests
-(native-demo's eight take under a second apart from the refusals journey's deliberate timeouts). What it does not
+(native-demo's eight take about two seconds: its refusals journey, which waits out two refusals on purpose, launches
+with `LEANNATIVE_WIRE_APPEAR_TIMEOUT` and `LEANNATIVE_WIRE_ENABLED_TIMEOUT` of half a second, in place of the
+kit's 20 s and 15 s; either can also be set for a whole run). What it does not
 test is the renderer, real touches and the shell's capabilities: keep one simulator run for those, and for the
 screenshots and recording.
 

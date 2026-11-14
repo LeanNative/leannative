@@ -480,9 +480,32 @@ structure State where
   lock : Std.Mutex Unit
   shell : Shell
   openPicker : IO.Ref (Option (List Nat))
+  /-- How long a step waits for its element to appear, then to become enabled, in seconds. -/
+  appearTimeout : Float
+  enabledTimeout : Float
+  /-- A setting `serve` could not read: every step is refused with it. -/
+  misconfigured : Option String := none
 
+/-- The test kit's defaults (`LNAppearTimeout`, `LNEnabledTimeout`), in seconds. -/
 def appearTimeout : Float := 20
 def enabledTimeout : Float := 15
+
+/-- Seconds as an environment variable gives them: a JSON number ("0.5", "2"). -/
+def seconds? (text : String) : Option Float :=
+  match Json.parse text with
+  | .ok (.num n) => some n.toFloat
+  | _ => none
+
+/-- The timeout an environment variable asks for: `text` is its value, `fallback` the default (unset, or empty).
+0 is a step whose element must be there already. An error is the reason the value cannot be used (not a number,
+negative, not finite), and every step of the journey is refused with it: a mistyped value never runs as the default. -/
+def timeoutOf (text : Option String) (fallback : Float) : Except String Float :=
+  match text with
+  | none | some "" => .ok fallback
+  | some t =>
+    match seconds? t with
+    | some s => if s.isFinite && s ≥ 0 then .ok s else .error s!"seconds from 0 up, not {t}"
+    | none => .error s!"a number of seconds, not {t}"
 
 namespace State
 
@@ -554,18 +577,18 @@ def locate (st : State) (f : Find) (timeout : Float) : IO (Except String (Option
 
 /-- The target, appeared and enabled, or why not (the drivers' wording). -/
 def ready (st : State) (f : Find) : IO (Except String Target) := do
-  match ← st.locate f appearTimeout with
+  match ← st.locate f st.appearTimeout with
   | .error e => return .error e
-  | .ok none => return .error s!"{f.describe} does not appear within {appearTimeout} s"
+  | .ok none => return .error s!"{f.describe} does not appear within {st.appearTimeout} s"
   | .ok (some _) =>
-    let enabled ← poll enabledTimeout do
+    let enabled ← poll st.enabledTimeout do
       let sc ← st.scene
       match find sc (← st.openPicker.get) f with
       | .ok (some t) => return if t.enabled then some t else none
       | _ => return none
     match enabled with
     | some t => return .ok t
-    | none => return .error s!"{f.describe} stays disabled for {enabledTimeout} s"
+    | none => return .error s!"{f.describe} stays disabled for {st.enabledTimeout} s"
 
 def ok (more : List (String × Json) := []) : Json := Json.mkObj (("ok", Json.bool true) :: more)
 def refuse (why : String) : Json := Json.mkObj [("ok", Json.bool false), ("error", Json.str why)]
@@ -587,8 +610,10 @@ def activate (st : State) (t : Target) (name : String) : IO (Option String) := d
 /-- The answer to one of the driver's commands; `ended` for `end`. -/
 def answer (st : State) (command : Json) : IO (Json × Bool) := do
   let op := (command.getObjValAs? String "op").toOption.getD ""
-  let timeout := (command.getObjValAs? Float "timeout").toOption.getD appearTimeout
+  let timeout := (command.getObjValAs? Float "timeout").toOption.getD st.appearTimeout
   let fieldStr (k : String) : Option String := (command.getObjValAs? String k).toOption
+  if let some why := st.misconfigured then
+    if op != "end" then return (refuse why, false)
   match op with
   | "end" => return (ok, true)
   -- the host prints the journey's log and failures itself
@@ -710,14 +735,29 @@ private partial def connect (port : UInt16) (attempts : Nat) : IO TCP.Socket.Cli
     connect port (attempts - 1)
 
 /-- Runs the app headless as the journey driver, connected to the host on `port`, until the journey ends it. The
-app's files go under `LEANNATIVE_WIRE_DIR` (the current directory's `wire/` otherwise). -/
+app's files go under `LEANNATIVE_WIRE_DIR` (the current directory's `wire/` otherwise). A step waits
+`LEANNATIVE_WIRE_APPEAR_TIMEOUT` seconds for its element to appear and `LEANNATIVE_WIRE_ENABLED_TIMEOUT` for it to
+become enabled (20 and 15 otherwise, the test kit's): set for a run, or for one journey by its `launch`'s
+environment, where the journey waits out a refusal on purpose. -/
 def serve [ToJson Cmd] (app : Native.App Model Msg Cmd Host) (port : UInt16)
     (override : String → Json → IO (Option Json) := fun _ _ => pure none) : IO Unit := do
   let dir ← match ← IO.getEnv "LEANNATIVE_WIRE_DIR" with
     | some d => pure (System.FilePath.mk d)
     | none => do let cwd ← IO.currentDir; pure (cwd / "wire")
   let shell ← Shell.new dir override
-  let st : State := { runtime := ← Native.runtime app, lock := ← Std.Mutex.new (), shell, openPicker := ← IO.mkRef none }
+  let fromEnv (name : String) (fallback : Float) : IO (Except String Float) := do
+    return (timeoutOf (← IO.getEnv name) fallback).mapError (s!"{name}: " ++ ·)
+  let appear ← fromEnv "LEANNATIVE_WIRE_APPEAR_TIMEOUT" appearTimeout
+  let enabled ← fromEnv "LEANNATIVE_WIRE_ENABLED_TIMEOUT" enabledTimeout
+  -- an unusable setting is the first step's refusal, at once: a child that exited instead would be the host's
+  -- minute of waiting for it to connect
+  let misconfigured : Option String := match appear, enabled with
+    | .error why, _ => some why
+    | _, .error why => some why
+    | _, _ => none
+  let st : State := { runtime := ← Native.runtime app, lock := ← Std.Mutex.new (), shell, openPicker := ← IO.mkRef none,
+                      appearTimeout := appear.toOption.getD appearTimeout,
+                      enabledTimeout := enabled.toOption.getD enabledTimeout, misconfigured }
   -- as the shell starts the app: the first view, then the scene phases a launch goes through
   let first ← st.lock.atomically fun _ => st.runtime.start
   st.answerCaps first
