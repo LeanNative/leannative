@@ -348,7 +348,10 @@ out after 90 s and 180 s, and a host that is not a string or a port outside 1…
 `{"error":"bad-proxy"}`; a system error answers its text with its `code` and `domain`),
 `open` (a URL outside the app), `device` (the kind of machine, `{"idiom":"phone"|"pad"|"mac"}`: a Mac is a Mac
 Catalyst build or the iPad app on a Mac, so an app can lay itself out for a window and a keyboard, in columns
-say), `appearance` (`style`: `light`, `dark` or `system`: every window drawn so now, and remembered so the next launch's first frame is too, for an app that offers the choice in its settings; ask again at launch with the app's own saved choice), `timezone` (the device's zone: its identifier and its seconds east of UTC, now or
+say), `conditions` (what the device runs on at this moment, `{"power":"charging"|"full"|"battery"|"unknown","lowPower":bool,"network":"wifi"|"wired"|"cellular"|"other"|"none"|"unknown","expensive":bool,"constrained":bool}`:
+the battery's state, Low Power Mode, and the system's network path with its expensive (cellular, a hotspot) and
+constrained (Low Data Mode) marks; a simulator's power is `unknown`; asked when wanted and nothing is watched
+afterwards, so an app can keep heavy work for when the person is on power and Wi-Fi), `appearance` (`style`: `light`, `dark` or `system`: every window drawn so now, and remembered so the next launch's first frame is too, for an app that offers the choice in its settings; ask again at launch with the app's own saved choice), `timezone` (the device's zone: its identifier and its seconds east of UTC, now or
 at `at` in Unix seconds, so a list can say `09:12` as the person's clock does; ask again when the app comes back
 to the front, since a person travels), `webauth` (a sign-in in the system browser, `ASWebAuthenticationSession`: the
 URL to open and the callback it ends at, https — iOS 17.4 and later, the host among the app's `webcredentials:`

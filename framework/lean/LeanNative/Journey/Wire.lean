@@ -133,6 +133,7 @@ def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
   | "build" => return Json.mkObj [("debug", true)]
   | "timezone" => return Json.mkObj [("id", "UTC"), ("offset", (0 : Nat))]
   | "device" => return Json.mkObj [("idiom", "phone")]
+  | "conditions" => return Json.mkObj [("power", "unknown"), ("lowPower", false), ("network", "wifi"), ("expensive", false), ("constrained", false)]
   | "appearance" => return Json.mkObj [("ok", true)]
   | "paths" =>
     let documents := sh.dir / "Documents"
