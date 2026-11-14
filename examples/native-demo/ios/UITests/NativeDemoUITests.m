@@ -186,8 +186,15 @@
 - (void)testKeysDoWhatTheirNodesDo {
     if (!LNWait(self.app, @"inc")) return;
     XCUIElement *count = LNElement(self.app, @"count");
-    LNPressKey(self.app, @"k", XCUIKeyModifierCommand);
-    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(count) isEqualToString:@"Count: 1"]; }), @"after cmd-K: %@", LNText(count));
+    // the keys are commands of the main menu, which the system builds a moment after the first screen is drawn:
+    // a key pressed before that is nobody's (seen on one CI Mac, twice, at this first press). So the first key
+    // is pressed again until it is taken; a key is not kept, so one that is taken counts once
+    for (int press = 0; press < 4 && ![LNText(count) isEqualToString:@"Count: 1"]; press++) {
+        LNPressKey(self.app, @"k", XCUIKeyModifierCommand);
+        LNPoll(3, 0.1, ^BOOL{ return ![LNText(count) isEqualToString:@"Count: 0"]; });
+    }
+    XCTAssertEqualObjects(LNText(count), @"Count: 1", @"after cmd-K; the keyboard is with: words %@, name %@",
+                          [LNElement(self.app, @"words") valueForKey:@"hasKeyboardFocus"], [LNElement(self.app, @"name") valueForKey:@"hasKeyboardFocus"]);
     // the field has the cursor: what is typed next is its text (typing fails when nothing has the keyboard)
     LNPressKey(self.app, @"f", XCUIKeyModifierCommand);
     LNPoll(3, 0.1, ^BOOL{ return [[LNElement(self.app, @"name") valueForKey:@"hasKeyboardFocus"] boolValue]; });
