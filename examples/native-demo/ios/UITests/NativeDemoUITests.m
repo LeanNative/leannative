@@ -217,6 +217,54 @@
     XCTAssertEqualObjects(LNText(count), @"Count: 3");
 }
 
+/// A text that can be selected (`decor.selectable`): a double click picks a word, the system's own menu on it
+/// copies it, and a key with no command is still the app's while that text has the keyboard (nothing is typed
+/// in it). The text reads as it did when it was a label.
+- (void)testASelectableTextIsSelectedCopiedAndLeavesTheKeys {
+    if (!LNWait(self.app, @"words")) return;
+    XCUIElement *words = LNElement(self.app, @"words");
+    XCTAssertEqualObjects(LNText(words), @"Select these words.");
+    // the system's Copy, wherever the platform puts it: an item of the menu a right click opens on a Mac, of
+    // the bar a double tap brings on a phone
+    XCUIElement *(^copy)(void) = ^XCUIElement *{
+        NSPredicate *named = [NSPredicate predicateWithFormat:@"label == 'Copy' OR title == 'Copy'"];
+        for (XCUIElementQuery *q in @[self.app.menuItems, self.app.buttons, self.app.staticTexts])
+            for (XCUIElement *e in [q matchingPredicate:named].allElementsBoundByIndex) if (e.exists && e.hittable) return e;
+        return nil;
+    };
+    // on its first word: the text is as wide as the screen, and its middle may be past the words' end
+    XCUICoordinate *word1 = [[words coordinateWithNormalizedOffset:CGVectorMake(0, 0.5)] coordinateWithOffset:CGVectorMake(24, 0)];
+#if TARGET_OS_MACCATALYST
+    [word1 doubleClick];
+    [word1 rightClick];
+#else
+    [word1 doubleTap];
+#endif
+    XCTAssertTrue(LNPoll(5, 0.2, ^BOOL{ return copy() != nil; }), @"a selected word brought no menu with Copy");
+#if TARGET_OS_MACCATALYST
+    [copy() click];
+#else
+    [copy() tap];
+#endif
+    // what was copied is a word of the text, not the whole of it and not nothing
+    if (!LNTap(self.app, @"readClipboard")) return;
+    XCUIElement *pasted = LNElement(self.app, @"pasted");
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return [LNText(pasted) hasPrefix:@"Copied: "]; }), @"after Copy the clipboard read: %@", LNText(pasted));
+    NSString *word = [LNText(pasted) substringFromIndex:[@"Copied: " length]];
+    BOOL oneWord = [word isEqualToString:@"Select"] || [word isEqualToString:@"these"] || [word isEqualToString:@"words"];
+    XCTAssertTrue(oneWord, @"what was copied is not one word of the text: %@", word);
+    // the text has the keyboard now, and ↓ is still +1's key
+    XCUIElement *count = LNElement(self.app, @"count");
+    NSString *before = LNText(count);
+#if TARGET_OS_MACCATALYST
+    [word1 doubleClick];
+#else
+    [word1 doubleTap];
+#endif
+    LNPressKey(self.app, XCUIKeyboardKeyDownArrow, 0);
+    XCTAssertTrue(LNPoll(5, 0.1, ^BOOL{ return ![LNText(count) isEqualToString:before]; }), @"with a word selected, ↓ was not the app's key: %@", LNText(count));
+}
+
 /// The columns (`Html.split`): side by side in a wide window (a Mac, an iPad), one at a time in a narrow one (a
 /// phone), where a choice shows the next column and going back from one is its screen's own `onBack`.
 - (void)testColumnsSideBySideOrOneAtATime {
