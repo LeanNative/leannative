@@ -330,6 +330,8 @@
     XCTAssertEqualObjects(said[@"timezone"], @"an identifier and an offset");
     // and what kind of machine this is
     XCTAssertEqualObjects(said[@"device"], @"an idiom");
+    // and what it runs on: a power and a network, each one of the shell's words
+    XCTAssertEqualObjects(said[@"conditions"], @"a power and a network");
     // the typed clients: every answer decoded (ok, or a classified error; never malformed)
     NSRegularExpression *decoded = [NSRegularExpression regularExpressionWithPattern:@"^(ok|denied|cancelled|unsupported|failed)( .*)?$" options:0 error:nil];
     for (NSString *key in said) {

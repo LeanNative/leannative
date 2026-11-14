@@ -625,6 +625,14 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         let device ← IO.wait (← fx.ask "device" (Json.mkObj []))
         let idiom := (device.getObjValAs? String "idiom").toOption.getD ""
         say s!"device: {if ["phone", "pad", "mac"].contains idiom then "an idiom" else device.compress}"
+        -- what the device runs on: its power and its network, each one of the words the shell may say
+        let conditions ← IO.wait (← fx.ask "conditions" (Json.mkObj []))
+        let word (k : String) (among : List String) := ((conditions.getObjValAs? String k).toOption.map among.contains).getD false
+        let flag (k : String) := (conditions.getObjValAs? Bool k).isOk
+        let conditionsOk := word "power" ["charging", "full", "battery", "unknown"]
+          && word "network" ["wifi", "wired", "cellular", "other", "none", "unknown"]
+          && flag "lowPower" && flag "expensive" && flag "constrained"
+        say s!"conditions: {if conditionsOk then "a power and a network" else conditions.compress}"
         for (l, n, a) in probes do
           let j ← IO.wait (← fx.ask n a)
           say s!"{l}: {j.compress}"
