@@ -109,7 +109,7 @@ which the shell sets as the node's `accessibilityIdentifier` (on its control, el
 image). It is not a node of its own: the object is `child`'s, with `child`'s children and events, so
 paths and events pass through it.
 
-Any node may also carry `"decor":{"tone","mono","badge","centered","symbol","chevron","swipe","selected","menu","key","pointer"}` (`Html.decorated d child`, native mode):
+Any node may also carry `"decor":{"tone","mono","badge","centered","symbol","chevron","swipe","selected","menu","key","pointer","selectable"}` (`Html.decorated d child`, native mode):
 how it is drawn beyond its kind. `tone` is `"standard"` (the node's own colour), `"secondary"`, `"tint"`,
 `"positive"` (green), `"negative"` (red) or `"warning"` (orange); `mono` is monospaced text wrapped at any
 character; `badge` draws a text as a capsule in its tone; `centered` centres a text; `symbol` is an SF Symbols name drawn before a button's, a labeled row's or a text's
@@ -138,6 +138,8 @@ old and new trees and shells read each other. Like `id` it is not a node: the ob
 are `child`'s. `Html.decor` merges decorations, so `(body s).tone .positive |>.mono` is one `decor`. `pointer` (`"cmd"` or `"shift"`) on a button inside a list's row makes it the row's click with that
 modifier key held (control counts as `cmd`; with both held, `shift`): it is not drawn in the row, it sends its own
 `click` and the row's plain click is not sent, and a disabled one sends nothing. A finger has no modifier.
+`selectable` on a `text` lets the person select its words (a drag, a double click) and brings the platform's
+own menu on them (Copy, Look Up, Translate, Share); no event is sent, and inside a list's row it changes nothing.
 
 Events added with them: `{"k":"select","value":n}` (a tab, a picker option, a stepper value) and
 `{"k":"dismiss"}` (back from a screen, a sheet swiped away).

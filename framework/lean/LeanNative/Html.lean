@@ -115,6 +115,13 @@ structure Decor where
   beside the others, picking a run of rows. Outside a list's row, and in a shell that does not know the field,
   it is the button it was; with a finger there is no modifier, and the row's click is the plain one. -/
   pointer : String := ""
+  /-- a `text` whose words can be selected: by a drag or a double click, and then the platform's own menu on
+  it (a right click on a Mac, a long press on a phone): Copy, Look Up, Translate, Share. It is drawn as the
+  text it was, in the same font and colour, and wraps at words (a word too long for a line breaks where it
+  must). Nothing is told to the app: selecting is the person's and the system's. Inside a list's row it is
+  the plain text it was (a row's click and menu are the row's), as it is on any other node and in a shell
+  that does not know the field. -/
+  selectable : Bool := false
   deriving Repr, DecidableEq, Inhabited
 
 /-- `outer`'s fields where they are set, else `inner`'s. -/
@@ -129,7 +136,8 @@ def Decor.merge (inner outer : Decor) : Decor :=
     selected := inner.selected || outer.selected
     menu := inner.menu || outer.menu
     key := if outer.key.isEmpty then inner.key else outer.key
-    pointer := if outer.pointer.isEmpty then inner.pointer else outer.pointer }
+    pointer := if outer.pointer.isEmpty then inner.pointer else outer.pointer
+    selectable := inner.selectable || outer.selectable }
 
 inductive ButtonRole where
   | plain
@@ -360,6 +368,8 @@ def key (k : String) (h : Html msg) : Html msg := decor { key := k } h
 /-- A button in a list's row as the row's click with a modifier key held (`Decor.pointer`): `"cmd"` or
 `"shift"`. -/
 def onClickWith (modifier : String) (h : Html msg) : Html msg := decor { pointer := modifier } h
+/-- A text whose words can be selected and copied (`Decor.selectable`). -/
+def selectable (h : Html msg) : Html msg := decor { selectable := true } h
 
 end Html
 end LeanNative

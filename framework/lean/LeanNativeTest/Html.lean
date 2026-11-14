@@ -19,11 +19,11 @@ def wire (h : Html Nat) : Json := h.toWire.toJson
 /-- The node's `"decor"` on the wire, with any field not given its default. -/
 def decorJson (tone : String := "standard") (mono badge centered : Bool := false) (symbol : String := "")
     (chevron : Bool := false) (swipe : String := "none") (selected : Bool := false) (menu : Bool := false)
-    (key : String := "") (pointer : String := "") : Json :=
+    (key : String := "") (pointer : String := "") (selectable : Bool := false) : Json :=
   Json.mkObj [("tone", Json.str tone), ("mono", Json.bool mono), ("badge", Json.bool badge),
               ("centered", Json.bool centered), ("symbol", Json.str symbol), ("chevron", Json.bool chevron),
               ("swipe", Json.str swipe), ("selected", Json.bool selected), ("menu", Json.bool menu),
-              ("key", Json.str key), ("pointer", Json.str pointer)]
+              ("key", Json.str key), ("pointer", Json.str pointer), ("selectable", Json.bool selectable)]
 
 def label : Html Nat := .text "1,000 sats" .body
 
@@ -148,6 +148,12 @@ def menusAndKeys : IO Unit := do
     (Json.mkObj [("t", Json.str "button"), ("label", Json.str "Pick"), ("role", Json.str "plain"),
       ("enabled", Json.bool true), ("id", Json.str "pick"), ("decor", decorJson (pointer := "cmd"))])
   check "a modifier's click is the button's own click" (pick.dispatch [] .click == some 4)
+  -- a text that can be selected is the text it was, with one decor; it has no event of its own
+  let words : Html Nat := Html.selectable (.identified "words" (.text "Select me" .body))
+  same "a selectable text: the text's own keys, its id and one decor" words
+    (Json.mkObj [("t", Json.str "text"), ("s", Json.str "Select me"), ("style", Json.str "body"),
+      ("id", Json.str "words"), ("decor", decorJson (selectable := true))])
+  check "a selectable text has no click" (words.dispatch [] .click == none)
   -- on a screen the key is its pull to refresh, the screen's own click; on an input it is the cursor, no event
   let screen : Html Nat := Html.key "cmd+shift+n" (.screen "Inbox" none [Html.key "cmd+f" (.input .plain "" "Search" "" (fun _ => 1) none)] (onRefresh := some 5))
   check "a screen with a key: its click is its refresh" (screen.dispatch [] .click == some 5)

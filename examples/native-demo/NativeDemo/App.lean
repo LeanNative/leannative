@@ -46,6 +46,8 @@ structure Model where
   copies : Nat := 1
   /-- what the swipe row's last action was -/
   swiped : String := "Nothing yet"
+  /-- What the clipboard held when it was last read (the selectable text's demo). -/
+  pasted : String := ""
   /-- the columns (`Html.split`) in place of the tabs, and which of them a narrow window shows -/
   columns : Option Nat := none
   /-- the box chosen in the sidebar, and the item chosen in its list -/
@@ -90,6 +92,8 @@ inductive Host where
   | bleSaid (line : String)
   /-- `NATIVEDEMO_AUTH_AFTER` seconds have passed since launch: ask as the Face ID button does -/
   | authCue
+  /-- what the clipboard holds (`clipboard.get`), "" when it holds no text -/
+  | pasted (text : String)
 
 inductive Msg where
   | inc
@@ -100,6 +104,7 @@ inductive Msg where
   | fee (i : Nat)
   | copies (n : Nat)
   | swiped (what : String)
+  | readClipboard
   | columns (shown : Option Nat)
   | box (i : Nat)
   | item (i : Nat)
@@ -120,6 +125,8 @@ inductive Msg where
 inductive Cmd where
   | ticker
   | auth
+  /-- reads the clipboard (`clipboard.get`): what the selectable text's Copy put there -/
+  | readClipboard
   | echo (text : String)
   | probe (label name : String) (args : Json)
   /-- at launch: with `NATIVEDEMO_SELFTEST` set, the TCP echo, two background runs and every probe,
@@ -185,6 +192,8 @@ def update : Msg → Model → Model
   | .fee i, m => { m with fee := i }
   | .copies n, m => { m with copies := n }
   | .swiped what, m => { m with swiped := what }
+  | .readClipboard, m => m
+  | .host (.pasted text), m => { m with pasted := text }
   | .columns shown, m => { m with columns := shown }
   -- a choice in one column shows the next (which is all a narrow window has room for)
   | .box i, m => { m with box := i, item := 0, columns := some 1 }
@@ -220,6 +229,7 @@ def update : Msg → Model → Model
 def cmds : Msg → Model → List Cmd
   | .startTicks, m => if m.ticking then [] else [.ticker]
   | .authenticate, _ => [.auth]
+  | .readClipboard, _ => [.readClipboard]
   | .echo, m => [.echo s!"ping {m.count}"]
   -- its answer is a second view within milliseconds, while the sheet is still on its way out
   | .openPushed, _ => [.echo "pushed"]
@@ -243,6 +253,12 @@ def demoView (m : Model) : Html Msg :=
         , .row [.text s!"Ticks from a Lean task: {m.ticks}" .body, .spacer,
                 .identified "startTicks" (.button "Start" .plain (if m.ticking then none else some .startTicks))]
         -- keys (`Decor.key`): cmd-K is +1's click, and cmd-F, the system's Find, puts the cursor in the field
+        -- a text that can be selected (`Decor.selectable`): the system's menu on it copies, and a key with no
+        -- command (↓ is +1 too) is still the app's while the text has the keyboard, nothing being typed in it
+        , Html.selectable (.identified "words" (.text "Select these words." .body))
+        , .row [ .identified "pasted" (Html.tone .secondary (.text (if m.pasted.isEmpty then "Nothing copied yet" else s!"Copied: {m.pasted}") .caption)), .spacer,
+                 .identified "readClipboard" (.button "Read clipboard" .plain (some .readClipboard)),
+                 Html.key "down" (.identified "incDown" (.button "+1 (↓)" .plain (some .inc))) ]
         , Html.key "cmd+f" (.identified "name" (.input .plain "Name" "Who is asking" m.name Msg.name none))
         , .identified "greeting" (.text (if m.name.isEmpty then "Nobody yet" else s!"Hello, {m.name}") .body)
         , .row [.identified "faceID" (.button "Face ID" .plain (some .authenticate)), .button "TCP echo" .plain (some .echo)]
@@ -557,6 +573,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
       let r ← try echoOnce 48334 text catch e => pure s!"failed: {e}"
       fx.post (.echoed r)
   | .probe l n a => fx.cap n a (.probed l)
+  | .readClipboard => fx.cap "clipboard.get" (Json.mkObj []) fun j => .pasted ((j.getObjValAs? String "text").toOption.getD "")
   -- iOS gives a refresh task about 30 s; the run asks its work to stop after 20
   -- the launch's tag goes back with its `bgtask.complete`, so an older run's answer cannot end a newer task
   | .runBackground id kind tag => do

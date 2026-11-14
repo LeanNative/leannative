@@ -54,7 +54,10 @@ grouped list of cards; `sheet` and `alert` present themselves while their node e
 away sends `dismiss`); `tabs` use the platform's tab bar and only the selected tab is built. The app is
 scene-based (`UIApplicationSceneManifest` names `LNSceneDelegate`); a scene saved by an earlier SwiftUI
 build of an app comes back with SwiftUI's own scene delegate, which draws nothing, and is adopted, so an update does not open on an empty
-window. Text is not selectable (SwiftUI's `textSelection`); the apps have explicit Copy buttons.
+window. A text is selectable when its node says so (`decor.selectable`, SwiftUI's `textSelection`): outside a
+list's row it is a `UITextView` that is not edited and does not scroll, in the label's place, and the system gives
+the selection and its menu (Copy, Look Up, Translate, Share); a plain key (`decor.key` with neither command nor
+control) stays the app's while such a text has the keyboard, since nothing is typed in it. Any other text is a label.
 
 The C is compiled at `-O3` in every configuration (`GCC_OPTIMIZATION_LEVEL: 3`, from the manifest):
 Lean builds its own C that way, and at Xcode's Debug `-O0` heavy Lean code (key derivation, hashing)
