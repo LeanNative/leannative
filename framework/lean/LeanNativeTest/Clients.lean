@@ -83,6 +83,15 @@ def cases : List (String × Case) := [
                                          asset := some (ByteArray.mk #[1, 2]), assetField := some "payload" }) recordJson),
   ("cloudkit.load", .of (CloudKit.load "n1" (maxBytes := some 1024) (assetField := some "payload"))
     fun (r, a) => Json.mkObj [("record", recordJson r), ("asset", optJson (a.map (Json.str ∘ hexOf)))]),
+  ("cloudkit.loadMany", .of (CloudKit.loadMany #["n1", "n2", "n3"] (files := true) (maxBytes := some 1024)) fun m =>
+    Json.mkObj [("directory", optJson (m.directory.map Json.str)),
+      ("records", Json.arr (m.records.map fun (name, l) => match l with
+        | .record r asset file => Json.mkObj [("name", name), ("record", recordJson r), ("asset", optJson (asset.map (Json.str ∘ hexOf))), ("file", optJson (file.map Json.str))]
+        | .failed e => Json.mkObj [("name", name), ("error", e.name), ("kind", e.kind.name), ("retryAfter", optJson (CloudKit.Error.retryAfter? e |>.map toJson))]))]),
+  ("cloudkit.loadMany.hex", .of (CloudKit.loadMany #["n1"]) fun m =>
+    Json.arr (m.records.map fun (name, l) => match l with
+      | .record _ asset _ => Json.mkObj [("name", name), ("asset", optJson (asset.map (Json.str ∘ hexOf)))]
+      | .failed e => Json.mkObj [("name", name), ("error", e.name)])),
   ("cloudkit.delete", .of (CloudKit.delete "n1") unit),
   ("ble.state", .of Bluetooth.state fun s => Json.str (match s with
     | .poweredOn => "poweredOn" | .poweredOff => "poweredOff" | .unauthorized => "unauthorized"
