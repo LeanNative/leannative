@@ -1,6 +1,6 @@
 import LeanNative.Native.Client
 
-/-! # CloudKit records (`cloudkit.account/query/save/load/delete`)
+/-! # CloudKit records (`cloudkit.account/query/save/load/loadMany/delete`)
 
 Records in the private database of a container (the app's default one, or `container`), default zone.
 What the records mean, their types and fields, is the app's.
@@ -186,6 +186,41 @@ def load (name : String) (maxBytes : Option Nat := none) (assetField : Option St
         | .ok r => Record.ofJson r
         | .error _ => throw (malformed "no `record`")
       return (record, ← optHex j "asset") }
+
+/-- What `loadMany` answers for one name. -/
+inductive Loaded where
+  /-- The record; its asset's bytes, or with `files` the path of a copy of it (neither when it has none). -/
+  | record (r : Record) (asset : Option ByteArray) (file : Option String)
+  /-- This record's own error: `notFound` when it is not there, `tooLarge`, or CloudKit's word for it. -/
+  | failed (e : Error)
+
+structure LoadedMany where
+  /-- An answer for each name, in the order asked. -/
+  records : Array (String × Loaded)
+  /-- With `files`: the directory the copies are in, the caller's to remove once read. -/
+  directory : Option String := none
+
+/-- Many records in one request to CloudKit (at most 200 names). With `files` an asset comes back as a file
+(`Loaded.record`'s `file`), not as bytes through the bridge. A failure of the whole request is the
+request's error; a record's own failure is its `Loaded.failed`, and the others are answered all the same. -/
+def loadMany (names : Array String) (files : Bool := false) (maxBytes : Option Nat := none)
+    (assetField : Option String := none) (container : Option String := none) : Request LoadedMany :=
+  { capability := "cloudkit.loadMany"
+    args := obj ([("names", some (Json.arr (names.map Json.str))), ("files", if files then some (Json.bool true) else none),
+                  ("maxBytes", maxBytes.map toJson), ("assetField", assetField.map Json.str)] ++ containerArg container)
+    decode := withErrors fun j => do
+      let entries ← match j.getObjVal? "records" with
+        | .ok (.arr rs) => pure rs
+        | _ => throw (malformed "no `records`")
+      if entries.size != names.size then throw (malformed s!"{entries.size} answers for {names.size} names")
+      let records ← (names.zip entries).mapM fun (name, e) => do
+        if (← reqString e "name") != name then throw (malformed s!"an answer out of order: {name}")
+        if let some err ← error? e then return (name, Loaded.failed { err with reply := e, capability := "cloudkit.loadMany" })
+        let record ← match e.getObjVal? "record" with
+          | .ok r => Record.ofJson r
+          | .error _ => throw (malformed "no `record`")
+        return (name, Loaded.record record (← optHex e "asset") (← optString e "file"))
+      return { records, directory := ← optString j "directory" } }
 
 /-- Deletes the record; also succeeds when there was none. -/
 def delete (name : String) (container : Option String := none) : Request Unit :=

@@ -384,6 +384,7 @@ and a reference as `{"ref":name}`. One asset per record travels as bytes (hex), 
 | `cloudkit.query {"type","equals"?:{field:value},"sortBy"?,"ascending"?,"keys"?:[…],"limit"?}` | `{"records":[record…],"more":bool}` (cursors followed up to `limit`, default 100, at most 500) |
 | `cloudkit.save {"type","name","fields"?:{…},"asset"?:hex,"assetField"?}` | `{"ok":true,"record":record}`: made or updated, only the given fields change (`changedKeys`), atomically |
 | `cloudkit.load {"name","maxBytes"?,"assetField"?}` | `{"record":record,"asset":hex\|null}`; an asset over `maxBytes` (32 MiB) answers `{"error":"tooLarge"}` |
+| `cloudkit.loadMany {"names","files"?,"maxBytes"?,"assetField"?}` | `{"records":[…],"directory"?}`: one request for up to 200 records, answered for each name in the order asked: `{"name","record","asset":hex}`, or with `files` `{"name","record","file":path}` (a copy in `directory`, under the temporary directory, the caller's to remove once read), or the record's own error `{"name","error",…}` (`notFound` only when CloudKit says the record is not there, `tooLarge`, `noAnswer`, or CloudKit's word with its `retryAfter`). An asset as a file does not cross the bridge as text twice its size |
 | `cloudkit.delete {"name"}` | `{"ok":true}`, also when there was no such record |
 
 Errors are `{"error":name,"code":n,"detail":…,"retryAfter":s?}`, the name being the `CKErrorCode` case in

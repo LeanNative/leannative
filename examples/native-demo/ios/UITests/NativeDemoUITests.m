@@ -411,6 +411,8 @@
     XCTAssertEqualObjects(said[@"typed http.get endless body"], @"failed tooLarge, the server cut short");
     // an ad-hoc build has no iCloud entitlement
     XCTAssertEqualObjects(said[@"typed cloudkit.account"], @"unsupported missingEntitlement");
+    XCTAssertEqualObjects(said[@"typed cloudkit.loadMany none"], @"failed badArgs");
+    XCTAssertEqualObjects(said[@"typed cloudkit.loadMany"], @"unsupported missingEntitlement");
     // the Keychain: an iOS app (the simulator's ad-hoc signature included) and a team-signed Mac app have an
     // access group; an ad-hoc Mac app has none, and the data protection keychain refuses it
     // (errSecMissingEntitlement). A team-signed Mac run says so: NATIVEDEMO_KEYCHAIN=access-group in the

@@ -12,6 +12,12 @@ reference as `{"ref":name}`). One asset per record travels as bytes: `asset` (he
 `assetField` (`asset`), written to a temporary file with complete file protection and removed when the
 save ends; and back from `cloudkit.load`.
 
+`cloudkit.loadMany` asks for many records in one request (at most 200 names), and answers for each in the
+order asked: its record and asset, or its own error (`notFound` for one that is not there, and only for
+that: a record CloudKit says nothing of answers `noAnswer`; another record's failure is not this one's). With `files` an asset comes back as a file, not as hex: a copy in a
+directory of the temporary directory made for the answer (`directory`), which is the caller's to remove
+once read. What an earlier run left there is removed when CloudKit is first used.
+
 Errors answer `{"error":name,"code":n,"detail":…}` with `retryAfter` (s) when CloudKit gives one; the name
 is the `CKErrorCode` case (`notAuthenticated`, `networkUnavailable`, `networkFailure`, `quotaExceeded`,
 `serverRecordChanged`, …, with `unknownItem` as `notFound`), and a partial failure answers its record's
@@ -35,6 +41,7 @@ def cloudKitClass : List Stmt := [
     .l "- (void)query:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "- (void)save:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "- (void)load:(NSDictionary *)args answer:(LNAnswer)answer;",
+    .l "- (void)loadMany:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "- (void)remove:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "@end",
     .blank,
@@ -195,7 +202,12 @@ def cloudKitClass : List Stmt := [
     b "- (instancetype)init {" [
         b "if ((self = [super init])) {" [
             .l "_containers = [NSMutableDictionary dictionary];",
-            .l "_failed = [NSMutableDictionary dictionary];"],
+            .l "_failed = [NSMutableDictionary dictionary];",
+            .l "// what an earlier run left in the temporary directory: a save cut off, the files of a `loadMany`",
+            .l "// nobody read. Nothing of this run's is there yet",
+            .l "NSFileManager *fm = NSFileManager.defaultManager;",
+            .l "for (NSURL *left in [fm contentsOfDirectoryAtURL:fm.temporaryDirectory includingPropertiesForKeys:nil options:0 error:nil])",
+            .l "    if ([left.lastPathComponent hasPrefix:@\"cloudkit-\"]) [fm removeItemAtURL:left error:nil];"],
         .l "return self;"],
     .blank,
     .l "/// The container of a request, or nil after answering `missingEntitlement`: CloudKit raises when the app",
@@ -355,6 +367,79 @@ def cloudKitClass : List Stmt := [
                     .l "if (!bytes) { LNOnMain(answer, @{@\"error\": @\"assetFileNotFound\"}); return; }",
                     .l "hex = LNHexOf(bytes);"],
                 .l "LNOnMain(answer, @{@\"record\": LNCloudRecord(record), @\"asset\": hex});"] "}];"] "}];"],
+    .blank,
+    b "- (void)loadMany:(NSDictionary *)args answer:(LNAnswer)answer {" [
+        .l "NSArray *names = [args[@\"names\"] isKindOfClass:NSArray.class] ? args[@\"names\"] : nil;",
+        .l "for (id n in names) if (![n isKindOfClass:NSString.class] || [(NSString *)n length] == 0) { names = nil; break; }",
+        .l "// CloudKit takes at most 400 items in one request",
+        .l "if (names.count == 0 || names.count > 200) { answer(LNBadArgs(@\"names: 1 to 200 record names\")); return; }",
+        .l "NSInteger maxBytes = LNArgNumber(args, @\"maxBytes\") ? [LNArgNumber(args, @\"maxBytes\") integerValue] : 32 * 1024 * 1024;",
+        .l "NSString *assetField = LNArgString(args, @\"assetField\") ?: @\"asset\";",
+        .l "BOOL files = [LNArgNumber(args, @\"files\") boolValue];",
+        .l "// each name once: CloudKit is asked for a record once, however often it is named",
+        .l "NSMutableArray<CKRecordID *> *ids = [NSMutableArray array];",
+        .l "NSMutableSet<NSString *> *asked = [NSMutableSet set];",
+        .l "// CloudKit raises for a name it does not allow",
+        .blk [("@try {", [
+              b "for (NSString *n in names) {" [
+                  .l "if ([asked containsObject:n]) continue;",
+                  .l "[asked addObject:n];",
+                  .l "[ids addObject:[[CKRecordID alloc] initWithRecordName:n]];"]]), ("} @catch (NSException *e) {", [
+              .l "answer(LNBadArgs(e.reason ?: e.name));",
+              .l "return;"])] "}",
+        b "[self with:args answer:answer run:^(CKContainer *container, CKDatabase *db) {" [
+            .l "CKFetchRecordsOperation *op = [[CKFetchRecordsOperation alloc] initWithRecordIDs:ids];",
+            .l "op.qualityOfService = NSQualityOfServiceUserInitiated;",
+            .l "// runs on the operation's own queue; CloudKit's file of an asset is copied here, while it is still there",
+            b "op.fetchRecordsCompletionBlock = ^(NSDictionary<CKRecordID *, CKRecord *> *records, NSError *error) {" [
+                .l "NSDictionary *partial = nil;",
+                .l "if ([error.domain isEqualToString:CKErrorDomain] && error.code == CKErrorPartialFailure) partial = error.userInfo[CKPartialErrorsByItemIDKey];",
+                .l "if (![partial isKindOfClass:NSDictionary.class]) partial = nil;",
+                .l "// the whole request failed (no network, no account): there is no answer for any record",
+                .l "if (error && !partial) { LNOnMain(answer, LNCloudError(error)); return; }",
+                .l "NSFileManager *fm = NSFileManager.defaultManager;",
+                .l "NSURL *directory = nil;",
+                .l "NSUInteger copied = 0;",
+                .l "NSMutableDictionary<NSString *, NSDictionary *> *byName = [NSMutableDictionary dictionary];",
+                b "for (CKRecordID *rid in ids) {" [
+                    .l "NSString *name = rid.recordName;",
+                    .l "CKRecord *record = records[rid];",
+                    b "if (!record) {" [
+                        .l "// its own error, with what CloudKit asked for (`notFound` is one). A record CloudKit says nothing",
+                        .l "// of is not said to be missing: `noAnswer`, which a caller may ask for again",
+                        .l "NSError *failed = [partial[rid] isKindOfClass:NSError.class] ? partial[rid] : nil;",
+                        .l "NSMutableDictionary *entry = [(failed ? LNCloudError(failed) : @{@\"error\": @\"noAnswer\", @\"detail\": @\"CloudKit gave neither the record nor an error\"}) mutableCopy];",
+                        .l "entry[@\"name\"] = name;",
+                        .l "byName[name] = entry;",
+                        .l "continue;"],
+                    .l "NSMutableDictionary *entry = [@{@\"name\": name, @\"record\": LNCloudRecord(record)} mutableCopy];",
+                    .l "CKAsset *asset = [record[assetField] isKindOfClass:CKAsset.class] ? record[assetField] : nil;",
+                    b "if (asset.fileURL) {" [
+                        .l "NSNumber *size = nil;",
+                        .l "[asset.fileURL getResourceValue:&size forKey:NSURLFileSizeKey error:nil];",
+                        .l "if (!size || size.integerValue > maxBytes) { byName[name] = @{@\"name\": name, @\"error\": @\"tooLarge\"}; continue; }",
+                        b "if (files) {" [
+                            b "if (!directory) {" [
+                                .l "directory = [fm.temporaryDirectory URLByAppendingPathComponent:[@\"cloudkit-\" stringByAppendingString:NSUUID.UUID.UUIDString]];",
+                                .l "[fm createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:nil error:nil];"],
+                            .l "NSURL *file = [directory URLByAppendingPathComponent:[NSString stringWithFormat:@\"%lu\", (unsigned long)copied++]];",
+                            .l "NSError *copyError = nil;",
+                            b "if (![fm copyItemAtURL:asset.fileURL toURL:file error:&copyError]) {" [
+                                .l "byName[name] = @{@\"name\": name, @\"error\": @\"assetFile\", @\"detail\": copyError.localizedDescription ?: @\"\"};",
+                                .l "continue;"],
+                            .l "entry[@\"file\"] = file.path;"],
+                        b "else {" [
+                            .l "NSData *bytes = [NSData dataWithContentsOfURL:asset.fileURL];",
+                            .l "if (!bytes) { byName[name] = @{@\"name\": name, @\"error\": @\"assetFileNotFound\"}; continue; }",
+                            .l "entry[@\"asset\"] = LNHexOf(bytes);"]],
+                    .l "byName[name] = entry;"],
+                .l "// an answer for each name, in the order asked",
+                .l "NSMutableArray *out = [NSMutableArray array];",
+                .l "for (NSString *n in names) [out addObject:byName[n] ?: @{@\"name\": n, @\"error\": @\"noAnswer\"}];",
+                .l "NSMutableDictionary *result = [@{@\"records\": out} mutableCopy];",
+                .l "if (directory) result[@\"directory\"] = directory.path;",
+                .l "LNOnMain(answer, result);"] "};",
+            .l "[db addOperation:op];"] "}];"],
     .blank,
     b "- (void)remove:(NSDictionary *)args answer:(LNAnswer)answer {" [
         .l "NSString *name = LNArgString(args, @\"name\");",
