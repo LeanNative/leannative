@@ -34,9 +34,10 @@ def typing : Journey := ⟨"typing", do
     waitUntil 5 s!"the greeting {greeting}" do return (← text "greeting") == greeting⟩
 
 /-- A step that cannot be done fails with the driver's reason, and nothing is tapped: a missing control, and
-`Start` once the ticker runs (the view gives it no action, the shell disables it). -/
+`Start` once the ticker runs (the view gives it no action, the shell disables it). Headless, where nothing is
+slow, the two refusals are waited out for half a second each (in a simulator, the kit's 20 s and 15 s). -/
 def refusals : Journey := ⟨"refusals", do
-  launch
+  launch [("LEANNATIVE_WIRE_APPEAR_TIMEOUT", "0.5"), ("LEANNATIVE_WIRE_ENABLED_TIMEOUT", "0.5")]
   let refused (step : UI Unit) : UI (Option String) := do
     try step; return none catch e => return some (toString e)
   let some why ← refused (tap "noSuchControl") | failure "tapping a missing control succeeded"
