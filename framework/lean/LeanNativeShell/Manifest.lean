@@ -107,6 +107,11 @@ structure Manifest where
   /-- the identifiers the shell registers launch handlers for (`BGTaskSchedulerPermittedIdentifiers`), each
   with its kind; `UIBackgroundModes` follows from the kinds -/
   backgroundTasks : List (String × TaskKind) := []
+  /-- Apple's push notifications (`push.*`): the `aps-environment` entitlement (`development` here; a
+  distribution signing makes it `production`) and `remote-notification` among `UIBackgroundModes`, so a
+  notice that carries `content-available` wakes the app. The App ID needs Push Notifications turned on at
+  Apple, which automatic signing does not do. -/
+  push : Bool := false
   /-- iCloud containers for CloudKit (`com.apple.developer.icloud-container-identifiers`) -/
   iCloudContainers : List String := []
   /-- `keychain-access-groups`; none: the app's default group -/
@@ -161,9 +166,10 @@ def Manifest.infoPlist (m : Manifest) : Json :=
   let modes := m.backgroundTasks.foldl (fun acc (_, k) => match k.mode with
     | some mode => if acc.contains mode then acc else acc ++ [mode]
     | none => acc) []
-  let tasks := if m.backgroundTasks.isEmpty then [] else
-    (if modes.isEmpty then [] else [("UIBackgroundModes", strs modes)]) ++
-    [("BGTaskSchedulerPermittedIdentifiers", strs (m.backgroundTasks.map (·.1)))]
+  -- a notice wakes the app behind only with this mode, beside whatever the tasks ask for
+  let modes := if m.push then modes ++ ["remote-notification"] else modes
+  let tasks := (if modes.isEmpty then [] else [("UIBackgroundModes", strs modes)]) ++
+    (if m.backgroundTasks.isEmpty then [] else [("BGTaskSchedulerPermittedIdentifiers", strs (m.backgroundTasks.map (·.1)))])
   let generated := Json.mkObj <|
     [("CFBundleDisplayName", Json.str m.displayName)] ++ version ++ [("UILaunchScreen", Json.mkObj [])] ++
     -- the shell's scene delegate (LeanNativeShell.h)
@@ -181,7 +187,8 @@ def Manifest.entitlementsPlist (m : Manifest) : Json :=
     [("com.apple.developer.icloud-container-identifiers", strs m.iCloudContainers),
      ("com.apple.developer.icloud-services", strs ["CloudKit"])]
   let keychain := if m.keychainGroups.isEmpty then [] else [("keychain-access-groups", strs m.keychainGroups)]
-  deepMerge (Json.mkObj (icloud ++ keychain)) (Json.mkObj m.entitlements)
+  let push := if m.push then [("aps-environment", Json.str "development")] else []
+  deepMerge (Json.mkObj (icloud ++ keychain ++ push)) (Json.mkObj m.entitlements)
 
 /-- Ad-hoc signed in the simulator: an unsigned app has no Keychain entitlement (errSecMissingEntitlement);
 and arm64 only there, as Lean's retargeted libraries are. -/
@@ -300,7 +307,14 @@ def requirements : List (String × (Json → Json → List String)) := [
      else ["uses cloudkit.*, but the entitlements' com.apple.developer.icloud-services has no CloudKit (iCloudContainers)"]) ++
     (if (strList ent "com.apple.developer.icloud-container-identifiers").isEmpty
      then ["uses cloudkit.*, but the entitlements have no com.apple.developer.icloud-container-identifiers (iCloudContainers)"]
-     else []))]
+     else [])),
+  -- Apple refuses a token to an app without the entitlement (the shell answers missingEntitlement), and a
+  -- notice wakes no app that lacks the mode
+  ("push", fun info ent =>
+    (if nonEmptyStr ent "aps-environment" || nonEmptyStr ent "com.apple.developer.aps-environment" then []
+     else ["uses push.*, but the entitlements have no aps-environment (push := true)"]) ++
+    (if (strList info "UIBackgroundModes").contains "remote-notification" then []
+     else ["uses push.*, but Info.plist's UIBackgroundModes has no remote-notification (push := true)"]))]
 
 /-- `ble.connect` and `ble.*` are both family `ble`. -/
 def family (use : String) : String := (use.splitOn ".").headD use

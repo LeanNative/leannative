@@ -6,6 +6,7 @@ import LeanNative.Native.Client.Keychain
 import LeanNative.Native.Client.Http
 import LeanNative.Native.Client.HttpRequest
 import LeanNative.Native.Client.CloudKit
+import LeanNative.Native.Client.Push
 import LeanNative.Native.Client.Bluetooth
 
 /-! # A native-mode demo: the pieces Winnow needs, in one screen
@@ -76,6 +77,8 @@ inductive Host where
   | system (event : Json)
   /-- iOS launched (`expired := false`) or expired a background task, with the shell's tag for that launch -/
   | bgtask (expired : Bool) (id kind : String) (tag : Option Nat)
+  /-- a push notice received, about to be answered by the shell, or tapped (`Client.Push.event?`) -/
+  | push (event : Json)
   /-- a background run ended -/
   | ran (id : String) (outcome : String)
   /-- the app went to the background -/
@@ -129,6 +132,8 @@ inductive Cmd where
   | readClipboard
   | echo (text : String)
   | probe (label name : String) (args : Json)
+  /-- a push event: printed, and a notice whose payload says how (`"answer"`) is answered so -/
+  | pushed (event : Json)
   /-- at launch: with `NATIVEDEMO_SELFTEST` set, the TCP echo, two background runs and every probe,
   answers printed -/
   | selftest
@@ -179,7 +184,13 @@ def probes : List (String × String × Json) :=
       Json.mkObj [("url", "http://socksprobe/hello"), ("maxBytes", (10000 : Nat)),
                   ("socks", Json.mkObj [("host", "127.0.0.1"), ("port", (1080 : Nat))])]),
     ("HTTP bad proxy", "http.get",
-      Json.mkObj [("url", "https://example.com/"), ("socks", Json.mkObj [("host", ""), ("port", (0 : Nat))])]) ]
+      Json.mkObj [("url", "https://example.com/"), ("socks", Json.mkObj [("host", ""), ("port", (0 : Nat))])]),
+    -- Apple's push, last (the UI tests scroll to the last probe by its number). The demo has no entitlement,
+    -- so the token is refused before Apple is asked. A notice that arrives is logged below (`push`,
+    -- `pushExpired`, `pushPresented`, `pushOpened`); the first one's tag is 1, which the third row answers
+    ("Push register", "push.register", Json.mkObj []),
+    ("Push permission", "push.permission", Json.mkObj []),
+    ("Push complete (the first notice)", "push.complete", Json.mkObj [("tag", (1 : Nat)), ("result", "newData")]) ]
 
 def note (m : Model) (s : String) : Model := { m with log := (s :: m.log).take 12 }
 
@@ -215,6 +226,7 @@ def update : Msg → Model → Model
   | .host (.probed l r), m => note m s!"{l}: {r.compress}"
   | .host (.system e), m => note m s!"system: {e.compress}"
   | .host (.bgtask expired id kind _), m => note m s!"bgtask {if expired then "expired" else "launched"}: {id} ({kind})"
+  | .host (.push e), m => note m s!"push: {e.compress}"
   | .host (.ran id o), m => note m s!"background run {id}: {o}"
   | .host .background, m => { note m "went to the background" with away := true }
   | .host .foreground, m => if m.away then { note m "back in the foreground" with away := false } else m
@@ -241,6 +253,7 @@ def cmds : Msg → Model → List Cmd
     | some s => [.bleConnect s]
     | none => []
   | .host (.bgtask false id kind tag), _ => [.runBackground id kind tag]
+  | .host (.push e), _ => [.pushed e]
   | .host (.bgtask true id _ tag), _ => [.expireBackground id tag]
   | .host .background, _ => [.endSession]
   | .host .authCue, _ => [.auth]
@@ -460,6 +473,9 @@ def typedSelftest (fx : Effects Host) (say : String → IO Unit) : IO Unit := do
   -- many records in one request: refused for its arguments before CloudKit is asked, and for the entitlement
   say s!"typed cloudkit.loadMany none: {shown (← (Client.CloudKit.loadMany #[]).call fx) fun m => toString m.records.size}"
   say s!"typed cloudkit.loadMany: {shown (← (Client.CloudKit.loadMany #["a", "b"] (files := true)).call fx) fun m => toString m.records.size}"
+  -- Apple's push: no entitlement here, so no token and Apple not asked; and no notice is pending
+  say s!"typed push.register: {shown (← Client.Push.register.call fx) fun t => t.environment.name}"
+  say s!"typed push.complete none: {shown (← (Client.Push.complete 1).call fx) toString}"
 
 /-- `keychain.set` against the real Keychain: an item that is not there is made, one that is there is given its
 new value in place, and what `get` reads afterwards is what was set. (That a refused write leaves the old value
@@ -587,6 +603,19 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
   | .expireBackground id tag => do
       printed s!"bgtask expired: {id}"
       backgroundTasks.expire id tag
+  -- for hand checks that keep the output (`xcrun simctl push`): every push event is printed, and a notice
+  -- whose payload says `"answer"` (`newData`, `noData`, `failed`) is answered so; one that says nothing is
+  -- left for the shell to answer when its time is up (`pushExpired`, then `failed`)
+  | .pushed j => discard <| IO.asTask do
+      printed s!"push: {j.compress}"
+      if let some (.received tag _ payload) := Client.Push.event? j then
+        let outcome? := match (payload.getObjValAs? String "answer").toOption with
+          | some "newData" => some Client.Push.Outcome.newData
+          | some "noData" => some .noData
+          | some "failed" => some .failed
+          | _ => none
+        if let some outcome := outcome? then
+          printed s!"push.complete {tag}: {shown (← (Client.Push.complete tag outcome).call fx) toString}"
   | .bleSetup => do
       if let some s ← IO.getEnv "NATIVEDEMO_BLE_SERVICE" then
         if !s.isEmpty then fx.post (.bleService s)
@@ -667,6 +696,7 @@ def app : Native.App Model Msg Cmd Host :=
       if (j.getObjValAs? String "scene").toOption == some "background" then some .background
       else if (j.getObjValAs? String "scene").toOption == some "active" then some .foreground
       else if (j.getObjVal? "scene").isOk then none
+      else if (Client.Push.event? j).isSome then some (.push j)
       else match BackgroundTasks.systemEvent? j with
         | some e => some (.bgtask e.expired e.id e.kind e.tag)
         | none => some (.system j) }

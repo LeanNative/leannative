@@ -195,6 +195,8 @@ Where each key comes from:
   against it): `usage` texts, `backgroundTasks` (`BGTaskSchedulerPermittedIdentifiers`, and
   `UIBackgroundModes` from their kinds: `fetch` for refresh, `processing` for processing),
   `iCloudContainers` (`com.apple.developer.icloud-container-identifiers` and `icloud-services` CloudKit),
+  `push` (`aps-environment`, written as `development`: a distribution signing makes it `production`; and
+  `remote-notification` among `UIBackgroundModes`),
   `keychainGroups` (`keychain-access-groups`). Generation refuses a manifest whose Info.plist or
   entitlements lack what a family it uses needs, and names the key:
 
@@ -204,6 +206,7 @@ Where each key comes from:
   | `ble.*` | `NSBluetoothAlwaysUsageDescription` |
   | `bgtask.*` | `BGTaskSchedulerPermittedIdentifiers`, and `UIBackgroundModes` with `fetch` or `processing` (not asked of an app whose identifiers are all wildcards: continued tasks) |
   | `cloudkit.*` | the `com.apple.developer.icloud-services` entitlement holding `CloudKit`, and an `icloud-container-identifiers` one |
+  | `push.*` | the `aps-environment` entitlement, and `UIBackgroundModes` with `remote-notification` (both from `push := true`) |
   | anything else (`keychain.*`, `http.get`, `clipboard.*`, …) | nothing |
 
   The check reads the generated plists, so a key set through `info` or `entitlements` counts.
@@ -361,7 +364,7 @@ URL to open and the callback it ends at, https — iOS 17.4 and later, the host 
 associated domains — or a custom scheme; answers `{"ok":true,"url":…}`, the callback URL with its query, or the
 `ASWebAuthenticationSessionError` as `name` and `code`, `canceledLogin` when the person closes the sheet; one at a
 time, and the browser's cookies are shared unless `ephemeral`), `bgtask.schedule/complete/refreshStatus/continue/progress` (background tasks, above),
-`cloudkit.account/query/save/load/delete` (below), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
+`cloudkit.account/query/save/load/delete` (below), `push.register/unregister/permission/ask/complete` (Apple's push notifications, below), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
 `ble.scan` (the peripherals advertising a service within a few seconds, with name and RSSI, without
 connecting: a nearby device offered before anything is opened), `ble.connect` (a peripheral the system already holds connected, else the first a scan finds; answers its
 characteristics), `ble.subscribe` (notifications on; iOS pairs here, so it may wait on the user),
@@ -403,8 +406,49 @@ entitlements blob of the code signature — and when they lack CloudKit or the c
 simulator, native-demo answers `missingEntitlement`; built with the entitlement it answers
 `{"status":"noAccount","user":null}` and a query `notAuthenticated`.)
 
+**Push notifications** (`lean/LeanNativeShell/Push.lean`). For an app whose server sends it notices through
+Apple. The manifest says `push := true` (the `aps-environment` entitlement and `remote-notification` among
+`UIBackgroundModes`) and lists `push.*` in `uses`; Push Notifications must be on for the App ID at Apple,
+which signing does not do for you. **Only such an app has any of this**: the class, the app delegate's push
+methods and the UserNotifications import are printed into `LNCapabilities.m` only when a `push.*` capability
+is selected, because Apple reads a binary for those methods and writes to the developer of one that has them
+and no entitlement.
+
+- `push.register` answers `{"token":hex,"environment"}`: the device's token, and `development` or
+  `production`, read from the app's own entitlement, which says which of Apple's gateways the token is for (a
+  server that sends to the wrong one is refused). Without the entitlement it answers `missingEntitlement` and
+  asks Apple nothing; `failed` is Apple's refusal, `timeout` no word from Apple in thirty seconds.
+- `push.unregister` tells Apple to send the app nothing more (and Apple tells a server that still sends
+  that the token is dead): for an app that leaves when its server cannot be told.
+- `push.permission` answers `{"status"}` (`notDetermined`, `denied`, `authorized`, `provisional`,
+  `ephemeral`), and `push.ask {"alert"?,"sound"?,"badge"?}` puts the system's question, which iOS shows once:
+  ask from something the person did. A notice that carries `content-available` wakes the app whatever the
+  person answered; the answer decides only what is shown.
+- **A notice that carries `content-available`**, waking the app if it is behind, is the system event
+  `{"push":{"tag","state","payload"}}`: `state` is `active`, `inactive` or `background`, `payload` the notice
+  as the server sent it (`aps` and the server's own keys), less what JSON cannot carry. iOS waits about
+  thirty seconds: answer `push.complete {"tag","result"}` (`newData`, `noData`, `failed`). At twenty-four
+  seconds the app is told `{"pushExpired":{"tag"}}` and a second later the shell answers `failed` itself;
+  `push.complete` is then `{"ok":false,"error":"notPending"}`.
+- **A notice that arrives with the app in front** is `{"pushPresented":{"payload"}}`, and shows no banner.
+- **A notice tapped** is `{"pushOpened":{"payload"}}`, with the app running or started by the tap.
+- One notice can be several of these (in front with `content-available`: presented and received; woken and
+  then tapped: received and opened), so an app does its work once.
+- `LeanNative.Native.Client.Push` is the typed client, and `Push.event?` reads the three events from
+  `App.system`.
+
+The class's bookkeeping is `PendingNotices` in Lean (a notice is answered once: `finish_once`), run by
+`make check`. The Objective-C is compiled by native-demo's builds, and no CI machine can send a notice. Run
+by hand in the simulator (iOS 26.5, native-demo built with `push := true`, `xcrun simctl push`): the token,
+and a notice arriving with the app in front. **Not run anywhere yet**: a notice received behind, its answer
+and its expiry, and a tap. The simulator does not deliver a `content-available` notice to the push method at
+all (it runs a plain background fetch), so those wait for a device. In the simulator as committed,
+native-demo, which has no entitlement, answers `missingEntitlement`. A Mac Catalyst build's entitlement key
+is thought to carry the `com.apple.developer.` prefix, which the shell also reads and the manifest's field
+does not write: not tried.
+
 **Typed clients: `LeanNative.Native.Client.*`** (optional; import them). `Client.Auth`, `Client.WebAuth`, `Client.Keychain`,
-`Client.Http`, `Client.CloudKit` and `Client.Bluetooth` build each capability's arguments from a typed
+`Client.Http`, `Client.CloudKit`, `Client.Push` and `Client.Bluetooth` build each capability's arguments from a typed
 request and read its answer into a typed result or a `Client.Error`: `denied`, `cancelled`,
 `unsupported` (an unknown capability, the platform, a missing entitlement), `malformed` (never read as
 a successful default) or `failed`, keeping the shell's error name, code, domain, text and whole answer.

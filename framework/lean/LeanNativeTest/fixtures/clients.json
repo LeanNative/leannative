@@ -205,6 +205,24 @@
      "reply": {"hex": "0500"}, "expect": {"ok": "0500"}},
     {"name": "ble.read: timeout", "request": "ble.read", "reply": {"error": "timeout"}, "expect": {"error": {"kind": "failed", "name": "timeout"}}},
     {"name": "ble.read: neither hex nor error", "request": "ble.read", "reply": {}, "expect": {"error": {"kind": "malformed"}}},
-    {"name": "ble.close", "request": "ble.close", "capability": "ble.close", "args": {"id": "p1"}, "reply": {"ok": true}, "expect": {"ok": {}}}
+    {"name": "ble.close", "request": "ble.close", "capability": "ble.close", "args": {"id": "p1"}, "reply": {"ok": true}, "expect": {"ok": {}}},
+
+    {"name": "push.register", "request": "push.register", "capability": "push.register", "args": {}, "reply": {"token": "00ff10ab", "environment": "production"}, "expect": {"ok": {"hex": "00ff10ab", "environment": "production"}}},
+    {"name": "push.register: a development build", "request": "push.register", "reply": {"token": "a1b2", "environment": "development"}, "expect": {"ok": {"hex": "a1b2", "environment": "development"}}},
+    {"name": "push.register: no entitlement", "request": "push.register", "reply": {"error": "missingEntitlement", "detail": "the app has no aps-environment entitlement"}, "expect": {"error": {"kind": "unsupported", "name": "missingEntitlement"}}},
+    {"name": "push.register: Apple refused", "request": "push.register", "reply": {"error": "failed", "code": 3000, "detail": "no valid aps-environment entitlement string found for application"}, "expect": {"error": {"kind": "failed", "name": "failed", "code": 3000}}},
+    {"name": "push.register: no word from Apple", "request": "push.register", "reply": {"error": "timeout", "detail": "Apple did not answer in thirty seconds"}, "expect": {"error": {"kind": "failed", "name": "timeout"}}},
+    {"name": "push.register: a token that is not hexadecimal", "request": "push.register", "reply": {"token": "xyz", "environment": "production"}, "expect": {"error": {"kind": "malformed"}}},
+    {"name": "push.register: an unknown environment", "request": "push.register", "reply": {"token": "00ff", "environment": "staging"}, "expect": {"error": {"kind": "malformed"}}},
+    {"name": "push.unregister", "request": "push.unregister", "capability": "push.unregister", "args": {}, "reply": {"ok": true}, "expect": {"ok": {}}},
+    {"name": "push.permission: never asked", "request": "push.permission", "capability": "push.permission", "args": {}, "reply": {"status": "notDetermined"}, "expect": {"ok": {"status": "notDetermined", "shows": false}}},
+    {"name": "push.permission: allowed", "request": "push.permission", "reply": {"status": "authorized"}, "expect": {"ok": {"status": "authorized", "shows": true}}},
+    {"name": "push.permission: refused", "request": "push.permission", "reply": {"status": "denied"}, "expect": {"ok": {"status": "denied", "shows": false}}},
+    {"name": "push.permission: an unknown status", "request": "push.permission", "reply": {"status": "maybe"}, "expect": {"error": {"kind": "malformed"}}},
+    {"name": "push.ask", "request": "push.ask", "capability": "push.ask", "args": {"badge": false}, "reply": {"granted": true}, "expect": {"ok": true}},
+    {"name": "push.ask: the person said no", "request": "push.ask", "reply": {"granted": false}, "expect": {"ok": false}},
+    {"name": "push.ask: the system failed", "request": "push.ask", "reply": {"granted": false, "error": "failed", "code": 1, "detail": "?"}, "expect": {"error": {"kind": "failed", "name": "failed", "code": 1}}},
+    {"name": "push.complete", "request": "push.complete", "capability": "push.complete", "args": {"tag": 7, "result": "newData"}, "reply": {"ok": true}, "expect": {"ok": true}},
+    {"name": "push.complete: answered already", "request": "push.complete", "reply": {"ok": false, "error": "notPending"}, "expect": {"ok": false}}
   ]
 }

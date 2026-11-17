@@ -1,4 +1,5 @@
 import LeanNativeShell.Manifest
+import LeanNativeShell.App
 
 /-! # The app manifest: what generation refuses, and what it writes
 
@@ -67,6 +68,20 @@ def main : IO UInt32 := do
     uses := ["cloudkit.*"], entitlements := [("com.apple.developer.icloud-container-identifiers", toJson ["iCloud.com.example.app"])] }
     "com.apple.developer.icloud-services"
   accepted "cloudkit.* with a container" { base with uses := ["cloudkit.*"], iCloudContainers := ["iCloud.com.example.app"] }
+  -- push: the entitlement and the background mode, both from the one field
+  refused "push.* without the field" { base with uses := ["push.*"] } "aps-environment"
+  refused "push.* with the entitlement by hand and no mode" { base with uses := ["push.*"], entitlements := [("aps-environment", "development")] }
+    "remote-notification"
+  accepted "push.* with the field" { base with uses := ["push.*"], push := true }
+  let pushed : Manifest := { base with uses := ["push.*", "bgtask.*"], push := true, backgroundTasks := [("com.example.app.refresh", .refresh)] }
+  check "push: the entitlement, and its mode beside the tasks'" (
+    (pushed.entitlementsPlist.getObjValAs? String "aps-environment").toOption == some "development" &&
+    strList pushed.infoPlist "UIBackgroundModes" == ["fetch", "remote-notification"])
+  let pushAlone : Manifest := { base with uses := ["push.*"], push := true }
+  check "push alone: its mode, and no task identifiers" (strList pushAlone.infoPlist "UIBackgroundModes" == ["remote-notification"] &&
+    (pushAlone.infoPlist.getObjVal? "BGTaskSchedulerPermittedIdentifiers").toOption.isNone)
+  check "no push: no entitlement and no mode" ((base.entitlementsPlist.getObjVal? "aps-environment").toOption.isNone &&
+    (base.infoPlist.getObjVal? "UIBackgroundModes").toOption.isNone)
   -- families that need nothing, and names the shell does not have
   accepted "keychain, http, clipboard, open: nothing needed" { base with
     uses := ["keychain.*", "http.get", "clipboard.*", "open", "documents", "paths"] }
@@ -184,6 +199,18 @@ def main : IO UInt32 := do
   let ble := caps (some ["ble.connect"])
   check "one ble capability: CoreBluetooth and LNBluetooth, no LocalAuthentication" (ble.contains "CoreBluetooth"
     && ble.contains "LNBluetooth" && !ble.contains "LocalAuthentication")
+  -- push is in an app that asks for it and in no other: Apple reads a binary for the delegate's push
+  -- methods and writes to the developer of one that has them and no entitlement
+  let push := caps (some ["push.*"])
+  check "push.*: UserNotifications, LNPush and the delegate's methods" (push.contains "UserNotifications/UserNotifications.h"
+    && push.contains "@implementation LNPush" && push.contains "didReceiveRemoteNotification"
+    && push.contains "didRegisterForRemoteNotificationsWithDeviceToken" && push.contains "@\"push.register\"")
+  check "no push.*: none of it" ([http, auth, ble].all fun t => !t.contains "UserNotifications" && !t.contains "LNPush"
+    && !t.contains "RemoteNotification" && !t.contains "@\"push.")
+  check "every capability: push among them" (every.contains "@implementation LNPush")
+  let app := file [] appFile
+  check "LNApp.m, which every app has: the class by name at run time, and no push method" (app.contains "NSClassFromString(@\"LNPush\")"
+    && !app.contains "RemoteNotification" && !app.contains "UNUserNotification" && !app.contains "UserNotifications")
   check "a family selects its rows" (selects ["ble.*"] "ble.connect" && !selects ["ble.*"] "blex.scan"
     && selects ["auth"] "auth" && !selects ["auth"] "auth.other")
   let n ← failures.get

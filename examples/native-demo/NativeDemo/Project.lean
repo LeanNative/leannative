@@ -13,7 +13,9 @@ def manifest : Manifest where
   uses := ["auth", "keychain.*", "http.get", "http.request", "ble.*", "bgtask.*", "timezone", "device", "conditions", "clipboard.get"]
   -- the Probes tab calls cloudkit.* without an iCloud container on purpose, to show the shell's
   -- missingEntitlement answer (listing it in uses would rightly ask for iCloudContainers)
-  unlisted := ["cloudkit.*"]
+  -- and push.* without the push entitlement, for the same reason (`push := true` would ask Apple to have
+  -- Push Notifications on for this App ID)
+  unlisted := ["cloudkit.*", "push.*"]
   usage := [
     ("NSFaceIDUsageDescription", "Shows that a Lean app can ask for Face ID."),
     -- asked only when NATIVEDEMO_BLE_SERVICE is set at launch (the Probes tab's Bluetooth section)
