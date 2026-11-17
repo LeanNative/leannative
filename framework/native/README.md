@@ -364,7 +364,7 @@ URL to open and the callback it ends at, https — iOS 17.4 and later, the host 
 associated domains — or a custom scheme; answers `{"ok":true,"url":…}`, the callback URL with its query, or the
 `ASWebAuthenticationSessionError` as `name` and `code`, `canceledLogin` when the person closes the sheet; one at a
 time, and the browser's cookies are shared unless `ephemeral`), `bgtask.schedule/complete/refreshStatus/continue/progress` (background tasks, above),
-`cloudkit.account/query/save/load/delete` (below), `push.register/permission/ask/complete` (Apple's push notifications, below), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
+`cloudkit.account/query/save/load/delete` (below), `push.register/unregister/permission/ask/complete` (Apple's push notifications, below), and Bluetooth Low Energy by service and characteristic UUID: `ble.state`,
 `ble.scan` (the peripherals advertising a service within a few seconds, with name and RSSI, without
 connecting: a nearby device offered before anything is opened), `ble.connect` (a peripheral the system already holds connected, else the first a scan finds; answers its
 characteristics), `ble.subscribe` (notifications on; iOS pairs here, so it may wait on the user),
@@ -418,6 +418,8 @@ and no entitlement.
   `production`, read from the app's own entitlement, which says which of Apple's gateways the token is for (a
   server that sends to the wrong one is refused). Without the entitlement it answers `missingEntitlement` and
   asks Apple nothing; `failed` is Apple's refusal, `timeout` no word from Apple in thirty seconds.
+- `push.unregister` tells Apple to send the app nothing more (and Apple tells a server that still sends
+  that the token is dead): for an app that leaves when its server cannot be told.
 - `push.permission` answers `{"status"}` (`notDetermined`, `denied`, `authorized`, `provisional`,
   `ephemeral`), and `push.ask {"alert"?,"sound"?,"badge"?}` puts the system's question, which iOS shows once:
   ask from something the person did. A notice that carries `content-available` wakes the app whatever the

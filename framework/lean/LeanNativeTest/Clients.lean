@@ -108,6 +108,7 @@ def cases : List (String × Case) := [
   ("ble.read", .of (Bluetooth.read "p1" "c1" (some 30)) (Json.str ∘ hexOf)),
   ("ble.close", .of (Bluetooth.close "p1") unit),
   ("push.register", .of Push.register fun t => Json.mkObj [("hex", Json.str t.hex), ("environment", Json.str t.environment.name)]),
+  ("push.unregister", .of Push.unregister unit),
   ("push.permission", .of Push.permission fun p => Json.mkObj [("status", Json.str p.name), ("shows", Json.bool p.shows)]),
   ("push.ask", .of (Push.ask (badge := false)) Json.bool),
   ("push.complete", .of (Push.complete 7 .newData) Json.bool) ]

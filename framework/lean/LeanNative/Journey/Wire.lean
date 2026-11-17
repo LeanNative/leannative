@@ -206,6 +206,7 @@ def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
   -- no Apple to give a token, and nobody to ask whether notices may be shown
   | "push.permission" => return Json.mkObj [("status", Json.str "notDetermined")]
   | "push.ask" => return Json.mkObj [("granted", false)]
+  | "push.unregister" => return Json.mkObj [("ok", true)]
   | "push.complete" => return Json.mkObj [("ok", false), ("error", Json.str "notPending")]
   | "push.register" =>
     return Json.mkObj [("error", Json.str "missingEntitlement"), ("detail", Json.str "the headless driver has no push entitlement")]

@@ -35,7 +35,8 @@ A notice that woke the app and is then tapped arrives twice, once as received an
 `{"token":hex,"environment":"development"|"production"}`, the environment read from the app's own
 `aps-environment` entitlement (which of Apple's two gateways the token is for). Without the entitlement it
 answers `missingEntitlement` and asks Apple nothing. Apple may not answer at all (a first registration with
-no network), so after thirty seconds the answer is `timeout`.
+no network), so after thirty seconds the answer is `timeout`. `push.unregister` tells Apple to send the app
+nothing more, for an app that leaves when its server cannot be told; registering again gives a token again.
 
 `PendingNotices` below is the same bookkeeping in Lean. The Objective-C is compiled by native-demo's builds.
 **What has been run, by hand in the simulator (iOS 26.5, `xcrun simctl push`)**: the token; a notice arriving
@@ -56,6 +57,7 @@ def pushClass : List Stmt := [
     .l "- (void)registered:(nullable NSData *)token error:(nullable NSError *)error;",
     .l "- (void)received:(NSDictionary *)userInfo completion:(void (^)(UIBackgroundFetchResult))completion;",
     .l "- (void)registerDevice:(NSDictionary *)args answer:(LNAnswer)answer;",
+    .l "- (void)unregisterDevice:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "- (void)permission:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "- (void)ask:(NSDictionary *)args answer:(LNAnswer)answer;",
     .l "- (void)complete:(NSDictionary *)args answer:(LNAnswer)answer;",
@@ -119,6 +121,12 @@ def pushClass : List Stmt := [
         .l "// Apple may say nothing at all (a first registration with no network)",
         b "dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{" [
             .l "if (self->_asking == asking && self->_registering.count > 0) [self answerRegistering:@{@\"error\": @\"timeout\", @\"detail\": @\"Apple did not answer in thirty seconds\"}];"] "});"],
+    .blank,
+    .l "/// `push.unregister`: Apple is told to send this app nothing more (and tells a server that still tries that",
+    .l "/// the token is dead). For leaving when the server cannot be told: a sign-out with no session to ask by.",
+    b "- (void)unregisterDevice:(NSDictionary *)args answer:(LNAnswer)answer {" [
+        .l "[UIApplication.sharedApplication unregisterForRemoteNotifications];",
+        .l "answer(@{@\"ok\": @YES});"],
     .blank,
     b "- (void)answerRegistering:(NSDictionary *)result {" [
         .l "NSArray<LNAnswer> *waiting = [_registering copy];",

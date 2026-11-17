@@ -8,6 +8,7 @@ it (`LeanNativeShell.Push`).
 | request | answer | result |
 |---|---|---|
 | `register` | `{"token":hex,"environment"}` | the device's token and which of Apple's gateways it is for |
+| `unregister` | `{"ok"}` | Apple told to send this app nothing more |
 | `permission` | `{"status"}` | whether notices may be shown |
 | `ask` | `{"granted"}` | the system's question, put once; ask from something the person did |
 | `complete tag result` | `{"ok"}` | iOS is told the app has done with a notice; `false` when it was answered already (`notPending`) |
@@ -64,6 +65,12 @@ def register : Request Token :=
         | "production" => pure .production
         | s => throw (malformed s!"environment {s}")
       return { hex, environment } }
+
+/-- Apple told to send this app no more notices: for leaving when the server cannot be told. -/
+def unregister : Request Unit :=
+  { capability := "push.unregister", args := Json.mkObj []
+    decode := withErrors fun j => do
+      unless ← reqBool j "ok" do throw (malformed "`ok` false without an error") }
 
 inductive Permission where
   | notDetermined | denied | authorized | provisional | ephemeral

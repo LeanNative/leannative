@@ -214,6 +214,7 @@
     {"name": "push.register: no word from Apple", "request": "push.register", "reply": {"error": "timeout", "detail": "Apple did not answer in thirty seconds"}, "expect": {"error": {"kind": "failed", "name": "timeout"}}},
     {"name": "push.register: a token that is not hexadecimal", "request": "push.register", "reply": {"token": "xyz", "environment": "production"}, "expect": {"error": {"kind": "malformed"}}},
     {"name": "push.register: an unknown environment", "request": "push.register", "reply": {"token": "00ff", "environment": "staging"}, "expect": {"error": {"kind": "malformed"}}},
+    {"name": "push.unregister", "request": "push.unregister", "capability": "push.unregister", "args": {}, "reply": {"ok": true}, "expect": {"ok": {}}},
     {"name": "push.permission: never asked", "request": "push.permission", "capability": "push.permission", "args": {}, "reply": {"status": "notDetermined"}, "expect": {"ok": {"status": "notDetermined", "shows": false}}},
     {"name": "push.permission: allowed", "request": "push.permission", "reply": {"status": "authorized"}, "expect": {"ok": {"status": "authorized", "shows": true}}},
     {"name": "push.permission: refused", "request": "push.permission", "reply": {"status": "denied"}, "expect": {"ok": {"status": "denied", "shows": false}}},
