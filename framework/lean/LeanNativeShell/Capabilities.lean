@@ -314,6 +314,9 @@ def capabilities : List Capability :=
   { name := "cloudkit.load", args := "`name`, `maxBytes`? (of the asset; 32 MiB), `assetField`? (`asset`), `container`?",
     result := "`{\"record\":…,\"asset\":hex|null}`, or `{\"error\":\"notFound\"…}`, `{\"error\":\"tooLarge\"}`",
     body := [.l "[LNCloudKit.shared load:args answer:answer];"] },
+  { name := "cloudkit.loadMany", args := "`names` (1 to 200 record names), `files`? (false: assets as hex), `maxBytes`? (of each asset; 32 MiB), `assetField`? (`asset`), `container`?",
+    result := "`{\"records\":[…],\"directory\"?}`: one request to CloudKit, and an answer for each name in the order asked: `{\"name\",\"record\",\"asset\":hex}` (no `asset` when the record has none), or with `files` `{\"name\",\"record\",\"file\":path}` (a copy in `directory`, a directory of the temporary directory that is the caller's to remove), or the record's own error `{\"name\",\"error\",\"code\"?,\"detail\"?,\"retryAfter\"?}` (`notFound` only when CloudKit says the record is not there, `tooLarge`, `noAnswer`, or CloudKit's word for it). An error of the whole request answers as any `cloudkit.*` error",
+    body := [.l "[LNCloudKit.shared loadMany:args answer:answer];"] },
   { name := "cloudkit.delete", args := "`name`, `container`?",
     result := "`{\"ok\":true}` (also when there was no such record), or an error",
     body := [.l "[LNCloudKit.shared remove:args answer:answer];"] } ]

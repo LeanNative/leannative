@@ -457,6 +457,9 @@ def typedSelftest (fx : Effects Host) (say : String → IO Unit) : IO Unit := do
   say s!"typed http.get ftp: {shown (← (Client.Http.get { url := "ftp://example.com/" }).call fx) fun r => toString r.status}"
   say s!"typed http.get unreachable: {shown (← (Client.Http.get { url := "http://127.0.0.1:1/", timeout := some 5 }).call fx) fun r => toString r.status}"
   say s!"typed cloudkit.account: {shown (← (Client.CloudKit.account).call fx) fun a => (a.user.getD "no user")}"
+  -- many records in one request: refused for its arguments before CloudKit is asked, and for the entitlement
+  say s!"typed cloudkit.loadMany none: {shown (← (Client.CloudKit.loadMany #[]).call fx) fun m => toString m.records.size}"
+  say s!"typed cloudkit.loadMany: {shown (← (Client.CloudKit.loadMany #["a", "b"] (files := true)).call fx) fun m => toString m.records.size}"
 
 /-- `keychain.set` against the real Keychain: an item that is not there is made, one that is there is given its
 new value in place, and what `get` reads afterwards is what was set. (That a refused write leaves the old value
