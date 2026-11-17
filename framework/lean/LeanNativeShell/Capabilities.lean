@@ -1,6 +1,7 @@
 import LeanNativeShell.ObjC
 import LeanNativeShell.BackgroundTasks
 import LeanNativeShell.CloudKit
+import LeanNativeShell.Push
 
 /-! # LeanNativeShell.Capabilities: `LNCapabilities.m`
 
@@ -319,7 +320,19 @@ def capabilities : List Capability :=
     body := [.l "[LNCloudKit.shared loadMany:args answer:answer];"] },
   { name := "cloudkit.delete", args := "`name`, `container`?",
     result := "`{\"ok\":true}` (also when there was no such record), or an error",
-    body := [.l "[LNCloudKit.shared remove:args answer:answer];"] } ]
+    body := [.l "[LNCloudKit.shared remove:args answer:answer];"] },
+  { name := "push.register", args := "—",
+    result := "`{\"token\":hex,\"environment\"}`: the device's token for Apple's push notifications (`registerForRemoteNotifications`) and which of Apple's gateways it is for, `development` or `production`, from the app's `aps-environment` entitlement; or `{\"error\"}`: `missingEntitlement` (no entitlement: Apple is not asked), `failed` (Apple's refusal, with `code` and `detail`), `timeout` (no word from Apple in thirty seconds). The app's server sends by that token. A notice that arrives is the system event `{\"push\":{\"tag\",\"state\",\"payload\"}}` (`state`: `active`, `inactive`, `background`; `payload`: what of the notice JSON can carry), answered with `push.complete`; one that arrives with the app in front is `{\"pushPresented\":{\"payload\"}}` (nothing is shown), and one tapped is `{\"pushOpened\":{\"payload\"}}`",
+    body := [.l "[LNPush.shared registerDevice:args answer:answer];"] },
+  { name := "push.permission", args := "—",
+    result := "`{\"status\":…}` whether notices may be shown: `notDetermined` (never asked), `denied`, `authorized`, `provisional` or `ephemeral`. A notice with `content-available` wakes the app whatever this says",
+    body := [.l "[LNPush.shared permission:args answer:answer];"] },
+  { name := "push.ask", args := "`alert`?, `sound`?, `badge`? (each true unless said false)",
+    result := "`{\"granted\":bool}` the system's question whether the app may show notices, which iOS puts once; afterwards the answer is the person's standing choice, with no question. Ask from something the person did",
+    body := [.l "[LNPush.shared ask:args answer:answer];"] },
+  { name := "push.complete", args := "`tag` (the notice's, from `{\"push\":…}`), `result`? (`newData`, `noData` or `failed`; `noData`)",
+    result := "`{\"ok\":true}`: iOS is told the app has done with the notice (it waits about thirty seconds, and gives an app that answers sooner more such wakes); or `{\"ok\":false,\"error\":\"notPending\"}` when it was answered already, by the app or by the shell (which tells the app `{\"pushExpired\":{\"tag\"}}` at twenty-four seconds and answers `failed` a second later)",
+    body := [.l "[LNPush.shared complete:args answer:answer];"] } ]
 
 
 def unknownCapability : List Stmt := [
@@ -342,6 +355,7 @@ def capsBefore : List Stmt := [
     .pp "#import <Network/NSURLSession+Network.h>",
     .pp "#import <BackgroundTasks/BackgroundTasks.h>",
     .pp "#import <CloudKit/CloudKit.h>",
+    .pp "#import <UserNotifications/UserNotifications.h>",
     .pp "#import <mach-o/dyld.h>",
     .pp "#import <mach-o/getsect.h>",
     .pp "#import <mach-o/loader.h>",
@@ -970,7 +984,8 @@ def selects (uses : List String) (name : String) : Bool :=
 /-- `LNCapabilities.m` for an app that uses `uses` (none: every capability, which `leannative-shell` prints).
 Only what a selected capability needs is printed: without `auth` there is no LocalAuthentication, without `webauth`
 no AuthenticationServices and no `LNWebAuth`, and without a `ble.*` capability no CoreBluetooth and no `LNBluetooth`, so the binary does not link a framework that App Store
-Connect then asks a purpose string for. Any other request answers `unknownCapability`, and
+Connect then asks a purpose string for. Without a `push.*` capability there is no UserNotifications, no `LNPush` and none of the app
+delegate's push methods: Apple writes to the developer of a binary that has those and no push entitlement. Any other request answers `unknownCapability`, and
 `Manifest.callProblems` already refuses an app whose code calls a capability `uses` leaves out. -/
 def capsFileFor (uses : Option (List String)) : List Stmt :=
   let chosen := match uses with
@@ -980,13 +995,14 @@ def capsFileFor (uses : Option (List String)) : List Stmt :=
   let auth := chosen.any (·.name == "auth")
   let webauth := chosen.any (·.name == "webauth")
   let ble := has "ble"
+  let push := has "push"
   let imports := (capsBefore.take capsImports).filter fun
     | .pp t => (auth || !t.contains "LocalAuthentication") && (ble || !t.contains "CoreBluetooth")
-        && (webauth || !t.contains "AuthenticationServices")
+        && (webauth || !t.contains "AuthenticationServices") && (push || !t.contains "UserNotifications")
     | _ => true
   imports ++ argHelpers ++ (if ble then bluetoothClass ++ [.blank] else []) ++ (if webauth then webAuthClass ++ [.blank] else []) ++
   backgroundTasksClass ++ [.blank] ++
-  cloudKitClass ++ [.blank] ++ (if auth then authErrorName else []) ++ capsBefore.drop capsImports ++
+  cloudKitClass ++ [.blank] ++ (if push then pushClass ++ [.blank] else []) ++ (if auth then authErrorName else []) ++ capsBefore.drop capsImports ++
   [ b "- (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(NSDictionary *))answer {"
       [ ifChain "" (chosen.map (fun c => (s!"[name isEqualToString:{lit c.name}]", c.body)) ++ [("", unknownCapability)]) ] ] ++
   [

@@ -203,6 +203,12 @@ def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
   | "bgtask.schedule" | "bgtask.complete" => return Json.mkObj [("ok", true)]
   | "bgtask.refreshStatus" => return Json.mkObj [("status", Json.str "available")]
   | "cloudkit.account" => return Json.mkObj [("status", Json.str "noAccount"), ("user", Json.null)]
+  -- no Apple to give a token, and nobody to ask whether notices may be shown
+  | "push.permission" => return Json.mkObj [("status", Json.str "notDetermined")]
+  | "push.ask" => return Json.mkObj [("granted", false)]
+  | "push.complete" => return Json.mkObj [("ok", false), ("error", Json.str "notPending")]
+  | "push.register" =>
+    return Json.mkObj [("error", Json.str "missingEntitlement"), ("detail", Json.str "the headless driver has no push entitlement")]
   | n =>
     if n.startsWith "cloudkit." then
       return Json.mkObj [("error", Json.str "notAuthenticated"), ("code", toJson (9 : Int)), ("detail", Json.str "the headless driver has no iCloud account")]

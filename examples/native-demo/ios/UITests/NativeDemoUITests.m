@@ -330,21 +330,21 @@
 
 - (void)testScrollingToTheLastProbe {
     if (![self openTab:@"Probes"]) return;
-    // the last capability button (16 probes: probe-15) is below the fold on a phone: LNTap scrolls to it first
-    if (!LNTap(self.app, @"probe-15")) return;
-    NSPredicate *asked = [NSPredicate predicateWithFormat:@"label BEGINSWITH 'asking: HTTP bad proxy' OR label BEGINSWITH 'HTTP bad proxy:'"];
+    // the last capability button (19 probes: probe-18) is below the fold on a phone: LNTap scrolls to it first
+    if (!LNTap(self.app, @"probe-18")) return;
+    NSPredicate *asked = [NSPredicate predicateWithFormat:@"label BEGINSWITH 'asking: Push complete' OR label BEGINSWITH 'Push complete'"];
     XCUIElement *logged = [[self.app descendantsMatchingType:XCUIElementTypeAny] matchingPredicate:asked].firstMatch;
     XCTAssertTrue([logged waitForExistenceWithTimeout:10], @"the probe's answer is not logged");
 }
 
 - (void)testScrollingToTheEndOfTheLog {
-    // the Probes list made longer than any window (16 probes, then 10 log rows), its oldest row looked for from
+    // the Probes list made longer than any window (19 probes, then 10 log rows), its oldest row looked for from
     // the top: LNScrollTo drags on iOS and turns the scroll wheel under Mac Catalyst. That row starts out of
     // view, so this always scrolls; then back up to the first probe.
     if (![self openTab:@"Probes"]) return;
-    if (!LNTap(self.app, @"probe-15")) return;
+    if (!LNTap(self.app, @"probe-18")) return;
     for (int i = 0; i < 4; i++) if (!LNTap(self.app, @"probe-0")) return;
-    NSPredicate *oldest = [NSPredicate predicateWithFormat:@"label BEGINSWITH 'asking: HTTP bad proxy'"];
+    NSPredicate *oldest = [NSPredicate predicateWithFormat:@"label BEGINSWITH 'asking: Push complete'"];
     XCUIElement *row = [[self.app descendantsMatchingType:XCUIElementTypeAny] matchingPredicate:oldest].firstMatch;
     XCTAssertFalse(row.exists && row.hittable, @"the oldest log row is in view before scrolling: nothing to scroll");
     XCTAssertTrue(LNScrollTo(self.app, row), @"the oldest log row was not scrolled into view");
@@ -413,6 +413,9 @@
     XCTAssertEqualObjects(said[@"typed cloudkit.account"], @"unsupported missingEntitlement");
     XCTAssertEqualObjects(said[@"typed cloudkit.loadMany none"], @"failed badArgs");
     XCTAssertEqualObjects(said[@"typed cloudkit.loadMany"], @"unsupported missingEntitlement");
+    // nor a push entitlement: no token, and Apple is not asked; no notice was received, so none is pending
+    XCTAssertEqualObjects(said[@"typed push.register"], @"unsupported missingEntitlement");
+    XCTAssertEqualObjects(said[@"typed push.complete none"], @"ok false");
     // the Keychain: an iOS app (the simulator's ad-hoc signature included) and a team-signed Mac app have an
     // access group; an ad-hoc Mac app has none, and the data protection keychain refuses it
     // (errSecMissingEntitlement). A team-signed Mac run says so: NATIVEDEMO_KEYCHAIN=access-group in the

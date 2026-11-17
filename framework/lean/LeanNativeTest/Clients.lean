@@ -5,6 +5,7 @@ import LeanNative.Native.Client.HttpRequest
 import LeanNative.Native.Client.CloudKit
 import LeanNative.Native.Client.Bluetooth
 import LeanNative.Native.Client.WebAuth
+import LeanNative.Native.Client.Push
 import LeanNativeShell.Capabilities
 
 /-! # The typed clients against wire fixtures and a fake shell
@@ -105,7 +106,11 @@ def cases : List (String × Case) := [
   ("ble.subscribe", .of (Bluetooth.subscribe "p1" "c1" (some 90)) unit),
   ("ble.write", .of (Bluetooth.write "p1" "c2" (ByteArray.mk #[8, 0]) (timeout := some 15)) unit),
   ("ble.read", .of (Bluetooth.read "p1" "c1" (some 30)) (Json.str ∘ hexOf)),
-  ("ble.close", .of (Bluetooth.close "p1") unit) ]
+  ("ble.close", .of (Bluetooth.close "p1") unit),
+  ("push.register", .of Push.register fun t => Json.mkObj [("hex", Json.str t.hex), ("environment", Json.str t.environment.name)]),
+  ("push.permission", .of Push.permission fun p => Json.mkObj [("status", Json.str p.name), ("shows", Json.bool p.shows)]),
+  ("push.ask", .of (Push.ask (badge := false)) Json.bool),
+  ("push.complete", .of (Push.complete 7 .newData) Json.bool) ]
 
 def errorMatches (want : Json) (e : Error) : Bool :=
   let field (k : String) (have_ : Json) : Bool := match want.getObjVal? k with
@@ -190,9 +195,38 @@ def endToEnd : IO Unit := do
   | .error e => check "request: a cancelled authentication is not a denial" (e.kind == .cancelled && e.code == some (-2))
   | .ok _ => check "request: a cancelled authentication is not a denial" false
 
+/-- The push events an app reads from `App.system`, as the shell posts them (`LeanNativeShell.Push`), and the
+shell's bookkeeping of notices received. -/
+def pushEvents : IO Unit := do
+  let payload := Json.mkObj [("aps", Json.mkObj [("content-available", (1 : Nat))]), ("id", "m1")]
+  check "push: a notice received, as the shell posts it" (match Push.event? (LeanNativeShell.PendingNotices.event 3 "background" payload) with
+    | some (.received 3 "background" p) => p == payload
+    | _ => false)
+  check "push: the shell about to answer for the app" (match Push.event? (Json.mkObj [("pushExpired", Json.mkObj [("tag", (3 : Nat))])]) with
+    | some (.expired 3) => true
+    | _ => false)
+  check "push: a notice arriving in front" (match Push.event? (Json.mkObj [("pushPresented", Json.mkObj [("payload", payload)])]) with
+    | some (.presented p) => p == payload
+    | _ => false)
+  check "push: a notice tapped" (match Push.event? (Json.mkObj [("pushOpened", Json.mkObj [("payload", payload)])]) with
+    | some (.opened p) => p == payload
+    | _ => false)
+  check "push: a notice without a tag is no event, and another system event is none" (
+    (Push.event? (Json.mkObj [("push", Json.mkObj [("state", "active")])])).isNone &&
+    (Push.event? (Json.mkObj [("scene", "active")])).isNone)
+  -- each notice has its own tag, and iOS is answered once for each: by the app, or by the shell when the
+  -- time is up, never both
+  let (s1, t1) := ({} : LeanNativeShell.PendingNotices).received
+  let (s2, t2) := s1.received
+  check "push: each notice its own tag" (t1 == 1 && t2 == 2)
+  let (s3, first) := s2.finish t1
+  check "push: answered once, and the other notice still waits" (first && !(s3.finish t1).2 && (s3.finish t2).2)
+  check "push: a tag never given is not pending" (!(s2.finish 9).2)
+
 def main (args : List String) : IO UInt32 := do
   fixtures (args.headD "LeanNativeTest/fixtures/clients.json")
   endToEnd
+  pushEvents
   let n ← failures.get
   IO.println (if n == 0 then "clients: all passed" else s!"clients: {n} failed")
   return if n == 0 then 0 else 1

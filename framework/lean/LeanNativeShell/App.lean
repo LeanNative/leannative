@@ -22,6 +22,10 @@ def appFile : List Stmt := [
     b "- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)options {" [
         .l "// before launch ends, as iOS requires: the handlers of the app's background tasks",
         .l "[LNBackgroundTasks.shared registerLaunch];",
+        .l "// and, in an app that uses `push.*` (only it has the class: LNCapabilities.m), the notification centre's",
+        .l "// delegate, so a tap on a notice that starts the app is not lost",
+        .l "id push = [NSClassFromString(@\"LNPush\") performSelector:@selector(shared)];",
+        .l "[push performSelector:@selector(registerLaunch)];",
         .l "// a scene saved by an earlier build of the app (a SwiftUI shell) comes back with that build's delegate",
         .l "// (SwiftUI.AppSceneDelegate, which the system still provides) and would stay an empty window: it gets",
         .l "// the shell's delegate instead",

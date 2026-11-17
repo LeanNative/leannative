@@ -124,7 +124,7 @@ def infoPlist (bundle version build : String) (extra : String := "") : String :=
 </dict></plist>
 "
 
-def entitlementsPlist (team bundle : String) (debuggable : Bool) : String := s!"<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+def entitlementsPlist (team bundle : String) (debuggable : Bool) (extra : String := "") : String := s!"<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
 <plist version=\"1.0\"><dict>
 <key>application-identifier</key><string>{team}.{bundle}</string>
@@ -132,14 +132,14 @@ def entitlementsPlist (team bundle : String) (debuggable : Bool) : String := s!"
 <key>get-task-allow</key><{if debuggable then "true" else "false"}/>
 <key>com.apple.developer.icloud-container-identifiers</key><array><string>iCloud.{bundle}</string></array>
 <key>com.apple.developer.icloud-services</key><array><string>CloudKit</string></array>
-<key>com.apple.developer.icloud-container-environment</key><string>Production</string>
+<key>com.apple.developer.icloud-container-environment</key><string>Production</string>{extra}
 </dict></plist>
 "
 
 /-- A signed `Probe.app` under `dir`: an arm64 executable, Info.plist, and the given entitlements. With
 `swift`, the executable links the system's Swift library; `declared` are its Info.plist's `LNSwiftSources`. -/
 def probeApp (dir : System.FilePath) (team : String) (debuggable : Bool) (swift : Bool := false)
-    (declared : List String := []) : IO System.FilePath := do
+    (declared : List String := []) (aps : Option String := none) (modes : List String := []) : IO System.FilePath := do
   let app := dir / "Payload" / "Probe.app"
   if ← app.pathExists then IO.FS.removeDirAll app
   IO.FS.createDirAll app
@@ -151,8 +151,12 @@ def probeApp (dir : System.FilePath) (team : String) (debuggable : Bool) (swift 
   discard <| run "xcrun" (#["clang", "-arch", "arm64", "-o", (app / "Probe").toString, (dir / "probe.c").toString] ++ swiftLib)
   let sources := if declared.isEmpty then "" else
     s!"\n<key>{swiftSourcesKey}</key><array>{"".intercalate (declared.map (s!"<string>{·}</string>"))}</array>"
-  IO.FS.writeFile (app / "Info.plist") (infoPlist "com.example.probe" "1.2.3" "42" sources)
-  IO.FS.writeFile (dir / "ent.plist") (entitlementsPlist team "com.example.probe" debuggable)
+  -- push: the entitlement Apple's gateway is named by, and the background modes the app asks for
+  let background := if modes.isEmpty then "" else
+    s!"\n<key>UIBackgroundModes</key><array>{"".intercalate (modes.map (s!"<string>{·}</string>"))}</array>"
+  let push := (aps.map (s!"\n<key>aps-environment</key><string>{·}</string>")).getD ""
+  IO.FS.writeFile (app / "Info.plist") (infoPlist "com.example.probe" "1.2.3" "42" (sources ++ background))
+  IO.FS.writeFile (dir / "ent.plist") (entitlementsPlist team "com.example.probe" debuggable push)
   discard <| run "codesign" #["--force", "-s", "-", "--entitlements", (dir / "ent.plist").toString, app.toString]
   return app
 
@@ -188,6 +192,16 @@ def bundleChecks (dir : System.FilePath) : IO Unit := do
   check "verify-app: Swift linked without a declaration" (← failsWith (verifyApp undeclared id true) "links a Swift library (/usr/lib/swift/libswiftCore.dylib)")
   let bridged ← probeApp dir "TEAM123456" false (swift := true) (declared := ["Bridge.swift"])
   check "verify-app: Swift linked, its sources declared" (!(← failsWith (verifyApp bridged id true) ""))
+  -- push, read off the app itself: woken by notices only when entitled, and a distribution on the
+  -- production gateway
+  let pushed ← probeApp dir "TEAM123456" false (aps := some "production") (modes := ["fetch", "remote-notification"])
+  check "verify-app: push, entitled for production" (!(← failsWith (verifyApp pushed id true) ""))
+  let unentitled ← probeApp dir "TEAM123456" false (modes := ["remote-notification"])
+  check "verify-app: woken by notices without the entitlement" (← failsWith (verifyApp unentitled id true) "signed without aps-environment")
+  let sandboxed ← probeApp dir "TEAM123456" false (aps := some "development") (modes := ["remote-notification"])
+  check "verify-app: a distribution on the development gateway" (← failsWith (verifyApp sandboxed id true) "production push gateway")
+  let archivedPush ← probeApp dir "TEAM123456" true (aps := some "development") (modes := ["remote-notification"])
+  check "verify-app: a development archive with push passes as an archive" (!(← failsWith (verifyApp archivedPush id false) ""))
   let app ← probeApp dir "TEAM123456" false
   let ipa := dir / "Probe.ipa"
   discard <| run "ditto" #["-c", "-k", "--keepParent", (dir / "Payload").toString, ipa.toString]

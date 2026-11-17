@@ -89,6 +89,16 @@ def verifyApp (app : System.FilePath) (id : Identity) (distribution : Bool) : IO
       check (environment == .null || ["Development", "Production"].contains (strOf environment))
         s!"unexpected archive iCloud environment {environment.compress}"
   if release then check (debuggable == some false) "distribution must disable debugging (get-task-allow)"
+  -- Apple's push, by what the app itself carries (no input names it): an app that asks to be woken by
+  -- notices must be entitled to them, which it is only when Push Notifications is on for its App ID; and a
+  -- distribution's tokens are the production gateway's, where a development entitlement's are refused
+  let aps := ent.getObjValD "aps-environment"
+  let woken := (arrOf (info.getObjValD "UIBackgroundModes")).any (strOf · == "remote-notification")
+  if woken then
+    check (aps != .null) "the app asks to be woken by notices (UIBackgroundModes remote-notification) and is signed without aps-environment: turn Push Notifications on for the App ID"
+  if aps != .null then
+    if release then check (strOf aps == "production") s!"distribution requires the production push gateway, not aps-environment {aps.compress}"
+    else check (["development", "production"].contains (strOf aps)) s!"unexpected archive aps-environment {aps.compress}"
   let binary := app / infoStr "CFBundleExecutable"
   let archs := ((← run "lipo" #["-archs", binary.toString]).stdout.splitOn " ").map trim |>.filter (· != "")
   check (archs == ["arm64"]) s!"the app must contain only the arm64 executable, not {archs}"
