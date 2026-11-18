@@ -110,7 +110,7 @@ whenever another app is in front, and the Mac takes no app-switcher snapshots.
 | capability | Mac Catalyst (native-demo, ad-hoc signed, arm64 and x86_64 under Rosetta) |
 |---|---|
 | `auth` | LocalAuthentication is available (Touch ID or the login password); not exercised headless. Its sheet is another process's, and hiding the app does not dismiss it: an answer given after the app was hidden is dropped (team-signed, below) |
-| `keychain.*` | Catalyst uses the data-protection keychain: an ad-hoc build has no keychain access group, so writes answer `status: -34018` (errSecMissingEntitlement) and reads `null`; a build signed with a team identity has one |
+| `keychain.*` | Catalyst uses the data-protection keychain: an ad-hoc build has no keychain access group, so writes answer `status: -34018` (errSecMissingEntitlement) and reads `null`; a build signed with a team identity has one. An item behind the person's presence (`access`) has not been tried on a Mac |
 | `clipboard.*`, `paths`, `documents`, `exclude-from-backup`, `open`, `build` | available (UIKit's pasteboard is the Mac's) |
 | `http.get` | available, SOCKS included (the SOCKS probe answers 200 with ATYP 3) |
 | `ble.*` | CoreBluetooth is available; the app declares `NSBluetoothAlwaysUsageDescription` as on iOS |
@@ -202,7 +202,7 @@ Where each key comes from:
 
   | uses | needs |
   |---|---|
-  | `auth` | `NSFaceIDUsageDescription` |
+  | `auth`, `auth.end` (`auth.*` is both) | `NSFaceIDUsageDescription` |
   | `ble.*` | `NSBluetoothAlwaysUsageDescription` |
   | `bgtask.*` | `BGTaskSchedulerPermittedIdentifiers`, and `UIBackgroundModes` with `fetch` or `processing` (not asked of an app whose identifiers are all wildcards: continued tasks) |
   | `cloudkit.*` | the `com.apple.developer.icloud-services` entitlement holding `CloudKit`, and an `icloud-container-identifiers` one |
@@ -224,8 +224,11 @@ Where each key comes from:
 
   `uses` (with `unlisted`) also decides what the shell can do. When it is not empty, generation prints
   `build/native-shell/LNCapabilities.m` again with only those capabilities (`capsFileFor`): without `auth`
-  there is no LocalAuthentication, and without a `ble.*` capability no CoreBluetooth, so the app does not
-  link a framework it never calls, and App Store Connect does not ask for its purpose string (ITMS-90683).
+  and without a `keychain.*` capability there is no LocalAuthentication, and without a `ble.*` capability no
+  CoreBluetooth, so the app does not link a framework it never calls, and App Store Connect does not ask for
+  its purpose string (ITMS-90683). (`keychain.*` brings LocalAuthentication for the context every Keychain
+  read runs under, which allows no interaction: an app with `keychain.*` and no `auth` evaluates no policy,
+  and generation asks it for no `NSFaceIDUsageDescription`.)
   Any other request answers `unknown capability`, which is why a name built at run time needs its entry
   in `uses`. An empty `uses` keeps every capability, as `leannative-shell` prints them.
 - **The app**: `name`, `displayName`, `bundleId`, `team` (`DEVELOPMENT_TEAM`, signed automatically),
@@ -332,7 +335,8 @@ tests, not proofs.
 ## Capabilities (`lean/LeanNativeShell/Capabilities.lean`)
 
 What only iOS can do, by name, for any app: `auth` (Face ID / passcode; a failure answers the `LAError` as
-`name` and `code` beside the system's text, so a cancellation is told from a denial), `build` (`{"debug":…}`: test hooks read their launch environment only in a Debug build, `#if DEBUG`), `keychain.get/set/add/delete/clear` (`clear` empties a service: a test namespace's reset; `add` creates an
+`name` and `code` beside the system's text, so a cancellation is told from a denial; with `keep` a yes is kept
+for the Keychain reads that follow, and `auth.end` ends it: "An item behind the person's presence" below), `build` (`{"debug":…}`: test hooks read their launch environment only in a Debug build, `#if DEBUG`), `keychain.get/set/add/delete/clear/protect/attributes` (`clear` empties a service: a test namespace's reset; `add` creates an
 item only if there is none, one `SecItemAdd` that answers `-25299` with `"exists":true` otherwise, where
 `set` replaces whatever is there, in place: `SecItemUpdate`, and `SecItemAdd` only when there is no item, so a
 write the Keychain refuses leaves the old value)
@@ -447,13 +451,77 @@ native-demo, which has no entitlement, answers `missingEntitlement`. A Mac Catal
 is thought to carry the `com.apple.developer.` prefix, which the shell also reads and the manifest's field
 does not write: not tried.
 
+**An item behind the person's presence (`access`, `keychain.protect`, `keychain.attributes`, `auth` with `keep`,
+`auth.end`).** By default a Keychain item is readable by any code in the app while the device is unlocked, and
+the app's own `auth` is the only thing between that code and the value. An item stored with `"access":"userPresence"`
+is behind an access control instead (`SecAccessControlCreateWithFlags`: `kSecAccessControlUserPresence` over
+`WhenUnlockedThisDeviceOnly`, in place of the protection class): the Keychain itself gives its value only after
+Face ID, Touch ID or the passcode. All of it is additive: a request without `access`, `context` or `keep` is
+sent and answered exactly as before.
+
+| request | arguments added | answer |
+|---|---|---|
+| `keychain.add` | `access`: `"userPresence"` | as before, and `"access":"userPresence"` when it added the item; `-50` (`errSecParam`), the Keychain untouched, with `synchronizable` or any other `access` |
+| `keychain.set` | none | with `access`, `-50`: `set` makes no such item; over an item that is one, `-25308`, the item as it was: `set` rewrites none (replace its value with `delete` then `add`) |
+| `keychain.protect` | `key`, `service`?, `access`? (`"userPresence"`, the only one) | `{"ok","status","changed"}`, and `"access":"userPresence"` with `ok`: an item that is there is put behind the access control in place. Its attributes are read (never its value); if it is one already, `changed` is false; otherwise one `SecItemUpdate` sets the access control. It never deletes, never adds again, and a refusal leaves the item as it was and answers the status (`-25300` no such item, `-50` a `synchronizable` one) |
+| `keychain.attributes` | `key`, `service`?, `synchronizable`? | `{"status","accessible","userPresence","synchronizable"}`: what protects the item, never its value, so nobody is asked. `accessible` is the protection class (`whenUnlocked`, `whenUnlockedThisDeviceOnly`, `afterFirstUnlock`, `afterFirstUnlockThisDeviceOnly`, `whenPasscodeSetThisDeviceOnly`, another as the system names it, or null); `status` `-25300` for no such item, the rest then null and false |
+| `keychain.get` | `context`? (a kept authentication's id) | as before; `-25308` (`errSecInteractionNotAllowed`) for an item behind the person's presence when `context` is absent, has ended or never was |
+| `auth` | `keep`? (seconds; the shell allows at most 60) | as before; with `keep`, a yes is `{"ok":true,"context":"<id>"}` |
+| `auth.end` | `context` | `{"ok":true}`, also when that authentication had ended or never was |
+
+*The Keychain capability never asks the person, and never holds the main thread for an answer.* Capabilities
+run on the main thread, and a Keychain call that needs an authentication it does not have would otherwise put
+up the system's sheet from inside the call and wait there. So every `keychain.get` and `keychain.attributes`
+names an authentication context (`kSecUseAuthenticationContext`), and so does every update of an item that is
+there (`set`, `protect`): the kept one a live `context` names, else a new `LAContext` with
+`interactionNotAllowed`. What the Keychain would have asked for, it refuses with `-25308`. A request that names
+an id that has ended, or never was, is a request that names none. The app asks, once, with `auth`.
+
+*One answer for the reads that follow.* `auth` with `keep` keeps the `LAContext` the person answered, under an
+id nobody can guess (a UUID), in a table of the shell's on the main thread. It ends, invalidated
+(`[LAContext invalidate]`) and forgotten, at the first of: `auth.end`; its time, `keep` seconds after the
+answer; and the app entering the background (`UIApplicationDidEnterBackgroundNotification`, and the scene's).
+Not when the app resigns active: the Face ID sheet itself does that. Any number of reads may use it while it
+lives. The kept context is itself made to allow no interaction, so a read under it that it did not satisfy is
+refused rather than asked again: one answer is one prompt. An answer given once the app is in the background
+keeps nothing (`{"ok":true}` with no `context`), and `keep` of 0 or less asks for nothing.
+
+*How an item is known to be one.* An item's access control cannot be read back through any public API. On a
+device the Keychain says it another way: to a query that allows no interaction it gives nothing of such an
+item, not even its attributes, and answers `-25308`. While the device is unlocked (protected data is
+available) the shell reads that refusal as the item being behind an access control: `attributes` answers
+`userPresence` true with `accessible` null, `protect` answers that it changed nothing, and `set` refuses.
+While the device is locked the same status says only that it is locked, and is answered as it is. This was
+seen on an iPhone 17 Pro Max (2026-11-18): the first build read the attributes of a protected item, was
+refused, and so failed a second `protect`. The shell also writes a marker with the access control,
+`kSecAttrGeneric` = the UTF-8 bytes of `user-presence`, which is what a simulator, whose Keychain gives the
+attributes, is read by. What holds the value is the access control.
+
+*A device without a passcode* cannot hold such an item: `add` and `protect` answer the Keychain's status
+(`-25293` is expected; no device has been tried without one) and store nothing unprotected: there is no
+path on a device that stores the item in the plain class instead. *A simulator* is not a device here, in two ways, both seen on the
+iOS 27.2 simulator (Xcode 27.2). Its Keychain takes the access control and then gives the value without any
+authentication, with or without Face ID enrolled: `add`, `protect` and `attributes` answer as on a device, and
+a read without a context is **not** refused (only the shell's own refusal of `set` over such an item is the
+same). Its `auth` asks, too: for the passcode in a sheet nobody can answer when Face ID is not enrolled, or
+for a face that `notifyutil -p com.apple.BiometricKit_Sim.pearl.match` supplies when it is (with which the
+kept context's reads were seen to work there). And for a simulator whose Keychain refuses the access control for want of a passcode (`-25293`), the
+shell stores the item in the plain class, there only (`#if TARGET_OS_SIMULATOR`), and answers
+`"access":"unlocked"`, as `auth` notes a simulator without a passcode; no simulator here did. So that the
+Keychain refuses an unauthenticated read is a device's to show (`keychain-user-presence`, below); the headless
+driver's fake shell models the refusal, so an app's journeys meet it there.
+
 **Typed clients: `LeanNative.Native.Client.*`** (optional; import them). `Client.Auth`, `Client.WebAuth`, `Client.Keychain`,
 `Client.Http`, `Client.CloudKit`, `Client.Push` and `Client.Bluetooth` build each capability's arguments from a typed
 request and read its answer into a typed result or a `Client.Error`: `denied`, `cancelled`,
 `unsupported` (an unknown capability, the platform, a missing entitlement), `malformed` (never read as
 a successful default) or `failed`, keeping the shell's error name, code, domain, text and whole answer.
 `Keychain.add` is the only create-only operation, and it is the atomic `keychain.add`, never a read
-then a write. The raw `Effects.ask`/`cap` stay for everything else. The `name`/`code` of `auth`, the
+then a write. An `Item` with `access := .userPresence` is one behind the person's presence: `Keychain.add`
+stores it so (`addApplied` also says what the shell gave it), `Keychain.protect item` upgrades one that is
+there (whether it changed anything), `Keychain.attributes item` reads what protects it,
+`Auth.authenticate reason (keep := some 30)` answers with a `context`, `Keychain.get item (context := some id)`
+reads under it, and `Auth.end id` ends it. The raw `Effects.ask`/`cap` stay for everything else. The `name`/`code` of `auth`, the
 `status` of `keychain.get`, `keychain.add`, and the `code`/`domain` of `http.get` are additions to the
 answers above that leave every existing field as it was. `LeanNativeTest/Clients.lean` (`make check`) reads
 `LeanNativeTest/fixtures/clients.json`, written from this section and the capability table rather than from
@@ -605,7 +673,9 @@ drops, and journeys lost taps.
 drive the app with nothing rendered: `LEANNATIVE_DRIVER=wire <journeys> <evidence dir>`
 (`LeanNative.Journey.Wire`; the executable's `main` passes the app as `Journey.main`'s `wire`). The journeys
 executable runs the app as a child of itself with a fake shell (a Keychain kept in a file, authentication that
-says yes, paths under `<evidence dir>/wire`, a clipboard, no network, no Bluetooth, no iCloud account) and
+says yes and with `keep` gives a context, which `auth.end` and the app's going to the background end (there is
+no clock: not its time), an item behind the person's presence that is read only under a live one, `-25308`
+otherwise, paths under `<evidence dir>/wire`, a clipboard, no network, no Bluetooth, no iCloud account) and
 answers each step from the current view: an element is what a person would see (the selected tab, under the
 innermost sheet, under its alert), its text what XCTest reads from the view the identifier lands on, a tap the
 event the node advertises, sent through `Session.step` as the shell sends a touch; a node that advertises no
@@ -692,9 +762,11 @@ DEVICE=<UDID or name> DEVELOPMENT_TEAM=<team> framework/native/ci/device-run <ev
 It builds native-demo signed with the team's development profile already on the Mac (one that lists the
 device; Xcode asks Apple for nothing), checks that it has no Swift, installs it, and launches it with its
 console (`devicectl … --console`), so the app's stdout is the run's record: the selftest
-(`NATIVEDEMO_SELFTEST`), Face ID asked 8 s after launch (`NATIVEDEMO_AUTH_AFTER`) and the Bluetooth section
-(`NATIVEDEMO_BLE_SERVICE`, a Ledger Nano X's service by default). The person goes first: Face ID when it
-asks, then Probes → BLE state and BLE connect with the peripheral awake (the script waits up to 5 minutes).
+(`NATIVEDEMO_SELFTEST`), whose `keychain-user-presence` asks for Face ID once, within seconds of the launch
+(`NATIVEDEMO_KEYCHAIN_PROMPT`), Face ID asked again 8 s after launch or once the first is answered
+(`NATIVEDEMO_AUTH_AFTER`) and the Bluetooth section
+(`NATIVEDEMO_BLE_SERVICE`, a Ledger Nano X's service by default). The person goes first: Face ID each of the
+two times it asks, then Probes → BLE state and BLE connect with the peripheral awake (the script waits up to 5 minutes).
 Then, once the selftest has scheduled its background tasks, lldb has iOS launch the refresh task and then
 launch and expire the processing task (`ci/device_bgtasks.py`). lldb holds the app stopped while it attaches,
 a minute or two when it has no copy of the device's iOS and reads the system libraries from the device, and
@@ -710,6 +782,7 @@ the console: `passed`, `failed` (the line is quoted) or `not reached`, never inf
 | `selftest`, `tcp`, `background-run`, `effect-scope` | the selftest on a device: Lean's libuv TCP, BackgroundRun's completion and expiry, EffectScope's drain | headless |
 | `keychain-device-only` | the typed client's create-only `add`, `alreadyExists`, read, delete, read after delete, in the shell's device-only class (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`) | headless |
 | `keychain-classes` | a `synchronizable` item written and read, and unseen by a device-only read (`-25300`) | headless |
+| `keychain-user-presence` | an item behind the person's presence: added so and its flag read back; another upgraded in place (`protect`, and again, changing nothing); both refused to a read without an authentication (`-25308`), nobody asked; then, after one Face ID answer (`auth` with `keep`), both read under it, the second with no second prompt, and the first refused again after `auth.end`; `set` over one and a `synchronizable` one refused; nothing left behind. The selftest's line `keychain-user-presence: PASS: …` says each | the person, once |
 | `bgtask-schedule` | `bgtask.refreshStatus` `available`; `bgtask.schedule` accepted for both tasks (the simulator and the Mac answer `unavailable`); an unlisted identifier refused | headless |
 | `bgtask-launch` | iOS launches the refresh task (`{"bgtask":…}`); its BackgroundRun completes and answers `bgtask.complete` | lldb |
 | `bgtask-expiration` | iOS launches the processing task and expires it (`{"bgtaskExpired":…}`); its run ends `expired` | lldb |
@@ -725,6 +798,11 @@ the selftest, Face ID and BLE passed; its lldb step was an earlier version and r
 the hand steps. No single run has all twelve: in the runs that tried, Face ID was answered while lldb held
 the app (stale), or lldb did not get through (it crashed once while the app ran between expressions, and once
 could not resolve `NSClassFromString`, hence the `@import Foundation` now sent first, not yet run on a device).
+
+`keychain-user-presence` was added after those runs and no device has printed its line yet: the simulator
+(iOS 27.2) answers `NOT ENFORCED`, its Keychain giving the value without an authentication. The device needs a
+passcode. Not shown by it: that a kept authentication ends at its time and when the app goes to the
+background (a hand check: answer, wait, read), and anything on a Mac.
 
 Not covered: the Keychain item's class is the shell's code path (the run shows the classes kept apart, not
 the attribute read back), and nothing reads an item while the device is locked; a background task iOS

@@ -25,12 +25,21 @@ structure Capability where
 set_option maxRecDepth 8000 in
 def capabilities : List Capability :=
 [
-  { name := "auth", args := "`reason`", result := "`{\"ok\":true}` or `{\"ok\":false,\"error\":…,\"name\":…,\"code\":…,\"domain\":…}` (device-owner authentication; `error` is the system's text, `name` and `code` the `LAError` (`domain` the error's, so a non-`LAError` answer, named `unknown`, can be told apart): `userCancel`, `systemCancel`, `appCancel`, `userFallback`, `authenticationFailed`, `biometryLockout`, `passcodeNotSet`, `biometryNotAvailable`, `biometryNotEnrolled`, `notInteractive`, `invalidContext` or `unknown`)",
+  { name := "auth", args := "`reason`, `keep`?", result := "`{\"ok\":true}` or `{\"ok\":false,\"error\":…,\"name\":…,\"code\":…,\"domain\":…}` (device-owner authentication; `error` is the system's text, `name` and `code` the `LAError` (`domain` the error's, so a non-`LAError` answer, named `unknown`, can be told apart): `userCancel`, `systemCancel`, `appCancel`, `userFallback`, `authenticationFailed`, `biometryLockout`, `passcodeNotSet`, `biometryNotAvailable`, `biometryNotEnrolled`, `notInteractive`, `invalidContext` or `unknown`); with `keep` (seconds, at most 60) a yes answers `{\"ok\":true,\"context\":…}`: the authentication is kept, under an id nobody can guess, for the `keychain.get`s that name it, until the first of `auth.end`, its time, and the app entering the background (not its resigning active, which the Face ID sheet causes)",
     body := [
       .l "LAContext *context = [LAContext new];",
       .l "NSError *unable = nil;",
+      .l "// `keep`: the seconds a yes is kept for the Keychain reads that name it, at most 60; absent or not above 0, nothing is kept",
+      .l "NSNumber *asked = LNArgNumber(args, @\"keep\");",
+      .l "NSTimeInterval keep = asked ? MIN(asked.doubleValue, 60.0) : 0;",
       b "if (![context canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication error:&unable]) {" [
           .pp "#if TARGET_OS_SIMULATOR",
+          b "if (keep > 0) {" [
+              .l "// nothing was checked, so what is kept allows no interaction: it satisfies no access control, and a",
+              .l "// simulator without a passcode holds none (`keychain.add`)",
+              .l "context.interactionNotAllowed = YES;",
+              .l "answer(@{@\"ok\": @YES, @\"note\": @\"simulator without a passcode\", @\"context\": [self keepContext:context seconds:keep]});",
+              .l "return;"],
           .l "answer(@{@\"ok\": @YES, @\"note\": @\"simulator without a passcode\"});",
           .pp "#else",
           .l "answer(@{@\"ok\": @NO, @\"error\": @\"Set a device passcode first.\", @\"name\": LNAuthErrorName(unable), @\"code\": @(unable.code)});",
@@ -40,7 +49,19 @@ def capabilities : List Capability :=
       b "[context evaluatePolicy:LAPolicyDeviceOwnerAuthentication localizedReason:reason reply:^(BOOL ok, NSError *error) {" [
           .l "NSDictionary *result = ok ? @{@\"ok\": @YES} : @{@\"ok\": @NO, @\"error\": error.localizedDescription ?: @\"Authentication failed.\",",
           .l "                                                @\"name\": LNAuthErrorName(error), @\"code\": @(error.code), @\"domain\": error.domain ?: @\"\"};",
-          .l "dispatch_async(dispatch_get_main_queue(), ^{ answer(result); });"] "}];"] },
+          b "dispatch_async(dispatch_get_main_queue(), ^{" [
+              .l "// kept only while the app is in front: one already in the background has had the notification that ends it",
+              b "if (ok && keep > 0 && UIApplication.sharedApplication.applicationState != UIApplicationStateBackground) {" [
+                  .l "// the reads that name it never ask again: one this authentication does not satisfy is refused instead",
+                  .l "context.interactionNotAllowed = YES;",
+                  .l "answer(@{@\"ok\": @YES, @\"context\": [self keepContext:context seconds:keep]});",
+                  .l "return;"],
+              .l "answer(result);"] "});"] "}];"] },
+  { name := "auth.end", args := "`context` (a kept authentication's id, from `auth` with `keep`)",
+    result := "`{\"ok\":true}`: that authentication is ended (`[LAContext invalidate]`) and its id unknown from here on; also when it had ended already, or never was",
+    body := [
+      .l "[self endContext:LNArgString(args, @\"context\")];",
+      .l "answer(@{@\"ok\": @YES});"] },
   { name := "webauth", args := "`url`, `callbackHost` and `callbackPath` (an https callback: iOS 17.4 and later, with the host in the app's `webcredentials:` associated domains) or `callbackScheme` (a custom scheme), `ephemeral`?",
     result := "`{\"ok\":true,\"url\":…}` (the callback URL the sign-in ended at, query and all) or `{\"ok\":false,\"error\":…,\"name\":…,\"code\":…,\"domain\":…}`: a sign-in in the system browser (`ASWebAuthenticationSession`, with the browser's cookies unless `ephemeral`); `name` is the `ASWebAuthenticationSessionError` (`canceledLogin`, `presentationContextNotProvided`, `presentationContextInvalid`), `unsupported` (an https callback below iOS 17.4), `bad-url`, `bad-callback`, or `busy` (one sign-in at a time)",
     body := [
@@ -51,11 +72,13 @@ def capabilities : List Capability :=
       .l "NSString *host = LNArgString(args, @\"callbackHost\"), *path = LNArgString(args, @\"callbackPath\"), *scheme = LNArgString(args, @\"callbackScheme\");",
       .l "BOOL ephemeral = [LNArgNumber(args, @\"ephemeral\") boolValue];",
       .l "[LNWebAuth.shared start:url host:host path:path scheme:scheme ephemeral:ephemeral answer:answer];"] },
-  { name := "keychain.get", args := "`key`, `service`?, `synchronizable`?, `hex`?",
-    result := "`{\"value\":…,\"status\":…}` or `{\"value\":null,\"status\":…}` (`service` defaults to the bundle id; `status` is the `OSStatus`: `-25300` for no such item); with `hex`, `{\"hex\":…|null,\"status\":…}`: the raw bytes",
+  { name := "keychain.get", args := "`key`, `service`?, `synchronizable`?, `hex`?, `context`?",
+    result := "`{\"value\":…,\"status\":…}` or `{\"value\":null,\"status\":…}` (`service` defaults to the bundle id; `status` is the `OSStatus`: `-25300` for no such item); with `hex`, `{\"hex\":…|null,\"status\":…}`: the raw bytes. It never asks the person and never holds the main thread for them: an item behind the person's presence (`keychain.add` with `access`, `keychain.protect`) is read under the kept authentication `context` names (`auth` with `keep`), and with none, or one that has ended or never was, answers `-25308` (`errSecInteractionNotAllowed`)",
     body := [
       .l "NSMutableDictionary *query = [self base:args];",
       .l "query[(__bridge id)kSecReturnData] = @YES;",
+      .l "// never a prompt: the kept authentication the request names, else a context that allows no interaction",
+      .l "query[(__bridge id)kSecUseAuthenticationContext] = [self liveContext:LNArgString(args, @\"context\")] ?: [self noInteraction];",
       .l "if ([self synchronizable:args]) query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;",
       .l "CFTypeRef out = NULL;",
       .l "OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &out);",
@@ -65,39 +88,73 @@ def capabilities : List Capability :=
           .l "return;"],
       .l "NSString *s = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;",
       .l "answer(@{@\"value\": s ?: NSNull.null, @\"status\": @(status)});"] },
-  { name := "keychain.add", args := "`key`, `value` or `hex`, `service`?, `synchronizable`?",
-    result := "`{\"ok\":…,\"status\":…,\"exists\":…}`: creates the item only if there is none (one `SecItemAdd`; `-25299`, `errSecDuplicateItem`, with `exists` when there is, and the item is untouched); protection as `keychain.set`",
+  { name := "keychain.add", args := "`key`, `value` or `hex`, `service`?, `synchronizable`?, `access`? (`userPresence`)",
+    result := "`{\"ok\":…,\"status\":…,\"exists\":…}`: creates the item only if there is none (one `SecItemAdd`; `-25299`, `errSecDuplicateItem`, with `exists` when there is, and the item is untouched); protection as `keychain.set`. With `access`: `userPresence` the item is behind the person's presence instead: an access control (`SecAccessControlCreateWithFlags`, `kSecAccessControlUserPresence` over `WhenUnlockedThisDeviceOnly`) in place of the protection class, so the Keychain gives its value only after Face ID, Touch ID or the passcode, and the answer says `\"access\":\"userPresence\"`; refused with `-50` for a `synchronizable` item or any other `access`. A device without a passcode refuses it (`-25293`, nothing stored); a simulator whose Keychain refuses it so stores the item in the plain class, there only, and says `\"access\":\"unlocked\"`",
     body := [
       .l "NSString *hex = LNArgString(args, @\"hex\");",
       .l "NSData *data = hex ? LNDataOf(hex) : [(LNArgString(args, @\"value\") ?: @\"\") dataUsingEncoding:NSUTF8StringEncoding];",
       .l "if (!data) { answer(@{@\"ok\": @NO, @\"status\": @(errSecParam), @\"exists\": @NO}); return; }",
+      .l "int access = [self access:args];",
+      .l "// an access control is one device's: an item that syncs cannot have one",
+      .l "if (access < 0 || (access == 1 && [self synchronizable:args])) { answer(@{@\"ok\": @NO, @\"status\": @(errSecParam), @\"exists\": @NO}); return; }",
       .l "NSMutableDictionary *query = [self base:args];",
       .l "query[(__bridge id)kSecValueData] = data;",
+      b "if (access == 1) {" [
+          .l "OSStatus status = errSecSuccess;",
+          .l "NSString *applied = @\"userPresence\";",
+          .l "NSDictionary *presence = [self userPresence:&status];",
+          b "if (presence) {" [
+              .l "[query addEntriesFromDictionary:presence];",
+              .l "status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);"],
+          .pp "#if TARGET_OS_SIMULATOR",
+          .l "// a simulator has no passcode to set: where its Keychain refuses the access control for want of one, there",
+          .l "// and only there, the item is stored in the plain class and the answer says so, as `auth` notes a simulator",
+          .l "// without a passcode. A device fails closed: the status, and nothing stored",
+          b "if (!presence || status == errSecAuthFailed) {" [
+              .l "[query removeObjectsForKeys:@[(__bridge id)kSecAttrAccessControl, (__bridge id)kSecAttrGeneric]];",
+              .l "query[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly;",
+              .l "status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);",
+              .l "applied = @\"unlocked\";"],
+          .pp "#endif",
+          .l "NSMutableDictionary *result = [@{@\"ok\": @((BOOL)(status == errSecSuccess)), @\"status\": @(status),",
+          .l "                                 @\"exists\": @((BOOL)(status == errSecDuplicateItem))} mutableCopy];",
+          .l "if (status == errSecSuccess) result[@\"access\"] = applied;",
+          .l "answer(result);",
+          .l "return;"],
       .l "query[(__bridge id)kSecAttrAccessible] = [self synchronizable:args] ? (__bridge id)kSecAttrAccessibleWhenUnlocked",
       .l "                                                                    : (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly;",
       .l "// no delete first: the Keychain refuses a second item of the same name, so racing adds cannot both succeed",
       .l "OSStatus status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);",
       .l "answer(@{@\"ok\": @((BOOL)(status == errSecSuccess)), @\"status\": @(status), @\"exists\": @((BOOL)(status == errSecDuplicateItem))});"] },
   { name := "keychain.set", args := "`key`, `value` or `hex`, `service`?, `synchronizable`?",
-    result := "`{\"ok\":…,\"status\":…}` (the `OSStatus`; `-50` for bad hex): the item's value is replaced in place (`SecItemUpdate`; `SecItemAdd` when there is no item), so a write that fails leaves the old value; this device only, while unlocked; with `synchronizable`, iCloud Keychain (`kSecAttrSynchronizable`), while unlocked",
+    result := "`{\"ok\":…,\"status\":…}` (the `OSStatus`; `-50` for bad hex): the item's value is replaced in place (`SecItemUpdate`; `SecItemAdd` when there is no item), so a write that fails leaves the old value; this device only, while unlocked; with `synchronizable`, iCloud Keychain (`kSecAttrSynchronizable`), while unlocked. It neither makes nor rewrites an item behind the person's presence: with `access` it answers `-50`, and over such an item `-25308`, the item as it was: its attributes are looked at first, and the update runs under no interaction besides (`keychain.add` makes one, `keychain.protect` upgrades one)",
     body := [
       .l "NSString *hex = LNArgString(args, @\"hex\");",
       .l "NSData *data = hex ? LNDataOf(hex) : [(LNArgString(args, @\"value\") ?: @\"\") dataUsingEncoding:NSUTF8StringEncoding];",
       .l "if (!data) { answer(@{@\"ok\": @NO, @\"status\": @(errSecParam)}); return; }",
+      .l "// never an item behind an access control from here, made or rewritten: `keychain.add` makes one",
+      .l "if ([self access:args] != 0) { answer(@{@\"ok\": @NO, @\"status\": @(errSecParam)}); return; }",
+      .l "// nor is one that is there rewritten: its attributes say it is one (never its value), and it stays as it was.",
+      .l "// The Keychain refuses the same of itself where it enforces an access control; a simulator's does not",
+      .l "OSStatus found = errSecSuccess;",
+      .l "if ([self marked:[self attributes:args status:&found]] || [self heldBack:found]) { answer(@{@\"ok\": @NO, @\"status\": @(errSecInteractionNotAllowed)}); return; }",
       .l "// an item that syncs cannot be this-device-only",
       .l "id accessible = [self synchronizable:args] ? (__bridge id)kSecAttrAccessibleWhenUnlocked",
       .l "                                           : (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly;",
       .l "NSDictionary *changes = @{(__bridge id)kSecValueData: data, (__bridge id)kSecAttrAccessible: accessible};",
       .l "// in place, never a delete and then an add: a write the Keychain refuses (the device locked, say) leaves",
-      .l "// the old value where it was",
-      .l "OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)[self base:args], (__bridge CFDictionaryRef)changes);",
+      .l "// the old value where it was. Under no interaction: the Keychain would ask the person, on this thread, before",
+      .l "// it rewrote an item behind an access control, and is refused instead (-25308), that item as it was",
+      .l "NSMutableDictionary *target = [self base:args];",
+      .l "target[(__bridge id)kSecUseAuthenticationContext] = [self noInteraction];",
+      .l "OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)target, (__bridge CFDictionaryRef)changes);",
       b "if (status == errSecItemNotFound) {" [
           .l "NSMutableDictionary *item = [self base:args];",
           .l "[item addEntriesFromDictionary:changes];",
           .l "status = SecItemAdd((__bridge CFDictionaryRef)item, NULL);",
           .l "// added by another writer in between: theirs is the item to update",
           .l "if (status == errSecDuplicateItem)",
-          .l "    status = SecItemUpdate((__bridge CFDictionaryRef)[self base:args], (__bridge CFDictionaryRef)changes);"],
+          .l "    status = SecItemUpdate((__bridge CFDictionaryRef)target, (__bridge CFDictionaryRef)changes);"],
       .l "answer(@{@\"ok\": @((BOOL)(status == errSecSuccess)), @\"status\": @(status)});"] },
   { name := "keychain.delete", args := "`key`, `service`?, `synchronizable`?", result := "`{\"ok\":…,\"status\":…}`",
     body := [
@@ -112,6 +169,48 @@ def capabilities : List Capability :=
       .l "if ([self synchronizable:args]) query[(__bridge id)kSecAttrSynchronizable] = @YES;",
       .l "OSStatus status = SecItemDelete((__bridge CFDictionaryRef)query);",
       .l "answer(@{@\"ok\": @((BOOL)(status == errSecSuccess || status == errSecItemNotFound)), @\"status\": @(status)});"] },
+  { name := "keychain.protect", args := "`key`, `service`?, `access`? (`userPresence`, the only one)",
+    result := "`{\"ok\":…,\"status\":…,\"changed\":…}`: puts an item that is there behind the person's presence, in place: its attributes are read (never its value), and unless it is so already one `SecItemUpdate` gives it the access control of `keychain.add` with `access`. It never deletes the item and never adds it again; a refusal leaves it as it was and answers the status (`-25300` for no such item, `-50` for a `synchronizable` one). `changed` is false for an item already behind it. With `ok`, `\"access\":\"userPresence\"`; a simulator whose Keychain refuses the access control for want of a passcode leaves the item as it is and answers `\"changed\":false,\"access\":\"unlocked\"`",
+    body := [
+      .l "// an access control is one device's: an item that syncs cannot have one; and the person's presence is the only one",
+      .l "if ((args[@\"access\"] && [self access:args] != 1) || [self synchronizable:args]) { answer(@{@\"ok\": @NO, @\"status\": @(errSecParam), @\"changed\": @NO}); return; }",
+      .l "OSStatus status = errSecSuccess;",
+      .l "NSDictionary *attributes = [self attributes:args status:&status];",
+      .l "// a device's Keychain gives nothing of an item behind an access control without the person, its attributes",
+      .l "// included: on an unlocked device that refusal is the answer, the item is so already (`heldBack:`)",
+      .l "if (!attributes && [self heldBack:status]) { answer(@{@\"ok\": @YES, @\"status\": @(errSecSuccess), @\"changed\": @NO, @\"access\": @\"userPresence\"}); return; }",
+      .l "if (!attributes) { answer(@{@\"ok\": @NO, @\"status\": @(status), @\"changed\": @NO}); return; }",
+      .l "if ([self marked:attributes]) { answer(@{@\"ok\": @YES, @\"status\": @(errSecSuccess), @\"changed\": @NO, @\"access\": @\"userPresence\"}); return; }",
+      .l "NSDictionary *presence = [self userPresence:&status];",
+      b "if (presence) {" [
+          .l "// one update, in place: never a delete and then an add, and the value is not read. A refusal leaves the",
+          .l "// item as it was",
+          .l "NSMutableDictionary *item = [self base:args];",
+          .l "item[(__bridge id)kSecUseAuthenticationContext] = [self noInteraction];",
+          .l "status = SecItemUpdate((__bridge CFDictionaryRef)item, (__bridge CFDictionaryRef)presence);"],
+      .pp "#if TARGET_OS_SIMULATOR",
+      .l "// a simulator whose Keychain refuses the access control (`keychain.add`): the item stays as it is, and the",
+      .l "// answer says so. A device answers the status",
+      .l "if (!presence || status == errSecAuthFailed) { answer(@{@\"ok\": @YES, @\"status\": @(errSecSuccess), @\"changed\": @NO, @\"access\": @\"unlocked\"}); return; }",
+      .pp "#endif",
+      .l "if (status != errSecSuccess) { answer(@{@\"ok\": @NO, @\"status\": @(status), @\"changed\": @NO}); return; }",
+      .l "answer(@{@\"ok\": @YES, @\"status\": @(status), @\"changed\": @YES, @\"access\": @\"userPresence\"});"] },
+  { name := "keychain.attributes", args := "`key`, `service`?, `synchronizable`?",
+    result := "`{\"status\":…,\"accessible\":…|null,\"userPresence\":bool,\"synchronizable\":bool}`: what protects the item, never its value (`kSecReturnAttributes`), so nobody is asked: `accessible` is its protection class (`whenUnlocked`, `whenUnlockedThisDeviceOnly`, `afterFirstUnlock`, `afterFirstUnlockThisDeviceOnly`, `whenPasscodeSetThisDeviceOnly`, another as the system names it, or null when the system does not say), `userPresence` whether it is behind the person's presence (the marker `keychain.add` and `keychain.protect` write with the access control, which cannot itself be read back); `status` is `-25300` for no such item, the rest then null and false",
+    body := [
+      .l "OSStatus status = errSecSuccess;",
+      .l "NSDictionary *attributes = [self attributes:args status:&status];",
+      .l "// an item behind an access control, on a device: the Keychain holds its attributes back too, and that is what",
+      .l "// is known of it (`heldBack:`). Its protection class is not",
+      .l "if (!attributes && [self heldBack:status]) { answer(@{@\"status\": @(errSecSuccess), @\"accessible\": NSNull.null, @\"userPresence\": @YES, @\"synchronizable\": @NO}); return; }",
+      .l "NSDictionary *names = @{(__bridge id)kSecAttrAccessibleWhenUnlocked: @\"whenUnlocked\",",
+      .l "                        (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly: @\"whenUnlockedThisDeviceOnly\",",
+      .l "                        (__bridge id)kSecAttrAccessibleAfterFirstUnlock: @\"afterFirstUnlock\",",
+      .l "                        (__bridge id)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly: @\"afterFirstUnlockThisDeviceOnly\",",
+      .l "                        (__bridge id)kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly: @\"whenPasscodeSetThisDeviceOnly\"};",
+      .l "id accessible = attributes[(__bridge id)kSecAttrAccessible];",
+      .l "answer(@{@\"status\": @(status), @\"accessible\": [accessible isKindOfClass:NSString.class] ? (names[accessible] ?: accessible) : NSNull.null,",
+      .l "         @\"userPresence\": @((BOOL)[self marked:attributes]), @\"synchronizable\": @((BOOL)[attributes[(__bridge id)kSecAttrSynchronizable] boolValue])});"] },
   { name := "timezone", args := "`at`?", result := "`{\"id\":…,\"offset\":…}` the device's time zone: its identifier (`Europe/Paris`) and its seconds east of UTC, now or at `at` (Unix seconds), so an app can say a time as the person's clock does",
     body := [
       .l "NSTimeZone *zone = NSTimeZone.localTimeZone;",
@@ -507,7 +606,10 @@ def capsBefore : List Stmt := [
     .blank,
     .l "@end",
     .blank,
-    .l "@implementation LNCapabilities",
+    b "@implementation LNCapabilities {" [
+        .l "/// The authentications `auth` kept (`keep`), by id: each its context and when it ends (the system's uptime).",
+        .l "/// Main thread only, as every capability is.",
+        .l "NSMutableDictionary<NSString *, NSArray *> *_kept;"],
     .blank,
     .l "/// Whether a keychain request is about iCloud Keychain items (`synchronizable`: true).",
     b "- (BOOL)synchronizable:(NSDictionary *)args {" [
@@ -522,6 +624,106 @@ def capsBefore : List Stmt := [
         .l "                                (__bridge id)kSecAttrAccount: LNArgString(args, @\"key\") ?: @\"\"} mutableCopy];",
         .l "if ([self synchronizable:args]) query[(__bridge id)kSecAttrSynchronizable] = @YES;",
         .l "return query;"],
+    .blank]
+
+set_option maxRecDepth 8000 in
+/-- The kept authentications (`auth` with `keep`), for `auth.*` and for `keychain.*`, whose reads run under one:
+methods of `LNCapabilities`. They name LocalAuthentication, so an app with neither family does not get them (nor,
+then, the framework). -/
+def keptContexts : List Stmt := [
+    .l "/// Keeps an authentication for `seconds`, under a new id nobody can guess: the Keychain reads that name it run",
+    .l "/// under `context`. It ends (`[context invalidate]`, its id unknown from then on) at the first of `auth.end`, its",
+    .l "/// time, and the app entering the background; not when the app resigns active, which the Face ID sheet itself",
+    .l "/// causes. Any number of reads may use it until then.",
+    b "- (NSString *)keepContext:(LAContext *)context seconds:(NSTimeInterval)seconds {" [
+        b "if (!_kept) {" [
+            .l "_kept = [NSMutableDictionary dictionary];",
+            .l "// the app's entering the background, and its scene's (the shell has one scene: the same moment)",
+            .l "for (NSNotificationName left in @[UIApplicationDidEnterBackgroundNotification, UISceneDidEnterBackgroundNotification])",
+            .l "    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(endContexts) name:left object:nil];"],
+        .l "NSString *name = NSUUID.UUID.UUIDString;",
+        .l "_kept[name] = @[context, @(NSProcessInfo.processInfo.systemUptime + seconds)];",
+        .l "__weak typeof(self) weak = self;",
+        .l "dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [weak endContext:name]; });",
+        .l "return name;"],
+    .blank,
+    b "- (void)endContext:(nullable NSString *)name {" [
+        .l "NSArray *kept = name ? _kept[name] : nil;",
+        .l "if (!kept) return;",
+        .l "[(LAContext *)kept[0] invalidate];",
+        .l "[_kept removeObjectForKey:name];"],
+    .blank,
+    b "- (void)endContexts {" [
+        .l "for (NSString *name in _kept.allKeys) [self endContext:name];"],
+    .blank,
+    .l "/// The kept authentication an id names, while it lives: nil for one that has ended, or never was, which a request",
+    .l "/// that names it is then answered as one that names none.",
+    b "- (nullable LAContext *)liveContext:(nullable NSString *)name {" [
+        .l "NSArray *kept = name ? _kept[name] : nil;",
+        .l "if (!kept) return nil;",
+        .l "if (NSProcessInfo.processInfo.systemUptime >= [kept[1] doubleValue]) { [self endContext:name]; return nil; }",
+        .l "return kept[0];"],
+    .blank]
+
+set_option maxRecDepth 8000 in
+/-- What `keychain.*` needs for an item behind the person's presence: methods of `LNCapabilities`, for an app that
+uses the family. -/
+def keychainAccess : List Stmt := [
+    .l "/// A keychain request's `access`: 0 when absent or `unlocked` (the protection class alone), 1 for `userPresence`",
+    .l "/// (an access control: the person, for every read of the value), -1 for anything else, which is refused.",
+    b "- (int)access:(NSDictionary *)args {" [
+        .l "id access = args[@\"access\"];",
+        .l "if (!access || access == NSNull.null) return 0;",
+        .l "if (![access isKindOfClass:NSString.class]) return -1;",
+        .l "if ([access isEqualToString:@\"unlocked\"]) return 0;",
+        .l "return [access isEqualToString:@\"userPresence\"] ? 1 : -1;"],
+    .blank,
+    .l "/// An authentication context that allows no interaction. Every keychain call that reads an item, or rewrites one",
+    .l "/// that is there, runs under one, or under a kept authentication (`liveContext:`), itself made so: the Keychain",
+    .l "/// never asks the person from inside a capability, and never holds the main thread for their answer. What it",
+    .l "/// would have asked for, it refuses (errSecInteractionNotAllowed, -25308).",
+    b "- (LAContext *)noInteraction {" [
+        .l "LAContext *context = [LAContext new];",
+        .l "context.interactionNotAllowed = YES;",
+        .l "return context;"],
+    .blank,
+    .l "/// What puts an item behind the person's presence: an access control in place of a protection class (this device",
+    .l "/// only, while unlocked, and Face ID, Touch ID or the passcode for every read of the value), and the marker",
+    .l "/// `marked:` reads back, since an access control cannot be. nil, with `status`, when the system makes none.",
+    b "- (nullable NSDictionary *)userPresence:(OSStatus *)status {" [
+        .l "CFErrorRef error = NULL;",
+        .l "SecAccessControlRef control = SecAccessControlCreateWithFlags(NULL, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, kSecAccessControlUserPresence, &error);",
+        .l "OSStatus failed = error ? (OSStatus)CFErrorGetCode(error) : errSecParam;",
+        .l "if (error) CFRelease(error);",
+        b "if (!control) {" [
+            .l "*status = failed == errSecSuccess ? errSecParam : failed;",
+            .l "return nil;"],
+        .l "return @{(__bridge id)kSecAttrAccessControl: (__bridge_transfer id)control,",
+        .l "         (__bridge id)kSecAttrGeneric: [@\"user-presence\" dataUsingEncoding:NSUTF8StringEncoding]};"],
+    .blank,
+    .l "/// Whether an item's attributes carry the marker of one behind the person's presence (kSecAttrGeneric).",
+    b "- (BOOL)marked:(nullable NSDictionary *)attributes {" [
+        .l "return [attributes[(__bridge id)kSecAttrGeneric] isEqual:[@\"user-presence\" dataUsingEncoding:NSUTF8StringEncoding]];"],
+    .blank,
+    .l "/// Whether the Keychain's refusal to give an item's attributes says the item is behind an access control. A",
+    .l "/// device's Keychain gives nothing of such an item to a query that allows no interaction, not even its",
+    .l "/// attributes (errSecInteractionNotAllowed), so the marker cannot be read there; a simulator's gives them. The",
+    .l "/// same status is what a locked device answers for any item, so it counts only while protected data is",
+    .l "/// available, which is to say while the device is unlocked.",
+    b "- (BOOL)heldBack:(OSStatus)status {" [
+        .l "return status == errSecInteractionNotAllowed && UIApplication.sharedApplication.isProtectedDataAvailable;"],
+    .blank,
+    .l "/// An item's attributes and never its value (kSecReturnAttributes), which the Keychain gives without anyone's",
+    .l "/// authentication; nil, with `status`, when there is no such item or the Keychain refuses.",
+    b "- (nullable NSDictionary *)attributes:(NSDictionary *)args status:(OSStatus *)status {" [
+        .l "NSMutableDictionary *query = [self base:args];",
+        .l "query[(__bridge id)kSecReturnAttributes] = @YES;",
+        .l "query[(__bridge id)kSecUseAuthenticationContext] = [self liveContext:LNArgString(args, @\"context\")] ?: [self noInteraction];",
+        .l "if ([self synchronizable:args]) query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;",
+        .l "CFTypeRef out = NULL;",
+        .l "*status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &out);",
+        .l "NSDictionary *attributes = *status == errSecSuccess ? (__bridge_transfer NSDictionary *)out : nil;",
+        .l "return [attributes isKindOfClass:NSDictionary.class] ? attributes : nil;"],
     .blank]
 
 /-- The arguments of a request, by kind (nil when absent or of another JSON kind). -/
@@ -980,12 +1182,16 @@ def bluetoothClass : List Stmt := [
 /-- The statements before the first declaration: the imports. -/
 def capsImports : Nat := (capsBefore.findIdx? fun | .l _ | .blk .. => true | _ => false).getD 0
 
-/-- Whether `uses` (`auth`, `ble.*`, `ble.connect`) selects the capability named `name`. -/
+/-- Whether `uses` (`auth`, `ble.*`, `ble.connect`) selects the capability named `name`. `auth` selects
+`auth.end` with it: an app that asks for an authentication can end one the shell kept for it, and an app
+written before there was an `auth.end` lists only `auth`. -/
 def selects (uses : List String) (name : String) : Bool :=
   uses.any fun u => u == name || (u.endsWith ".*" && (u.splitOn ".").headD u == (name.splitOn ".").headD name)
+    || (u == "auth" && name == "auth.end")
 
 /-- `LNCapabilities.m` for an app that uses `uses` (none: every capability, which `leannative-shell` prints).
-Only what a selected capability needs is printed: without `auth` there is no LocalAuthentication, without `webauth`
+Only what a selected capability needs is printed: without `auth` and without a `keychain.*` capability (whose reads
+run under an authentication context, so that the Keychain never asks the person itself) there is no LocalAuthentication, without `webauth`
 no AuthenticationServices and no `LNWebAuth`, and without a `ble.*` capability no CoreBluetooth and no `LNBluetooth`, so the binary does not link a framework that App Store
 Connect then asks a purpose string for. Without a `push.*` capability there is no UserNotifications, no `LNPush` and none of the app
 delegate's push methods: Apple writes to the developer of a binary that has those and no push entitlement. Any other request answers `unknownCapability`, and
@@ -995,17 +1201,19 @@ def capsFileFor (uses : Option (List String)) : List Stmt :=
     | none => capabilities
     | some us => capabilities.filter (selects us ·.name)
   let has (fam : String) := chosen.any fun c => (c.name.splitOn ".").headD c.name == fam
-  let auth := chosen.any (·.name == "auth")
+  let auth := has "auth"
+  let keychain := has "keychain"
   let webauth := chosen.any (·.name == "webauth")
   let ble := has "ble"
   let push := has "push"
   let imports := (capsBefore.take capsImports).filter fun
-    | .pp t => (auth || !t.contains "LocalAuthentication") && (ble || !t.contains "CoreBluetooth")
+    | .pp t => (auth || keychain || !t.contains "LocalAuthentication") && (ble || !t.contains "CoreBluetooth")
         && (webauth || !t.contains "AuthenticationServices") && (push || !t.contains "UserNotifications")
     | _ => true
   imports ++ argHelpers ++ (if ble then bluetoothClass ++ [.blank] else []) ++ (if webauth then webAuthClass ++ [.blank] else []) ++
   backgroundTasksClass ++ [.blank] ++
   cloudKitClass ++ [.blank] ++ (if push then pushClass ++ [.blank] else []) ++ (if auth then authErrorName else []) ++ capsBefore.drop capsImports ++
+  (if auth || keychain then keptContexts else []) ++ (if keychain then keychainAccess else []) ++
   [ b "- (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(NSDictionary *))answer {"
       [ ifChain "" (chosen.map (fun c => (s!"[name isEqualToString:{lit c.name}]", c.body)) ++ [("", unknownCapability)]) ] ] ++
   [

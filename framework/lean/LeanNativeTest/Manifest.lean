@@ -85,6 +85,9 @@ def main : IO UInt32 := do
   -- families that need nothing, and names the shell does not have
   accepted "keychain, http, clipboard, open: nothing needed" { base with
     uses := ["keychain.*", "http.get", "clipboard.*", "open", "documents", "paths"] }
+  -- auth.end is of auth's family: the same usage text
+  refused "auth.end without a Face ID text" { base with uses := ["auth", "auth.end"] } "NSFaceIDUsageDescription"
+  accepted "auth.* with one" { base with uses := ["auth.*"], usage := [("NSFaceIDUsageDescription", "Pay.")] }
   refused "an unknown capability" { base with uses := ["camera.scan"] } "camera.scan"
   refused "an unknown family" { base with uses := ["nfc.*"] } "nfc.*"
   refused "a name with a space" { base with name := "My App" } "name"
@@ -189,13 +192,74 @@ def main : IO UInt32 := do
   check "every capability: LocalAuthentication and CoreBluetooth" (every.contains "LocalAuthentication"
     && every.contains "CoreBluetooth" && every.contains "LNBluetooth" && every.contains "LNAuthErrorName")
   let http := caps (some ["http.request", "keychain.*"])
-  check "http and keychain: neither framework" (!http.contains "LocalAuthentication" && !http.contains "CoreBluetooth"
-    && !http.contains "LNBluetooth" && !http.contains "LNAuthErrorName")
+  -- a Keychain read runs under an authentication context, so that the Keychain never asks the person itself:
+  -- LocalAuthentication comes with `keychain.*`, though nothing of `auth` does
+  check "http and keychain: LocalAuthentication for the Keychain's contexts, no CoreBluetooth, nothing of auth" (
+    http.contains "#import <LocalAuthentication/LocalAuthentication.h>" && !http.contains "CoreBluetooth"
+    && !http.contains "LNBluetooth" && !http.contains "LNAuthErrorName" && !http.contains "evaluatePolicy")
   check "http and keychain: their rows, and no other" (http.contains "@\"http.request\"" && http.contains "@\"keychain.get\""
-    && !http.contains "@\"auth\"" && !http.contains "@\"ble.")
+    && !http.contains "@\"auth\"" && !http.contains "@\"auth.end\"" && !http.contains "@\"ble.")
+  let plain := caps (some ["http.request", "open"])
+  check "neither auth nor keychain: no LocalAuthentication, and none of its contexts" (!plain.contains "LocalAuthentication"
+    && !plain.contains "LAContext" && !plain.contains "kSecUseAuthenticationContext")
+  -- an item behind the person's presence: the access control and its marker, made by `add` and `protect`
+  let between (text first last : String) : String := (((text.splitOn first).getD 1 "").splitOn last).headD ""
+  let row (name : String) : String := between http s!"[name isEqualToString:@\"{name}\"]" "} else if"
+  check "keychain: the access control of an item behind the person's presence" (
+    http.contains "SecAccessControlCreateWithFlags(NULL, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, kSecAccessControlUserPresence, &error)"
+    && http.contains "kSecAttrAccessControl" && http.contains "@\"user-presence\"")
+  check "keychain.add: the access control in place of the protection class, never both" (
+    (row "keychain.add").contains "[query addEntriesFromDictionary:presence];"
+    && (row "keychain.add").contains "(access == 1 && [self synchronizable:args])) { answer(@{@\"ok\": @NO, @\"status\": @(errSecParam)"
+    && ((between (row "keychain.add") "if (access == 1) {" "#if TARGET_OS_SIMULATOR").splitOn "kSecAttrAccessible]").length == 1)
+  -- the Keychain never asks the person: every read, and every rewrite of an item that is there, names a context
+  check "keychain: a context that allows no interaction" (http.contains "context.interactionNotAllowed = YES;")
+  check "keychain: a device's refusal of a protected item's attributes is read as that, only while unlocked"
+    ((between http "- (BOOL)heldBack:" "\n}").contains "status == errSecInteractionNotAllowed && UIApplication.sharedApplication.isProtectedDataAvailable"
+     && (row "keychain.protect").contains "if (!attributes && [self heldBack:status])"
+     && (row "keychain.attributes").contains "if (!attributes && [self heldBack:status])"
+     && (row "keychain.set").contains "|| [self heldBack:found]")
+  check "keychain.get: always under a context, the kept one or one that allows no interaction" (
+    (row "keychain.get").contains "query[(__bridge id)kSecUseAuthenticationContext] = [self liveContext:LNArgString(args, @\"context\")] ?: [self noInteraction];")
+  check "keychain.attributes and keychain.protect: attributes only, under a context" (
+    (between http "- (nullable NSDictionary *)attributes:" "\n}").contains "kSecUseAuthenticationContext"
+    && (between http "- (nullable NSDictionary *)attributes:" "\n}").contains "kSecReturnAttributes"
+    && !(between http "- (nullable NSDictionary *)attributes:" "\n}").contains "kSecReturnData"
+    && (row "keychain.attributes").contains "[self attributes:args status:&status]"
+    && (row "keychain.protect").contains "[self attributes:args status:&status]")
+  check "keychain.set: its update under no interaction, and no item behind an access control made" (
+    (row "keychain.set").contains "target[(__bridge id)kSecUseAuthenticationContext] = [self noInteraction];"
+    && (row "keychain.set").contains "if ([self access:args] != 0)" && !(row "keychain.set").contains "kSecAttrAccessControl"
+    && (row "keychain.set").contains "if ([self marked:[self attributes:args status:&found]] || [self heldBack:found]) { answer(@{@\"ok\": @NO, @\"status\": @(errSecInteractionNotAllowed)}); return; }")
+  -- protect: one update in place; it never deletes, never adds, never reads the value
+  check "keychain.protect: one SecItemUpdate, no delete, no add, no value" ((row "keychain.protect").contains "SecItemUpdate("
+    && ((row "keychain.protect").splitOn "SecItemUpdate(").length == 2 && !(row "keychain.protect").contains "SecItemDelete"
+    && !(row "keychain.protect").contains "SecItemAdd" && !(row "keychain.protect").contains "kSecReturnData"
+    && !(row "keychain.protect").contains "kSecValueData")
+  -- a simulator without a passcode alone stores the plain class; a device's refusal is its answer
+  let fallback (name : String) : Bool :=
+    match (row name).splitOn "#if TARGET_OS_SIMULATOR" with
+    | [before, rest] => (rest.splitOn "#endif").length == 2 && ((rest.splitOn "#endif").headD "").contains "@\"unlocked\""
+        && !before.contains "@\"unlocked\"" && !((rest.splitOn "#endif").getD 1 "").contains "@\"unlocked\""
+    | _ => false
+  check "keychain.add and keychain.protect: the plain class only on a simulator" (fallback "keychain.add" && fallback "keychain.protect")
+  -- a kept authentication: an unguessable id, and its end at the first of auth.end, its time and the background
+  check "auth: a kept authentication under an unguessable id, at most 60 s" (every.contains "NSUUID.UUID.UUIDString"
+    && every.contains "MIN(asked.doubleValue, 60.0)" && every.contains "[self keepContext:context seconds:keep]")
+  check "auth: it ends when the app enters the background, not when it resigns active" (
+    every.contains "UIApplicationDidEnterBackgroundNotification" && every.contains "selector:@selector(endContexts)"
+    && every.contains "[(LAContext *)kept[0] invalidate];" && !every.contains "WillResignActive")
+  check "auth: it ends at its time, and with auth.end" (every.contains "dispatch_after(" && every.contains "[weak endContext:name]"
+    && every.contains "systemUptime >= [kept[1] doubleValue]" && (between every "[name isEqualToString:@\"auth.end\"]" "} else if").contains "[self endContext:")
   let auth := caps (some ["auth"])
   check "auth: LocalAuthentication, no CoreBluetooth" (auth.contains "LocalAuthentication" && auth.contains "LNAuthErrorName"
     && !auth.contains "CoreBluetooth")
+  check "auth alone: its kept contexts, and nothing of the Keychain's" (auth.contains "- (NSString *)keepContext:"
+    && !auth.contains "SecAccessControlCreateWithFlags")
+  check "auth alone: auth.end with it, so an app that lists only auth can end what it kept" (auth.contains "@\"auth.end\""
+    && selects ["auth"] "auth.end" && covers "auth" "auth.end" && !selects ["auth.end"] "auth" && !covers "auth.end" "auth"
+    && ({ base with uses := ["auth"] }.callProblems [("auth", "A.c"), ("auth.end", "A.c")]).isEmpty)
+  check "auth.*: auth.end too" ((caps (some ["auth.*"])).contains "@\"auth.end\"" && selects ["auth.*"] "auth.end")
   let ble := caps (some ["ble.connect"])
   check "one ble capability: CoreBluetooth and LNBluetooth, no LocalAuthentication" (ble.contains "CoreBluetooth"
     && ble.contains "LNBluetooth" && !ble.contains "LocalAuthentication")

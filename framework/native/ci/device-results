@@ -44,6 +44,13 @@ CHECKS = [
       ("selftest: Keychain sync get:", r'selftest: Keychain sync get: \{"hex":"00ff10","status":0\}'),
       ("selftest: Keychain local get:", r'selftest: Keychain local get: \{"hex":null,"status":-25300\}'),
       ("selftest: Keychain sync delete:", r'selftest: Keychain sync delete: \{"ok":true,"status":0\}')]),
+    ("keychain-user-presence",
+     "an item behind the person's presence: stored and upgraded in place, refused unread, then read twice under one Face ID answer",
+     [("selftest: keychain-user-presence:",
+       r"selftest: keychain-user-presence: PASS: flag applied: yes; flag read back: yes; in-place upgrade worked: yes; "
+       r"unauthenticated read refused: yes \(-25308\); authenticated read with a kept context after ONE prompt: yes; "
+       r"second read under the same context with no second prompt: yes; refused again after auth\.end: yes \(-25308\); "
+       r"set and synchronizable refusals: yes; left nothing behind: yes")]),
     ("bgtask-schedule", "bgtask.refreshStatus and bgtask.schedule, which the simulator and the Mac refuse",
      [("selftest: Refresh status:", r'selftest: Refresh status: \{"status":"available"\}'),
       ("selftest: Schedule refresh:", r'selftest: Schedule refresh: \{"ok":true\}'),
@@ -94,10 +101,10 @@ def main(argv=None):
         lines = [l.rstrip("\r\n") for l in f]
     results = grade(lines)
     for r in results:
-        print(f"{r['result']:<12} {r['check']:<21} {r['shows']}")
+        print(f"{r['result']:<12} {r['check']:<23} {r['shows']}")
         if r["result"] == "failed":
             for l in r["lines"]:
-                print(f"{'':<12} {'':<21} {l}")
+                print(f"{'':<12} {'':<23} {l}")
     if a.out:
         counts = {k: sum(r["result"] == k for r in results) for k in ("passed", "failed", "not reached")}
         with open(a.out, "w") as f:
