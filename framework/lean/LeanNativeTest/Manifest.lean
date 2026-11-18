@@ -255,8 +255,11 @@ def main : IO UInt32 := do
   check "auth: LocalAuthentication, no CoreBluetooth" (auth.contains "LocalAuthentication" && auth.contains "LNAuthErrorName"
     && !auth.contains "CoreBluetooth")
   check "auth alone: its kept contexts, and nothing of the Keychain's" (auth.contains "- (NSString *)keepContext:"
-    && !auth.contains "SecAccessControlCreateWithFlags" && !auth.contains "@\"auth.end\"")
-  check "auth.*: auth.end too" ((caps (some ["auth.*"])).contains "@\"auth.end\"" && selects ["auth.*"] "auth.end" && !selects ["auth"] "auth.end")
+    && !auth.contains "SecAccessControlCreateWithFlags")
+  check "auth alone: auth.end with it, so an app that lists only auth can end what it kept" (auth.contains "@\"auth.end\""
+    && selects ["auth"] "auth.end" && covers "auth" "auth.end" && !selects ["auth.end"] "auth" && !covers "auth.end" "auth"
+    && ({ base with uses := ["auth"] }.callProblems [("auth", "A.c"), ("auth.end", "A.c")]).isEmpty)
+  check "auth.*: auth.end too" ((caps (some ["auth.*"])).contains "@\"auth.end\"" && selects ["auth.*"] "auth.end")
   let ble := caps (some ["ble.connect"])
   check "one ble capability: CoreBluetooth and LNBluetooth, no LocalAuthentication" (ble.contains "CoreBluetooth"
     && ble.contains "LNBluetooth" && !ble.contains "LocalAuthentication")
