@@ -1182,9 +1182,12 @@ def bluetoothClass : List Stmt := [
 /-- The statements before the first declaration: the imports. -/
 def capsImports : Nat := (capsBefore.findIdx? fun | .l _ | .blk .. => true | _ => false).getD 0
 
-/-- Whether `uses` (`auth`, `ble.*`, `ble.connect`) selects the capability named `name`. -/
+/-- Whether `uses` (`auth`, `ble.*`, `ble.connect`) selects the capability named `name`. `auth` selects
+`auth.end` with it: an app that asks for an authentication can end one the shell kept for it, and an app
+written before there was an `auth.end` lists only `auth`. -/
 def selects (uses : List String) (name : String) : Bool :=
   uses.any fun u => u == name || (u.endsWith ".*" && (u.splitOn ".").headD u == (name.splitOn ".").headD name)
+    || (u == "auth" && name == "auth.end")
 
 /-- `LNCapabilities.m` for an app that uses `uses` (none: every capability, which `leannative-shell` prints).
 Only what a selected capability needs is printed: without `auth` and without a `keychain.*` capability (whose reads

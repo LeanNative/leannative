@@ -350,9 +350,11 @@ that Lean generated for the app's import closure (build-ios's `build/lean-c`, th
 names every capability the app can call. A capability the app imports but never calls is found too: that
 asks for one entry too many in `uses`, never one too few. -/
 
-/-- A use covers a capability: its name, or its family (`ble.*`). -/
+/-- A use covers a capability: its name, or its family (`ble.*`). `auth` covers `auth.end`, as it selects
+it (`selects`): the typed client that asks for an authentication is the one that ends a kept one, so every
+app that imports it names both, and one that lists `auth` alone is not refused for that. -/
 def covers (use cap : String) : Bool :=
-  use == cap || (use.endsWith ".*" && family use == family cap)
+  use == cap || (use.endsWith ".*" && family use == family cap) || (use == "auth" && cap == "auth.end")
 
 /-- The shell's capabilities named, as string literals, in the C of `sources` (file name, text): each with
 the first file that names it. -/

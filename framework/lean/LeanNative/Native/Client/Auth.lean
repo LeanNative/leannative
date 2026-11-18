@@ -32,7 +32,8 @@ request with `keep` (the app was already in the background when the person answe
 success with nothing kept. On the simulator without a passcode the context is kept all the same, having
 checked nothing: it satisfies no access control, and there is none there to satisfy.
 
-A manifest's `uses` lists `auth.end` beside `auth` (or `auth.*` for both).
+A manifest's `uses` needs nothing more than `auth`, which covers `auth.end`; `auth.end` and `auth.*` are
+accepted too.
 
 Availability: iOS and Mac Catalyst (Touch ID or the login password). Face ID needs
 `NSFaceIDUsageDescription` in Info.plist. Authentication proves to the app only that the shell said
