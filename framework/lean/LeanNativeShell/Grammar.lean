@@ -157,6 +157,7 @@ def nodes : List NodeKind :=
       .l "if (symbol.length > 0) [s addArrangedSubview:LNSymbol(symbol, @{}, UIFontTextStyleBody)];",
       .l "[s addArrangedSubview:l];",
       .l "[s addArrangedSubview:v];",
+      .l "LNLabeledLayout(s, v, n[@\"decor\"]);",
       .l "LNPin(s, box, UIEdgeInsetsZero);"] },
   { tag := "screen", fields := [str "title", bool "back", bool "refreshable", bool "largeTitle" true, int "depth", kids],
     render := [
