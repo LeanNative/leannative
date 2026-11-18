@@ -751,6 +751,13 @@ rest (a `plain` button outside a list stays its tinted label), instead of capsul
 items are their text without iOS 26's shared glass; badges and text areas round their corners by 2 pt.
 Absent or any other value, nothing changes.
 
+Info.plist's `LNTextWrap` set to `words` is for an app of prose. A text that holds a word of twenty
+characters or more is otherwise wrapped at any character, all of it: right for an address or a transaction's
+name shown alone, whose lines then fill, and wrong for a sentence that happens to hold an address or a link,
+whose plain words are then broken wherever the line ends ("wro" / "te"). With `words`, every text wraps at
+words, and only a word too long for a line of its own is broken, as UIKit breaks one; monospaced text keeps
+wrapping at characters. Absent or any other value, nothing changes.
+
 ## View nodes
 
 Native mode renders the original eight nodes plus `input` (plain / secure / multiline / number / decimal),
