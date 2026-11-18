@@ -240,12 +240,25 @@ def renderBefore : List Stmt := [
             .l "if (n >= 20) return YES;"],
         .l "return NO;"],
     .blank,
+    .l "/// Info.plist's `LNTextWrap` is `words`: an app of prose. A label that holds a long word (an address in a",
+    .l "/// sentence, a link in a message's first lines) still wraps at words, and only a word too long for a line",
+    .l "/// of its own is broken, as UIKit breaks one. Without it such a label wraps at any character, all of it,",
+    .l "/// which fills the lines of an address shown alone and breaks the plain words beside one.",
+    b "static BOOL LNWrapsAtWords(void) {" [
+        .l "static BOOL words;",
+        .l "static dispatch_once_t once;",
+        b "dispatch_once(&once, ^{" [
+            .l "NSString *wrap = [NSBundle.mainBundle objectForInfoDictionaryKey:@\"LNTextWrap\"];",
+            .l "words = [wrap isKindOfClass:NSString.class] && [wrap isEqualToString:@\"words\"];"] "});",
+        .l "return words;"],
+    .blank,
     .l "/// The label's text, wrapped at characters when it holds a long word or is monospaced (never hyphenated: the",
-    .l "/// screen shows no character the string does not contain), at words otherwise.",
+    .l "/// screen shows no character the string does not contain), at words otherwise; and at words whatever it",
+    .l "/// holds, monospaced text apart, in an app that says `LNTextWrap` `words`.",
     b "static void LNSetText(UILabel *l, NSString *s) {" [
         .l "l.text = s;",
         .l "BOOL mono = (l.font.fontDescriptor.symbolicTraits & UIFontDescriptorTraitMonoSpace) != 0;",
-        .l "l.lineBreakMode = mono || LNHasLongWord(s) ? NSLineBreakByCharWrapping : NSLineBreakByWordWrapping;"],
+        .l "l.lineBreakMode = mono || (!LNWrapsAtWords() && LNHasLongWord(s)) ? NSLineBreakByCharWrapping : NSLineBreakByWordWrapping;"],
     .blank,
     .l "/// The text style of a `text` node's `style` (Html.lean `TextStyle`), and whether it is bold.",
     b "static UIFontTextStyle LNTextStyle(NSString *style, BOOL *bold) {" [
