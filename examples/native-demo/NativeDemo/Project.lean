@@ -10,7 +10,7 @@ def manifest : Manifest where
   displayName := "Native Demo"
   bundleId := "art.fralex.leannative.nativedemo"
   mac := .catalyst
-  uses := ["auth", "keychain.*", "http.get", "http.request", "ble.*", "bgtask.*", "timezone", "device", "conditions", "clipboard.get"]
+  uses := ["auth.*", "keychain.*", "http.get", "http.request", "ble.*", "bgtask.*", "timezone", "device", "conditions", "clipboard.get"]
   -- the Probes tab calls cloudkit.* without an iCloud container on purpose, to show the shell's
   -- missingEntitlement answer (listing it in uses would rightly ask for iCloudContainers)
   -- and push.* without the push entitlement, for the same reason (`push := true` would ask Apple to have

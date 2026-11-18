@@ -13,7 +13,8 @@ XCTest (`LNDriver.m`) can drive the app itself, compiled into the journeys execu
 The journeys executable (`Journey.main … (wire := some (Wire.app myApp))`) runs the app as a child process of
 itself (`<exe> --wire-app <port>`, the environment of `launch` in its environment). The child runs
 `Native.runtime` with a fake shell (`Shell`) answering the capabilities the real shell would
-(`LeanNativeShell/Capabilities.lean`'s protocol: a Keychain in a file, authentication that says yes, paths under
+(`LeanNativeShell/Capabilities.lean`'s protocol: a Keychain in a file, authentication that says yes and keeps a context
+when asked to, an item behind the person's presence refused without one, paths under
 `LEANNATIVE_WIRE_DIR`, a clipboard, no network, no Bluetooth, no iCloud account), connects to the host, and answers the driver's commands (`LNDriver.m` lists them) from the current view:
 
 * an element is found as a person would see it: the selected tab's content, covered by the innermost sheet,
@@ -69,14 +70,21 @@ structure KeychainItem where
 structure KeychainEntry where
   item : KeychainItem
   hex : String
+  /-- Behind the person's presence (`keychain.add` with `access`, `keychain.protect`): read only under a kept
+  authentication. -/
+  userPresence : Bool := false
   deriving Repr
 
 /-- The fake shell's state: its files under `dir`, the Keychain kept in `dir/keychain.json` so that it survives a
-relaunch as a device's does, the clipboard. -/
+relaunch as a device's does, the clipboard, and the authentications kept (`auth` with `keep`), which do not
+survive one. -/
 structure Shell where
   dir : System.FilePath
   keychain : IO.Ref (Array KeychainEntry)
   clipboard : IO.Ref (Option String)
+  /-- The ids of the kept authentications that live, and how many were ever kept (an id is never given twice).
+  There is no clock here, so one ends with `auth.end` or the app's going to the background, not with its time. -/
+  contexts : IO.Ref (Array String × Nat)
   /-- An app's own answers, tried first: `none` for the default. -/
   override : String → Json → IO (Option Json) := fun _ _ => pure none
 
@@ -86,8 +94,10 @@ def keychainFile (sh : Shell) : System.FilePath := sh.dir / "keychain.json"
 
 def saveKeychain (sh : Shell) : IO Unit := do
   let entries ← sh.keychain.get
-  let rows := entries.map fun e => Json.mkObj [("service", Json.str e.item.service), ("key", Json.str e.item.key),
-    ("synchronizable", Json.bool e.item.synchronizable), ("hex", Json.str e.hex)]
+  -- `userPresence` only when set: a file without such an item is what it always was
+  let rows := entries.map fun e => Json.mkObj ([("service", Json.str e.item.service), ("key", Json.str e.item.key),
+    ("synchronizable", Json.bool e.item.synchronizable), ("hex", Json.str e.hex)] ++
+    (if e.userPresence then [("userPresence", Json.bool true)] else []))
   IO.FS.writeFile sh.keychainFile ((Json.arr rows).pretty ++ "\n")
 
 def loadKeychain (path : System.FilePath) : IO (Array KeychainEntry) := do
@@ -101,11 +111,14 @@ def loadKeychain (path : System.FilePath) : IO (Array KeychainEntry) := do
       let key ← (r.getObjValAs? String "key").toOption
       let hex ← (r.getObjValAs? String "hex").toOption
       let sync := (r.getObjValAs? Bool "synchronizable").toOption.getD false
-      pure { item := { service, key, synchronizable := sync }, hex }
+      -- absent in a file written before there were such items: not behind it
+      let userPresence := (r.getObjValAs? Bool "userPresence").toOption.getD false
+      pure { item := { service, key, synchronizable := sync }, hex, userPresence }
 
 def new (dir : System.FilePath) (override : String → Json → IO (Option Json) := fun _ _ => pure none) : IO Shell := do
   IO.FS.createDirAll dir
-  return { dir, keychain := ← IO.mkRef (← loadKeychain (dir / "keychain.json")), clipboard := ← IO.mkRef none, override }
+  return { dir, keychain := ← IO.mkRef (← loadKeychain (dir / "keychain.json")), clipboard := ← IO.mkRef none,
+           contexts := ← IO.mkRef (#[], 0), override }
 
 private def str (args : Json) (k : String) : Option String := (args.getObjValAs? String k).toOption
 private def flag (args : Json) (k : String) : Bool := (args.getObjValAs? Bool k).toOption.getD false
@@ -113,6 +126,23 @@ private def flag (args : Json) (k : String) : Bool := (args.getObjValAs? Bool k)
 def errSecItemNotFound : Int := -25300
 def errSecDuplicateItem : Int := -25299
 def errSecParam : Int := -50
+def errSecInteractionNotAllowed : Int := -25308
+
+/-- A keychain request's `access`: `some false` when absent or `unlocked`, `some true` for `userPresence`, `none`
+for anything else, which the shell refuses. -/
+private def access (args : Json) : Option Bool :=
+  match args.getObjVal? "access" with
+  | .error _ | .ok .null | .ok (.str "unlocked") => some false
+  | .ok (.str "userPresence") => some true
+  | .ok _ => none
+
+/-- Whether the request names a kept authentication that lives. -/
+def liveContext (sh : Shell) (args : Json) : IO Bool := do
+  let some id := (args.getObjValAs? String "context").toOption | return false
+  return (← sh.contexts.get).1.contains id
+
+/-- Every kept authentication ends: the app went to the background. -/
+def endContexts (sh : Shell) : IO Unit := sh.contexts.modify fun (_, n) => (#[], n)
 
 private def item (args : Json) : KeychainItem :=
   { service := (str args "service").getD "app", key := (str args "key").getD "", synchronizable := flag args "synchronizable" }
@@ -129,7 +159,18 @@ private def status (ok : Bool) (code : Int) : List (String × Json) :=
 /-- The default answers, by the shell's protocol. -/
 def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
   match name with
-  | "auth" => return Json.mkObj [("ok", true)]
+  | "auth" =>
+    -- the person says yes; with `keep` above 0 the authentication is kept, under an id of its own
+    let keep : Bool := match args.getObjVal? "keep" with
+      | .ok (.num n) => decide (n.mantissa > 0)
+      | _ => false
+    unless keep do return Json.mkObj [("ok", true)]
+    let id ← sh.contexts.modifyGet fun (live, n) => (s!"wire-context-{n + 1}", (live.push s!"wire-context-{n + 1}", n + 1))
+    return Json.mkObj [("ok", true), ("context", Json.str id)]
+  | "auth.end" =>
+    if let some id := (args.getObjValAs? String "context").toOption then
+      sh.contexts.modify fun (live, n) => (live.filter (· != id), n)
+    return Json.mkObj [("ok", true)]
   | "build" => return Json.mkObj [("debug", true)]
   | "timezone" => return Json.mkObj [("id", "UTC"), ("offset", (0 : Nat))]
   | "device" => return Json.mkObj [("idiom", "phone")]
@@ -161,6 +202,9 @@ def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
     let entries ← sh.keychain.get
     match entries.find? (·.item == i) with
     | some e =>
+      -- behind the person's presence: only under a kept authentication that lives; nobody is asked here
+      if e.userPresence && !(← sh.liveContext args) then
+        return Json.mkObj [(if flag args "hex" then "hex" else "value", Json.null), ("status", toJson errSecInteractionNotAllowed)]
       if flag args "hex" then return Json.mkObj [("hex", Json.str e.hex), ("status", toJson (0 : Int))]
       match String.fromUTF8? ((bytesOfHex? e.hex).getD .empty) with
       | some text => return Json.mkObj [("value", Json.str text), ("status", toJson (0 : Int))]
@@ -170,14 +214,20 @@ def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
   | "keychain.add" =>
     let i := item args
     let some hex := bytesArg args | return Json.mkObj (status false errSecParam ++ [("exists", Json.bool false)])
+    -- an access control is one device's; a passcode is taken to be set here, so it is never the plain class instead
+    let some userPresence := access args | return Json.mkObj (status false errSecParam ++ [("exists", Json.bool false)])
+    if userPresence && i.synchronizable then return Json.mkObj (status false errSecParam ++ [("exists", Json.bool false)])
     let entries ← sh.keychain.get
     if entries.any (·.item == i) then return Json.mkObj (status false errSecDuplicateItem ++ [("exists", Json.bool true)])
-    sh.keychain.set (entries.push { item := i, hex })
+    sh.keychain.set (entries.push { item := i, hex, userPresence })
     sh.saveKeychain
-    return Json.mkObj (status true 0 ++ [("exists", Json.bool false)])
+    return Json.mkObj (status true 0 ++ [("exists", Json.bool false)] ++ (if userPresence then [("access", Json.str "userPresence")] else []))
   | "keychain.set" =>
     let i := item args
     let some hex := bytesArg args | return Json.mkObj (status false errSecParam)
+    -- `set` neither makes nor rewrites an item behind the person's presence
+    unless access args == some false do return Json.mkObj (status false errSecParam)
+    if (← sh.keychain.get).any (fun e => e.item == i && e.userPresence) then return Json.mkObj (status false errSecInteractionNotAllowed)
     sh.keychain.modify fun es => (es.filter (·.item != i)).push { item := i, hex }
     sh.saveKeychain
     return Json.mkObj (status true 0)
@@ -192,6 +242,29 @@ def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
     sh.keychain.modify (·.filter fun e => !(e.item.service == service && e.item.synchronizable == sync))
     sh.saveKeychain
     return Json.mkObj (status true 0)
+  | "keychain.protect" =>
+    let i := item args
+    let unchanged := [("changed", Json.bool false)]
+    -- the person's presence is the only access there is to give, and an item that syncs cannot have it
+    if ((args.getObjVal? "access").isOk && access args != some true) || i.synchronizable then
+      return Json.mkObj (status false errSecParam ++ unchanged)
+    let entries ← sh.keychain.get
+    match entries.find? (·.item == i) with
+    | none => return Json.mkObj (status false errSecItemNotFound ++ unchanged)
+    | some e =>
+      if e.userPresence then return Json.mkObj (status true 0 ++ unchanged ++ [("access", Json.str "userPresence")])
+      -- in place: the entry keeps its place and its value
+      sh.keychain.set (entries.map fun e => if e.item == i then { e with userPresence := true } else e)
+      sh.saveKeychain
+      return Json.mkObj (status true 0 ++ [("changed", Json.bool true), ("access", Json.str "userPresence")])
+  | "keychain.attributes" =>
+    -- never the value, so nobody is asked
+    match (← sh.keychain.get).find? (·.item == item args) with
+    | none =>
+      return Json.mkObj [("status", toJson errSecItemNotFound), ("accessible", Json.null), ("userPresence", false), ("synchronizable", false)]
+    | some e =>
+      return Json.mkObj [("status", toJson (0 : Int)), ("accessible", Json.str (if e.item.synchronizable then "whenUnlocked" else "whenUnlockedThisDeviceOnly")),
+                         ("userPresence", Json.bool e.userPresence), ("synchronizable", Json.bool e.item.synchronizable)]
   | "http.get" | "http.request" =>
     -- no network: the system's offline error, as the shell would relay it
     return Json.mkObj [("error", Json.str "The Internet connection appears to be offline."), ("code", toJson (-1009 : Int)),
@@ -548,7 +621,10 @@ def system (st : State) (event : Json) : IO Unit := do
   let reply ← st.lock.atomically fun _ => st.runtime.system event.compress
   st.answerCaps reply
 
-def scenePhase (st : State) (phase : String) : IO Unit := st.system (Json.mkObj [("scene", Json.str phase)])
+def scenePhase (st : State) (phase : String) : IO Unit := do
+  -- a kept authentication does not outlive the app's going to the background
+  if phase == "background" then st.shell.endContexts
+  st.system (Json.mkObj [("scene", Json.str phase)])
 
 /-- One event at a path, as the shell sends a touch; the dispatcher's refusal (stale, no handler) is the reason. -/
 def send (st : State) (path : List Nat) (event : Event) : IO (Option String) := do
