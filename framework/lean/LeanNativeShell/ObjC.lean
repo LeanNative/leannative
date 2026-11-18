@@ -56,4 +56,53 @@ def lit (s : String) : String :=
     | '\n' => acc ++ "\\n"
     | c => acc.push c) "" ++ "\""
 
+/-! ## Boxed comparisons
+
+A comparison is an `int` in C, so `@(a != b)` is a number and JSON prints it `0` or `1`; a `BOOL`, boxed,
+prints `true` or `false`, and that is all a typed client takes for a boolean. The shell casts each one,
+`@((BOOL)(a != b))`; `leannative-shell` finds the ones that are not (`boxedProblems`, in `Main`). -/
+
+/-- The text up to the parenthesis that closes a `(` already read (to the line's end without one). -/
+def closing : Nat → List Char → List Char → List Char
+  | _, acc, [] => acc.reverse
+  | 0, acc, ')' :: _ => acc.reverse
+  | d + 1, acc, ')' :: cs => closing d (')' :: acc) cs
+  | d, acc, '(' :: cs => closing (d + 1) ('(' :: acc) cs
+  | d, acc, c :: cs => closing d (c :: acc) cs
+
+/-- What is inside each boxed expression `@(…)` of a line, a box inside a box too. -/
+def boxed : List Char → List (List Char)
+  | [] => []
+  | '@' :: cs => match cs with
+    | '(' :: inner => closing 0 [] inner :: boxed cs
+    | _ => boxed cs
+  | _ :: cs => boxed cs
+
+/-- An expression with everything inside its parentheses and brackets left out. -/
+def topLevel : Nat → List Char → List Char
+  | _, [] => []
+  | d, c :: cs =>
+    if c == '(' || c == '[' then topLevel (d + 1) cs
+    else if c == ')' || c == ']' then topLevel (d - 1) cs
+    else if d == 0 then c :: topLevel d cs else topLevel d cs
+
+def hasSub (pat : List Char) : List Char → Bool
+  | [] => pat.isEmpty
+  | c :: cs => pat.isPrefixOf (c :: cs) || hasSub pat cs
+
+/-- The boxed expressions of a line whose value is a comparison's or a logical operator's: an `int`, where a
+`BOOL` was meant. One a `?:` chooses from is not one, nor is one under a cast (inside its parentheses). -/
+def boxedInts (line : String) : List String :=
+  (boxed line.toList).filterMap fun e =>
+    let top := (topLevel 0 e).dropWhile (· == ' ')
+    let compares := ["==", "!=", "&&", "||", "<=", ">=", " < ", " > "].any (hasSub ·.toList top)
+    let negates := top.head? == some '!' && (top.drop 1).head? != some '='
+    if (compares || negates) && !top.contains '?' then some (String.ofList e) else none
+
+#guard boxedInts "answer(@{@\"records\": records, @\"more\": @(cursor != nil)});" == ["cursor != nil"]
+#guard boxedInts "answer(@{@\"records\": records, @\"more\": @((BOOL)(cursor != nil))});" == []
+#guard boxedInts "return @{@\"ok\": @(!error), @\"both\": @(a && [b isEqual:c])};" == ["!error", "a && [b isEqual:c]"]
+#guard boxedInts "x[@(a.b)] = @[@(i), @(-1), @(++n), @([o[k] boolValue]), @((BOOL)(s == t || s == u))];" == []
+#guard boxedInts "return @(n == 0 ? 1 : n), @([self has:(a == b)]), @(fetch->count);" == []
+
 end LeanNativeShell

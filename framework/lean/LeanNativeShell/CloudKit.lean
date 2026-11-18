@@ -300,7 +300,7 @@ def cloudKitClass : List Stmt := [
                 .l "[records addObjectsFromArray:got];",
                 .l "if (cursor && (NSInteger)records.count < limit)",
                 .l "    [self page:[[CKQueryOperation alloc] initWithCursor:cursor] db:db keys:keys limit:limit into:records answer:answer];",
-                .l "else answer(@{@\"records\": records, @\"more\": @(cursor != nil)});"] "});"] "};",
+                .l "else answer(@{@\"records\": records, @\"more\": @((BOOL)(cursor != nil))});"] "});"] "};",
         .l "[db addOperation:op];"],
     .blank,
     b "- (void)save:(NSDictionary *)args answer:(LNAnswer)answer {" [
