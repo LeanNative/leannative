@@ -215,8 +215,10 @@ def nodes : List NodeKind :=
       b "if ([n[@\"label\"] length] > 0) {" [
           .l "UILabel *l = LNLabel(n[@\"label\"], @\"body\");",
           .l "l.textColor = UIColor.secondaryLabelColor;",
-          .l "l.numberOfLines = 1;",
-          .l "[l setContentCompressionResistancePriority:UILayoutPriorityRequired - 1 forAxis:UILayoutConstraintAxisHorizontal];",
+          .l "// as many lines as the words need, under the spinner's middle: on one line, a label wider than the",
+          .l "// screen (a sentence at a large text size) was cut at the screen's edge, mid-word and with no mark",
+          .l "l.numberOfLines = 0;",
+          .l "l.textAlignment = NSTextAlignmentCenter;",
           .l "[s addArrangedSubview:l];"],
       .l "LNPinLeading(s, box);"] },
   { tag := "icon", fields := [str "name"],
