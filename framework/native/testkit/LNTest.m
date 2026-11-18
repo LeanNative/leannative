@@ -101,6 +101,26 @@ static CGRect LNScrollerFrame(XCUIApplication *app, XCUIElement *element) {
     return CGRectIsEmpty(window) ? found : CGRectIntersection(found, window);
 }
 
+/// Whether the element can be tapped where it is, asked only of one the window shows. XCTest records a failure of
+/// its own ("Failed to determine hittability of … : Activation point invalid and no suggested hit points based
+/// on element frame") when it is asked of an element that is in the hierarchy with no place on the screen,
+/// which a list's row is while the list scrolls to it: the question failed tests whose row was then found. So
+/// the element's frame is looked at first, and what is left (the screen moving between the look and the
+/// question) is a failure XCTest is told to expect, which counts for nothing.
+static BOOL LNHittable(XCUIApplication *app, XCUIElement *element) {
+    if (!element.exists) return NO;
+    CGRect frame = element.frame, window = app.windows.firstMatch.frame;
+    if (CGRectIsNull(frame) || CGRectIsEmpty(frame)) return NO;
+    if (!CGRectIsEmpty(window) && !CGRectContainsPoint(window, CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame)))) return NO;
+    __block BOOL hittable = NO;
+    XCTExpectedFailureOptions *moving = [XCTExpectedFailureOptions new];
+    moving.strict = NO;
+    XCTExpectFailureWithOptionsInBlock(@"XCTest may fail to say whether an element can be tapped while the screen moves", moving, ^{
+        hittable = element.hittable;
+    });
+    return hittable;
+}
+
 /// Scrolls until the element is hittable or `deadline` passes. An element in the hierarchy but out of view (or
 /// covered) is scrolled towards: down while its middle is below the middle of what its scroll view shows, else
 /// up, and the other way once a step leaves it where it was (the content's end, or something over it). One not
@@ -113,7 +133,7 @@ static BOOL LNScrollUntil(XCUIApplication *app, XCUIElement *element, NSDate *_N
     CGFloat last = NAN;
     for (int step = 0; step < 24; step++) {
         BOOL exists = element.exists;
-        if (exists && element.hittable) return YES;
+        if (exists && LNHittable(app, element)) return YES;
         if (deadline && deadline.timeIntervalSinceNow <= 0) return NO;
         if (exists && CGRectIsNull(scroller)) scroller = LNScrollerFrame(app, element);
         BOOL down;
@@ -127,7 +147,7 @@ static BOOL LNScrollUntil(XCUIApplication *app, XCUIElement *element, NSDate *_N
         }
         LNScrollStep(app, down);
     }
-    return element.exists && element.hittable;
+    return LNHittable(app, element);
 }
 
 BOOL LNScrollTo(XCUIApplication *app, XCUIElement *element) {
