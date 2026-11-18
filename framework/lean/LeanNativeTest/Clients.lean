@@ -6,6 +6,7 @@ import LeanNative.Native.Client.CloudKit
 import LeanNative.Native.Client.Bluetooth
 import LeanNative.Native.Client.WebAuth
 import LeanNative.Native.Client.Push
+import LeanNative.Journey.Wire
 import LeanNativeShell.Capabilities
 
 /-! # The typed clients against wire fixtures and a fake shell
@@ -14,7 +15,9 @@ import LeanNativeShell.Capabilities
 a request built here, the arguments it must send, an answer, and the expected result. Every capability
 a fixture names must be one the shell offers (`LeanNativeShell.capabilities`). Then a fake `Effects` answers
 scripted replies, for the clients run end to end: the request reaches `ask`, unknown capabilities, and
-an app's cleanup after a failure. Run from framework/lean (the fixture path is relative). -/
+an app's cleanup after a failure. And the headless driver's fake shell (`Journey.Wire.Shell`) answers the
+clients for an item behind the person's presence: refused without a kept authentication, read under one,
+refused again once it has ended. Run from framework/lean (the fixture path is relative). -/
 
 open Lean LeanNative.Native LeanNative.Native.Client
 
@@ -53,8 +56,19 @@ def unit : Unit → Json := fun _ => Json.mkObj []
 
 def item : Keychain.Item := { key := "wallet", service := some "org.example.app" }
 
+/-- An item behind the person's presence, and a kept authentication's id as the shell gives one. -/
+def seed : Keychain.Item := { key := "seed", service := some "org.example.app", access := .userPresence }
+def kept : String := "5C2B4E0E-6C0B-4F27-9B43-0B2B1C3A7D11"
+
+def addedJson : Keychain.Added → Json
+  | .added => Json.str "added"
+  | .alreadyExists => Json.str "alreadyExists"
+
 def cases : List (String × Case) := [
   ("auth", .of (Auth.authenticate "Unlock the vault") fun s => Json.mkObj [("note", optJson (s.note.map Json.str))]),
+  ("auth.keep", .of (Auth.authenticate "Send 0.1 BTC" (keep := some 30)) fun s =>
+    Json.mkObj [("note", optJson (s.note.map Json.str)), ("context", optJson (s.context.map Json.str))]),
+  ("auth.end", .of (Auth.end kept) unit),
   ("webauth", .of (WebAuth.start { url := "https://id.example.com/authorize?client_id=c&state=s", callback := .https "app.example.com" "/oauth/callback" }) Json.str),
   ("webauth.scheme", .of (WebAuth.start { url := "https://id.example.com/authorize", callback := .scheme "exampleapp", ephemeral := true }) Json.str),
   ("keychain.get", .of (Keychain.get item) fun b => Json.mkObj [("bytes", optJson (b.map (Json.str ∘ hexOf)))]),
@@ -65,6 +79,19 @@ def cases : List (String × Case) := [
     | .alreadyExists => Json.str "alreadyExists"),
   ("keychain.delete", .of (Keychain.delete item) unit),
   ("keychain.clear", .of (Keychain.clear "org.example.test") unit),
+  ("keychain.get.context", .of (Keychain.get seed (context := some kept)) fun b => Json.mkObj [("bytes", optJson (b.map (Json.str ∘ hexOf)))]),
+  ("keychain.get.presence", .of (Keychain.get seed) fun b => Json.mkObj [("bytes", optJson (b.map (Json.str ∘ hexOf)))]),
+  ("keychain.getText.context", .of (Keychain.getText seed (context := some kept)) fun t => Json.mkObj [("text", optJson (t.map Json.str))]),
+  ("keychain.add.presence", .of (Keychain.add seed (ByteArray.mk #[1])) addedJson),
+  ("keychain.add.presence.sync", .of (Keychain.add { seed with synchronizable := true } (ByteArray.mk #[1])) addedJson),
+  ("keychain.addApplied", .of (Keychain.addApplied seed (ByteArray.mk #[1])) fun (a, access) =>
+    Json.mkObj [("added", addedJson a), ("access", Json.str access.name)]),
+  ("keychain.set.presence", .of (Keychain.set seed (ByteArray.mk #[0, 255])) unit),
+  -- `protect` asks for the person's presence whatever the item says
+  ("keychain.protect", .of (Keychain.protect item) fun changed => Json.mkObj [("changed", Json.bool changed)]),
+  ("keychain.attributes", .of (Keychain.attributes item) fun a => optJson (a.map fun a =>
+    Json.mkObj [("accessible", optJson (a.accessible.map Json.str)), ("userPresence", Json.bool a.userPresence),
+                ("synchronizable", Json.bool a.synchronizable)])),
   ("http.get", .of (Http.get { url := "https://example.com/a", maxBytes := 100, timeout := some 5, accept := some "application/json",
                                socks := some ("127.0.0.1", 9050) })
     fun r => Json.mkObj [("status", toJson r.status), ("body", Json.str (hexOf r.body))]),
@@ -196,6 +223,101 @@ def endToEnd : IO Unit := do
   | .error e => check "request: a cancelled authentication is not a denial" (e.kind == .cancelled && e.code == some (-2))
   | .ok _ => check "request: a cancelled authentication is not a denial" false
 
+/-- The headless driver's fake shell as an `Effects`: every `ask` is answered by `Journey.Wire.Shell`, as it
+answers an app under `LEANNATIVE_DRIVER=wire`. -/
+def wireEffects (sh : LeanNative.Journey.Wire.Shell) : Effects Unit :=
+  { post := fun _ => pure ()
+    cap := fun name args k => do discard <| pure (k (← sh.answer name args))
+    ask := fun name args => do pure (.pure (← sh.answer name args)) }
+
+/-- Refused as a read the Keychain would have had to ask the person for (`errSecInteractionNotAllowed`). -/
+def refused (r : Result α) : Bool := match r with
+  | .error e => e.kind == .failed && e.code == some Keychain.errSecInteractionNotAllowed
+  | .ok _ => false
+
+/-- An item behind the person's presence, against the fake shell: the Keychain asks nobody, so a read is refused
+unless the request names a kept authentication that lives. -/
+def userPresence : IO Unit := do
+  let dir ← IO.FS.createTempDir
+  let sh ← LeanNative.Journey.Wire.Shell.new dir
+  let fx := wireEffects sh
+  let bytes := ByteArray.mk #[1, 2, 3]
+  let read (r : Result (Option ByteArray)) : Bool := match r with
+    | .ok (some b) => b == bytes
+    | _ => false
+  let flagged? (i : Keychain.Item) : IO (Option Bool) := do
+    match ← (Keychain.attributes i).call fx with
+    | .ok (some a) => pure (some a.userPresence)
+    | _ => pure none
+  let seed : Keychain.Item := { key := "seed", service := some "org.example.test", access := .userPresence }
+  check "presence: an item added behind it, and the shell says so" ((← (Keychain.addApplied seed bytes).call fx) matches .ok (.added, .userPresence))
+  check "presence: its attributes report it, and not its value" (match ← (Keychain.attributes seed).call fx with
+    | .ok (some a) => a.userPresence && !a.synchronizable && a.accessible == some "whenUnlockedThisDeviceOnly" && a.access == .userPresence
+    | _ => false)
+  check "presence: a read without a context is refused" (refused (← (Keychain.get seed).call fx))
+  check "presence: a read naming a context that never was is refused" (refused (← (Keychain.get seed (context := some "nobody")).call fx))
+  check "presence: an authentication without keep keeps nothing" ((← (Auth.authenticate "Read the seed").call fx) matches .ok { note := none, context := none })
+  let some context := (match ← (Auth.authenticate "Read the seed" (keep := some 30)).call fx with
+    | .ok s => s.context
+    | .error _ => none) | check "presence: a kept authentication has a context" false
+  check "presence: a read under a kept authentication" (read (← (Keychain.get seed (context := some context)).call fx))
+  check "presence: a second read under the same one" (read (← (Keychain.get seed (context := some context)).call fx))
+  check "presence: the text under it too" (match ← (Keychain.getText { seed with key := "words" } (context := some context)).call fx with
+    | .ok none => true
+    | _ => false)
+  check "presence: auth.end" ((← (Auth.end context).call fx) matches .ok ())
+  check "presence: refused again after auth.end" (refused (← (Keychain.get seed (context := some context)).call fx))
+  check "presence: ending it twice is not an error" ((← (Auth.end context).call fx) matches .ok ())
+  -- each kept authentication its own id, and one's end is not another's
+  let ids ← (List.range 2).mapM fun _ => do
+    return (match ← (Auth.authenticate "Read the seed" (keep := some 30)).call fx with | .ok s => s.context | .error _ => none).getD ""
+  check "presence: each kept authentication its own id" (ids.all (· != "") && ids.eraseDups.length == 2 && !ids.contains context)
+  discard <| (Auth.end (ids.headD "")).call fx
+  check "presence: one's end is not another's" (refused (← (Keychain.get seed (context := some (ids.headD ""))).call fx)
+    && read (← (Keychain.get seed (context := some (ids.getLastD ""))).call fx))
+  -- the app's going to the background ends every one
+  sh.endContexts
+  check "presence: refused once the app went to the background" (refused (← (Keychain.get seed (context := some (ids.getLastD ""))).call fx))
+  -- what `set` and `add` refuse, each leaving the item as it was
+  check "presence: set over such an item is refused" (refused (← (Keychain.set { seed with access := .unlocked } (ByteArray.mk #[9])).call fx))
+  check "presence: set asking for it is refused" (match ← (Keychain.set { seed with key := "new" } bytes).call fx with
+    | .error e => e.code == some (-50)
+    | .ok _ => false)
+  check "presence: and made no item" ((← (Keychain.attributes { seed with key := "new" }).call fx) matches .ok none)
+  check "presence: add over it leaves it" ((← (Keychain.add seed (ByteArray.mk #[9])).call fx) matches .ok .alreadyExists)
+  check "presence: a synchronizable item cannot be behind it" (match ← (Keychain.add { seed with key := "cloud", synchronizable := true } bytes).call fx with
+    | .error e => e.code == some (-50)
+    | .ok _ => false)
+  -- protect: an item that is there, upgraded in place
+  let wallet : Keychain.Item := { key := "wallet", service := some "org.example.test" }
+  discard <| (Keychain.add wallet bytes).call fx
+  check "protect: an unflagged item reads without a context" (read (← (Keychain.get wallet).call fx) && (← flagged? wallet) == some false)
+  check "protect: flags it" ((← (Keychain.protect wallet).call fx) matches .ok true)
+  check "protect: its attributes report it" ((← flagged? wallet) == some true)
+  check "protect: idempotent" ((← (Keychain.protect wallet).call fx) matches .ok false)
+  check "protect: a read without a context is now refused" (refused (← (Keychain.get wallet).call fx))
+  let context := (match ← (Auth.authenticate "Read the wallet" (keep := some 30)).call fx with | .ok s => s.context | .error _ => none).getD ""
+  check "protect: the value is the one it had" (read (← (Keychain.get wallet (context := some context)).call fx))
+  check "protect: no such item" (match ← (Keychain.protect { wallet with key := "nothing" }).call fx with
+    | .error e => e.code == some Keychain.errSecItemNotFound
+    | .ok _ => false)
+  discard <| (Keychain.set { wallet with key := "cloud", synchronizable := true } bytes).call fx
+  check "protect: a synchronizable item is refused, and stays as it was" (
+    (match ← (Keychain.protect { wallet with key := "cloud", synchronizable := true }).call fx with
+      | .error e => e.code == some (-50)
+      | .ok _ => false) && (← flagged? { wallet with key := "cloud", synchronizable := true }) == some false)
+  -- the Keychain is a file: a relaunch finds the items as they were, and no kept authentication
+  let again ← LeanNative.Journey.Wire.Shell.new dir
+  let fx := wireEffects again
+  check "relaunch: the item is still behind it" (refused (← (Keychain.get wallet).call fx)
+    && (match ← (Keychain.attributes wallet).call fx with | .ok (some a) => a.userPresence | _ => false))
+  check "relaunch: no kept authentication survives" (refused (← (Keychain.get wallet (context := some context)).call fx))
+  -- a file written before there were such items still loads, its items not behind it
+  IO.FS.writeFile again.keychainFile "[{\"service\": \"org.example.test\", \"key\": \"old\", \"synchronizable\": false, \"hex\": \"010203\"}]"
+  let old ← LeanNative.Journey.Wire.Shell.new dir
+  check "an older file: its item loads, not behind it" (read (← (Keychain.get { wallet with key := "old" }).call (wireEffects old)))
+  IO.FS.removeDirAll dir
+
 /-- The push events an app reads from `App.system`, as the shell posts them (`LeanNativeShell.Push`), and the
 shell's bookkeeping of notices received. -/
 def pushEvents : IO Unit := do
@@ -227,6 +349,7 @@ def pushEvents : IO Unit := do
 def main (args : List String) : IO UInt32 := do
   fixtures (args.headD "LeanNativeTest/fixtures/clients.json")
   endToEnd
+  userPresence
   pushEvents
   let n ← failures.get
   IO.println (if n == 0 then "clients: all passed" else s!"clients: {n} failed")

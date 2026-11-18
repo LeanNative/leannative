@@ -1,7 +1,9 @@
 import Std.Async.TCP
+import Std.Sync.Mutex
 import LeanNative.Native
 import LeanNative.Native.BackgroundRun
 import LeanNative.Native.EffectScope
+import LeanNative.Native.Client.Auth
 import LeanNative.Native.Client.Keychain
 import LeanNative.Native.Client.Http
 import LeanNative.Native.Client.HttpRequest
@@ -23,6 +25,10 @@ import LeanNative.Native.Client.Bluetooth
   invalidation drains, and the typed clients (`LeanNative.Native.Client.*`) against the real shell, `http.*`
   against two servers of its own on 127.0.0.1 that redirect and send more than was asked for; its lines
   are printed and shown on the Demo tab (`selftest-<n>`), so UI tests read them on iOS and Mac Catalyst alike;
+* its `keychain-user-presence` part stores an item behind the person's presence and upgrades another in
+  place, and shows that neither is read without an authentication; with `NATIVEDEMO_KEYCHAIN_PROMPT=1` as
+  well it asks the person once (`auth` with `keep`) and reads both under that one answer. Its last line
+  says which of those a device showed;
 * Face ID runs in an `EffectScope` the app's going to the background ends: an answer that comes back
   after that is dropped; going to the background and coming back from it are logged; each answer, a
   dropped one too, and the scope's end are printed to stdout (`auth: …`, `scene: …`), and so are the
@@ -496,6 +502,154 @@ def keychainSetSelftest (fx : Effects Host) (say : String → IO Unit) : IO Unit
   discard <| (Client.Keychain.delete item).call fx
   say s!"typed keychain.get after set and delete: {shown (← (Client.Keychain.get item).call fx) hex}"
 
+/-- One question to the person at a time: the selftest's kept authentication and the Face ID button's (or
+`NATIVEDEMO_AUTH_AFTER`'s) wait for each other, since the system cancels a sheet another one covers. -/
+initialize asking : Std.BaseMutex ← Std.BaseMutex.new
+
+/-- `keychain-user-presence`: an item behind the person's presence (`access := .userPresence`), against the real
+Keychain. One item is added behind it and its attributes read back; another, added without, is upgraded in
+place (`protect`, twice: the second changes nothing); neither is read without an authentication (`-25308`, and
+nobody is asked), and `set` neither rewrites the first nor makes such an item. With `NATIVEDEMO_KEYCHAIN_PROMPT`
+set at launch the person is asked once (`auth` with `keep`), both items are read under that one answer, and the
+first is refused again after `auth.end`. A read under a kept authentication cannot have asked again: the shell
+keeps it allowing no interaction, so a read it did not satisfy would have been refused. No value is printed.
+
+The last line, `keychain-user-presence: <verdict>: …`, says each of those plainly. Its verdict is
+
+* `PASS`: every one shown;
+* `PASS WITHOUT THE PROMPT`: all that needs no person (no `NATIVEDEMO_KEYCHAIN_PROMPT`);
+* `NOT ENFORCED`: the Keychain took the access control and gave the values without an authentication, as a
+  simulator's does (it has no Secure Enclave to hold one to): on a device this is a failure;
+* `SIMULATOR FALLBACK`: the shell stored the item unlocked and said so (a simulator whose Keychain refuses an
+  access control for want of a passcode);
+* `UNSUPPORTED`: no Keychain at all (an ad-hoc Mac app);
+* `FAIL`: anything else.
+
+It leaves no item behind. -/
+def keychainUserPresenceSelftest (fx : Effects Host) (say : String → IO Unit) : IO Unit := do
+  let service := "art.fralex.leannative.nativedemo.presence"
+  let line (what answer : String) : IO Unit := say s!"keychain-user-presence {what}: {answer}"
+  let fresh : Client.Keychain.Item := { key := "fresh", service := some service, access := .userPresence }
+  let upgraded : Client.Keychain.Item := { key := "upgraded", service := some service }
+  let freshBytes := ByteArray.mk #[1, 2, 3]
+  let upgradedBytes := ByteArray.mk #[10, 11]
+  let value (expected : ByteArray) (b : Option ByteArray) : String := match b with
+    | some b => if b == expected then "the value it was given" else "ANOTHER VALUE"
+    | none => "none"
+  let isValue (expected : ByteArray) (r : Client.Result (Option ByteArray)) : Bool := match r with
+    | .ok (some b) => b == expected
+    | _ => false
+  let refused (r : Client.Result (Option ByteArray)) : Bool := match r with
+    | .error e => e.code == some Client.Keychain.errSecInteractionNotAllowed
+    | .ok _ => false
+  let status (code : Int) (r : Client.Result Unit) : Bool := match r with
+    | .error e => e.code == some code
+    | .ok _ => false
+  let attributes := fun (a : Option Client.Keychain.Attributes) => match a with
+    | some a => s!"userPresence {a.userPresence}, accessible {a.accessible.getD "(not said)"}, synchronizable {a.synchronizable}"
+    | none => "none"
+  let flagged (r : Client.Result (Option Client.Keychain.Attributes)) : Bool := match r with
+    | .ok (some a) => a.userPresence
+    | _ => false
+  let yes (b : Bool) := if b then "yes" else "NO"
+  -- how a read without an authentication ended: the status that refused it, or that it was read
+  let how := fun (r : Client.Result (Option ByteArray)) => match r with
+    | .error e => (e.code.map fun c => s!" ({c})").getD s!" ({e.name})"
+    | .ok _ => " (it was read)"
+  discard <| (Client.Keychain.clear service).call fx
+  -- an item added behind the person's presence, and what protects it read back
+  let added ← (Client.Keychain.addApplied fresh freshBytes).call fx
+  line "add" (shown added fun (a, access) => s!"{match a with | .added => "added" | .alreadyExists => "alreadyExists"}, access {access.name}")
+  if let .error e := added then
+    if e.kind == .unsupported then
+      say s!"keychain-user-presence: UNSUPPORTED: no Keychain here ({e.name}); nothing was stored"
+      return
+  let applied := added matches .ok (.added, .userPresence)
+  let fellBack := added matches .ok (.added, .unlocked)
+  let freshAttributes ← (Client.Keychain.attributes fresh).call fx
+  line "attributes" (shown freshAttributes attributes)
+  -- an item that was there without it, upgraded in place; a second upgrade changes nothing
+  discard <| (Client.Keychain.add upgraded upgradedBytes).call fx
+  line "attributes before protect" (shown (← (Client.Keychain.attributes upgraded).call fx) attributes)
+  let protect ← (Client.Keychain.protect upgraded).call fx
+  line "protect" (shown protect fun changed => s!"changed {changed}")
+  let again ← (Client.Keychain.protect upgraded).call fx
+  line "protect again" (shown again fun changed => s!"changed {changed}")
+  let upgradedAttributes ← (Client.Keychain.attributes upgraded).call fx
+  line "attributes after protect" (shown upgradedAttributes attributes)
+  -- `set` neither rewrites such an item nor makes one, and an item that syncs cannot be one
+  let setOver ← if applied then (Client.Keychain.set { fresh with access := .unlocked } (ByteArray.mk #[9])).call fx
+    else pure (.error (Client.failed "not tried" "the item is not behind an access control here"))
+  line "set over it" (shown setOver fun _ => "SET")
+  let setAsking ← (Client.Keychain.set { fresh with key := "set" } (ByteArray.mk #[9])).call fx
+  line "set asking for it" (shown setAsking fun _ => "SET")
+  let cloud ← (Client.Keychain.add { fresh with key := "cloud", synchronizable := true } (ByteArray.mk #[9])).call fx
+  line "add synchronizable" (shown cloud fun _ => "ADDED")
+  let nothingMade := ((← (Client.Keychain.attributes { fresh with key := "set" }).call fx) matches .ok none)
+    && ((← (Client.Keychain.attributes { fresh with key := "cloud", synchronizable := true }).call fx) matches .ok none)
+  let refusals := status (-50) setAsking && (cloud matches .error { code := some (-50), .. }) && nothingMade
+    && (!applied || status Client.Keychain.errSecInteractionNotAllowed setOver)
+  -- neither is read without an authentication: refused, and nobody asked
+  let bare ← (Client.Keychain.get fresh).call fx
+  line "get without a context" (shown bare (value freshBytes))
+  let bareUpgraded ← (Client.Keychain.get upgraded).call fx
+  line "get of the upgraded item without a context" (shown bareUpgraded (value upgradedBytes))
+  let stranger ← (Client.Keychain.get fresh (context := some "00000000-0000-0000-0000-000000000000")).call fx
+  line "get with a context that never was" (shown stranger (value freshBytes))
+  let enforced := refused bare && refused bareUpgraded && refused stranger
+  -- read all the same, each its own value: the Keychain here holds no item to its access control
+  let unenforced := isValue freshBytes bare && isValue upgradedBytes bareUpgraded && isValue freshBytes stranger
+  -- the person, once: both items read under the one answer, and refused again once it has ended
+  let prompt := ((← IO.getEnv "NATIVEDEMO_KEYCHAIN_PROMPT").getD "") != ""
+  let mut read := false
+  let mut second := false
+  let mut ended := "not asked"
+  let mut endedRefused := false
+  let mut asked := "not asked (launch with NATIVEDEMO_KEYCHAIN_PROMPT=1)"
+  if prompt then
+    asking.lock
+    let auth ← try (Client.Auth.authenticate "Read two Keychain items behind your presence, asking you once" (keep := some 30)).call fx
+      finally asking.unlock
+    line "auth with keep" (shown auth fun s => s!"{if s.context.isSome then "a context kept" else "NOTHING KEPT"}{match s.note with | some n => s!" ({n})" | none => ""}")
+    match auth with
+    | .error e => asked := s!"NO ({e.kind.name} {e.name})"
+    | .ok { context := none, .. } => asked := "NO (nothing kept)"
+    | .ok { context := some context, .. } =>
+      let first ← (Client.Keychain.get fresh (context := some context)).call fx
+      line "get with the context" (shown first (value freshBytes))
+      let next ← (Client.Keychain.get upgraded (context := some context)).call fx
+      line "second get with the same context" (shown next (value upgradedBytes))
+      line "auth.end" (shown (← (Client.Auth.end context).call fx) fun _ => "ended")
+      let after ← (Client.Keychain.get fresh (context := some context)).call fx
+      line "get after auth.end" (shown after (value freshBytes))
+      read := isValue freshBytes first
+      second := isValue upgradedBytes next
+      endedRefused := refused after
+      ended := yes endedRefused ++ how after
+      asked := yes read
+  -- nothing left behind
+  discard <| (Client.Keychain.clear service).call fx
+  let cleaned := ((← (Client.Keychain.attributes fresh).call fx) matches .ok none)
+    && ((← (Client.Keychain.attributes upgraded).call fx) matches .ok none)
+  line "cleanup" (if cleaned then "ok nothing left" else "ITEMS LEFT")
+  let readBack := flagged freshAttributes
+  let upgradedInPlace := (protect matches .ok true) && (again matches .ok false) && flagged upgradedAttributes
+  let stored := applied && readBack && upgradedInPlace && refusals && cleaned
+  let verdict :=
+    if fellBack then
+      -- the shell said the item is unlocked, and everything agrees with that
+      if !readBack && (protect matches .ok false) && (again matches .ok false) && !flagged upgradedAttributes && unenforced
+          && refusals && cleaned && (!prompt || (read && second)) then "SIMULATOR FALLBACK" else "FAIL"
+    else if !stored then "FAIL"
+    else if !enforced then (if unenforced && (!prompt || (read && second)) then "NOT ENFORCED" else "FAIL")
+    else if !prompt then "PASS WITHOUT THE PROMPT"
+    else if read && second && endedRefused then "PASS" else "FAIL"
+  let appliedSaid := if fellBack then "no, the shell stored it unlocked and said so (a simulator without a passcode)" else yes applied
+  let upgradeSaid := if fellBack && (protect matches .ok false) then "no, the shell left it unlocked and said so" else yes upgradedInPlace
+  let enforcedSaid := if enforced then "yes" else if stored && unenforced then "NO, the Keychain here does not hold an item to its access control, as a simulator's does not"
+    else "NO"
+  say s!"keychain-user-presence: {verdict}: flag applied: {appliedSaid}; flag read back: {yes readBack}; in-place upgrade worked: {upgradeSaid}; unauthenticated read refused: {enforcedSaid}{how bare}; authenticated read with a kept context after ONE prompt: {asked}; second read under the same context with no second prompt: {if prompt then yes second else "not asked"}; refused again after auth.end: {ended}; set and synchronizable refusals: {yes refusals}; left nothing behind: {yes cleaned}"
+
 open Std Async Net in
 /-- The shell's `http.*` against two servers of the selftest's own, `site` and `other`, on two ports of
 127.0.0.1: a redirect within `site` is followed and one from `other` to `site` (the same host, another port) is
@@ -572,7 +726,9 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
   | .auth => discard <| IO.asTask (prio := .dedicated) do
       -- in the session's scope: an answer after the app went to the background is not reported
       let token ← session.capture
-      let r ← session.authenticatedWithShell token fx "Prove native capabilities work" (pure ())
+      -- after the selftest's own question, if it is asking one
+      asking.lock
+      let r ← try session.authenticatedWithShell token fx "Prove native capabilities work" (pure ()) finally asking.unlock
       let stage := match r with
         | .stale .beforePrompt => "before the prompt" | .stale .afterAnswer => "after the answer"
         | .stale .duringAction => "during the action" | _ => "authentication"
@@ -664,6 +820,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit :=
         say s!"effect scope: {if spawned matches .started _ then "started" else "stale"}, drained {← drained.get}, late result delivered {late}, now {← scope.liveTasks} tasks"
         typedSelftest fx say
         keychainSetSelftest fx say
+        try keychainUserPresenceSelftest fx say catch e => say s!"keychain-user-presence: FAIL: {e}"
         try httpSelftest fx say catch e => say s!"http selftest: failed: {e}"
         -- the device's time zone: an identifier, and seconds east of UTC within a day either way
         let zone ← IO.wait (← fx.ask "timezone" (Json.mkObj []))

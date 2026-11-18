@@ -440,6 +440,54 @@
     } else {
         XCTAssertEqualObjects(said[@"typed keychain.add"], @"unsupported status -34018 (-34018)");
     }
+    // keychain-user-presence: an item behind the person's presence (an access control), and another upgraded to
+    // it in place. Nobody is asked here (no NATIVEDEMO_KEYCHAIN_PROMPT), so the run shows what needs no person:
+    // the flag applied and read back, the upgrade in place and its second run changing nothing, `set` rewriting
+    // no such item and making none. Where the Keychain holds an item to its access control (a device, a
+    // team-signed Mac) a read without an authentication is refused, -25308 (errSecInteractionNotAllowed): the
+    // Keychain was not let ask. A simulator's Keychain takes the access control and gives the value all the same
+    // (NOT ENFORCED), or on one that refuses it for want of a passcode the shell stores the item unlocked and
+    // says so (SIMULATOR FALLBACK): either is accepted in a simulator only, with every line held to it. The reads
+    // under a kept authentication are a device's to show (ci/device-run).
+    NSString *presence = said[@"keychain-user-presence"];
+    NSLog(@"keychain-user-presence: %@", presence);
+    NSString *(^line)(NSString *) = ^(NSString *what) { return said[[@"keychain-user-presence " stringByAppendingString:what]]; };
+    if (!accessGroup) {
+        XCTAssertTrue([presence hasPrefix:@"UNSUPPORTED: "], @"keychain-user-presence: %@", presence);
+        XCTAssertEqualObjects(line(@"add"), @"unsupported status -34018 (-34018)");
+        return;
+    }
+    BOOL enforced = [presence hasPrefix:@"PASS WITHOUT THE PROMPT: "], fallback = NO;
+#if TARGET_OS_SIMULATOR
+    fallback = [presence hasPrefix:@"SIMULATOR FALLBACK: "];
+    XCTAssertTrue(enforced || fallback || [presence hasPrefix:@"NOT ENFORCED: "], @"keychain-user-presence: %@", presence);
+#else
+    XCTAssertTrue(enforced, @"keychain-user-presence: %@", presence);
+#endif
+    NSString *flag = fallback ? @"ok userPresence false, " : @"ok userPresence true, ";
+    XCTAssertEqualObjects(line(@"add"), fallback ? @"ok added, access unlocked" : @"ok added, access userPresence");
+    XCTAssertTrue([line(@"attributes") hasPrefix:flag], @"attributes: %@", line(@"attributes"));
+    XCTAssertTrue([line(@"attributes before protect") hasPrefix:@"ok userPresence false, "], @"attributes: %@", line(@"attributes before protect"));
+    XCTAssertEqualObjects(line(@"protect"), fallback ? @"ok changed false" : @"ok changed true");
+    XCTAssertEqualObjects(line(@"protect again"), @"ok changed false");
+    XCTAssertTrue([line(@"attributes after protect") hasPrefix:flag], @"attributes: %@", line(@"attributes after protect"));
+    // an upgrade in place keeps the item where it is, in its class
+    XCTAssertTrue([line(@"attributes after protect") containsString:@"accessible whenUnlockedThisDeviceOnly, synchronizable false"],
+                  @"attributes: %@", line(@"attributes after protect"));
+    // `set` does not rewrite such an item (the shell's own refusal, where the Keychain's is not there to make it),
+    // makes none, and an item that syncs cannot be one: the last two refused before the Keychain is asked
+    if (!fallback) XCTAssertEqualObjects(line(@"set over it"), @"failed status -25308 (-25308)");
+    XCTAssertEqualObjects(line(@"set asking for it"), @"failed status -50 (-50)");
+    XCTAssertEqualObjects(line(@"add synchronizable"), @"failed status -50 (-50)");
+    // a read without an authentication: refused, or in a simulator the value each item was given (so the refused
+    // `set` changed nothing, and the upgrade kept the value)
+    NSString *unread = enforced ? @"failed status -25308 (-25308)" : @"ok the value it was given";
+    XCTAssertEqualObjects(line(@"get without a context"), unread);
+    XCTAssertEqualObjects(line(@"get of the upgraded item without a context"), unread);
+    XCTAssertEqualObjects(line(@"get with a context that never was"), unread);
+    XCTAssertEqualObjects(line(@"cleanup"), @"ok nothing left");
+    // nobody was asked
+    XCTAssertNil(line(@"auth with keep"));
 }
 
 #if !TARGET_OS_MACCATALYST

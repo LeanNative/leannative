@@ -192,3 +192,49 @@ The JSON format of commands and answers (both CLIs, and the generated iOS host b
 | constructor without fields | `"<ctor>"` |
 | `Nat` | a number with no more fractional digits than its exponent, not negative (`5`, `1e0`, `-0`; not `1.0`) |
 | `String`, `Bool`, `List`, `Option` | string, boolean, array, `null` or the value |
+
+## Capabilities (native mode): authentication and the Keychain
+
+In native mode a reply may carry `"caps":[{"id":n,"name":"…","args":{…}}]`: requests to the shell, each answered
+once with `{"id":n,"result":{…}}`. The names, arguments and answers are the table of
+`framework/lean/LeanNativeShell/Capabilities.lean` (printed into `LeanNativeShell.h`), and
+`framework/native/README.md` describes them. The ones below are stated here because an app's security rests on
+them. Everything in this section is additive: a request without `access`, `context` or `keep` is sent and
+answered as it was before these existed, and a shell that does not know `auth.end`, `keychain.protect` or
+`keychain.attributes` answers `{"error":"unknown capability <name>"}`.
+
+**An item behind the person's presence.** `"access":"userPresence"` in a keychain request asks for an access
+control in place of the protection class: the Keychain gives the value only after Face ID, Touch ID or the
+passcode. `status` is an `OSStatus` throughout (`0`, `-50` errSecParam, `-25293` errSecAuthFailed, `-25299`
+errSecDuplicateItem, `-25300` errSecItemNotFound, `-25308` errSecInteractionNotAllowed).
+
+| name | args | result |
+|---|---|---|
+| `keychain.add` | `key`, `value` or `hex`, `service`?, `synchronizable`?, `access`? | `{"ok","status","exists"}`; with `access` and the item added, also `"access":"userPresence"`. `access` with `synchronizable`, or any other `access`: `{"ok":false,"status":-50,"exists":false}`, the Keychain untouched |
+| `keychain.set` | `key`, `value` or `hex`, `service`?, `synchronizable`? | `{"ok","status"}`; with `access`: `-50`; over an item behind the person's presence: `-25308`, the item as it was |
+| `keychain.protect` | `key`, `service`?, `access`? (`"userPresence"` only) | `{"ok","status","changed"}`, with `ok` also `"access":"userPresence"`: the item is put behind the access control in place (one `SecItemUpdate`; never a delete, never an add, never a read of the value). `changed` is false when it already was. `-25300`: no such item; `-50`: `synchronizable`, or another `access`; any failure leaves the item as it was |
+| `keychain.attributes` | `key`, `service`?, `synchronizable`? | `{"status","accessible","userPresence","synchronizable"}`: `accessible` a string or null, the other two booleans; never the value. `{"status":-25300,"accessible":null,"userPresence":false,"synchronizable":false}` for no such item. On a device the Keychain gives no attributes of an item behind an access control; while the device is unlocked that refusal is answered `{"status":0,"accessible":null,"userPresence":true,"synchronizable":false}`, and `keychain.protect` answers `changed` false for it |
+| `keychain.get` | `key`, `service`?, `synchronizable`?, `hex`?, `context`? | `{"value"\|"hex":…\|null,"status"}`; `-25308` for an item behind the person's presence unless `context` names a kept authentication that lives |
+| `auth` | `reason`, `keep`? (seconds) | `{"ok":true}` or `{"ok":false,"error","name","code","domain"}`; with `keep` above 0, a yes is `{"ok":true,"context":"<id>"}` |
+| `auth.end` | `context` | `{"ok":true}` |
+
+**The Keychain capability never prompts and never blocks the main thread.** Every `keychain.get` and
+`keychain.attributes`, and every update of an existing item (`keychain.set`, `keychain.protect`), runs under an
+authentication context: the kept one a live `context` names, otherwise one that allows no interaction. A read
+the Keychain would have had to ask the person for is answered `-25308` instead. A `context` that has ended, or
+never was, is treated as none.
+
+**The lifetime of a kept authentication.** `auth` with `keep` (clamped to at most 60 seconds) keeps the
+authentication the person gave under an unguessable id. It is invalidated and its id forgotten at the first of:
+`auth.end`; `keep` seconds after the answer; the app entering the background. Not when the app resigns active,
+which the Face ID sheet itself causes. Any number of reads may name it while it lives, and none of them asks
+again: the kept context allows no interaction, so a read it does not satisfy is refused. An answer that arrives
+with the app already in the background keeps nothing: `{"ok":true}` without `context`.
+
+**A simulator.** On a simulator without a passcode `auth` answers `{"ok":true,"note":"simulator without a
+passcode"}` as before, with a `context` when `keep` asked for one (it has checked nothing and satisfies no
+access control). A simulator whose Keychain refuses an access control for want of a passcode has `keychain.add`
+store the item in the plain class and `keychain.protect` leave it as it is, each answering
+`"access":"unlocked"`; a device answers the status and stores nothing unprotected. A simulator's Keychain may
+also take the access control and not hold the item to it (the iOS 27.2 simulator does): a read without a
+context is then not refused there.
