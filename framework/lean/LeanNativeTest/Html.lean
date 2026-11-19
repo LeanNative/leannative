@@ -23,7 +23,11 @@ def decorJson (tone : String := "standard") (mono badge centered : Bool := false
   Json.mkObj [("tone", Json.str tone), ("mono", Json.bool mono), ("badge", Json.bool badge),
               ("centered", Json.bool centered), ("symbol", Json.str symbol), ("chevron", Json.bool chevron),
               ("swipe", Json.str swipe), ("selected", Json.bool selected), ("menu", Json.bool menu),
-              ("key", Json.str key), ("pointer", Json.str pointer), ("selectable", Json.bool selectable)]
+              ("key", Json.str key), ("pointer", Json.str pointer), ("selectable", Json.bool selectable),
+              ("subtitle", Json.str ""), ("accessory", Json.str ""), ("asset", Json.str ""),
+              ("spacing", Lean.toJson (0 : Nat)), ("pointSize", Lean.toJson (0 : Nat)),
+              ("fullWidth", Json.bool false), ("underlined", Json.bool false),
+              ("hideNavigationBar", Json.bool false), ("callout", Json.bool false)]
 
 def label : Html Nat := .text "1,000 sats" .body
 
@@ -44,6 +48,13 @@ partial def flat : Wire → Bool
   | w => w.children.all flat
 
 def composition : IO Unit := do
+  let notice : Html Nat := Html.symbol "icloud" (Html.decor { fullWidth := true, callout := true, subtitle := "Backup pending" }
+    (.button "Review" .plain (some 7)))
+  check "nested notice decoration retains width, panel and action"
+    (notice.dispatch [] .click == some 7 &&
+     match notice.toWire with
+     | .decorated d _ => d.fullWidth && d.callout && d.symbol == "icloud" && d.subtitle == "Backup pending"
+     | _ => false)
   same "one helper is one decor" (Html.tone .positive label) (labelWith [("decor", decorJson "positive")])
   same "tone then mono: one decor with both" (Html.mono (Html.tone .positive label))
     (labelWith [("decor", decorJson "positive" (mono := true))])

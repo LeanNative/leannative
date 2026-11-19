@@ -49,10 +49,10 @@ def AlertStyle.str : AlertStyle → String
 
 /-- Every field, always (the shell decodes an absent one as its default). -/
 def Decor.toJson (d : Decor) : Json :=
-  Json.mkObj [("tone", Json.str d.tone.str), ("mono", Json.bool d.mono), ("badge", Json.bool d.badge),
+  Json.mkObj [("subtitle", Json.str d.subtitle), ("accessory", Json.str d.accessory), ("asset", Json.str d.asset), ("spacing", Lean.toJson d.spacing), ("pointSize", Lean.toJson d.pointSize), ("fullWidth", Json.bool d.fullWidth), ("underlined", Json.bool d.underlined), ("hideNavigationBar", Json.bool d.hideNavigationBar), ("tone", Json.str d.tone.str), ("mono", Json.bool d.mono), ("badge", Json.bool d.badge),
               ("centered", Json.bool d.centered), ("symbol", Json.str d.symbol), ("chevron", Json.bool d.chevron),
               ("swipe", Json.str d.swipe.str), ("selected", Json.bool d.selected), ("menu", Json.bool d.menu),
-              ("key", Json.str d.key), ("pointer", Json.str d.pointer), ("selectable", Json.bool d.selectable)]
+              ("key", Json.str d.key), ("callout", Json.bool d.callout), ("pointer", Json.str d.pointer), ("selectable", Json.bool d.selectable)]
 
 def ButtonRole.str : ButtonRole → String
   | .plain => "plain"
