@@ -59,8 +59,9 @@ renderer reads `n[@"decor"][@"tone"]` whatever the node. -/
 def decorKey : String := "decor"
 
 def decorFields : List Field :=
-  [{ key := "tone", ty := .enum "Tone" "standard" }, { key := "mono", ty := .bool }, { key := "badge", ty := .bool },
-   { key := "centered", ty := .bool }, { key := "symbol", ty := .str }, { key := "chevron", ty := .bool },
+  [{ key := "subtitle", ty := .str }, { key := "accessory", ty := .str }, { key := "asset", ty := .str }, { key := "spacing", ty := .int }, { key := "pointSize", ty := .int }, { key := "fullWidth", ty := .bool }, { key := "underlined", ty := .bool }, { key := "hideNavigationBar", ty := .bool }, { key := "tone", ty := .enum "Tone" "standard" }, { key := "mono", ty := .bool }, { key := "badge", ty := .bool },
+   { key := "centered", ty := .bool }, { key := "callout", ty := .bool },
+   { key := "symbol", ty := .str }, { key := "chevron", ty := .bool },
    { key := "swipe", ty := .enum "Swipe" "none" }, { key := "selected", ty := .bool }, { key := "menu", ty := .bool },
    { key := "key", ty := .str }, { key := "pointer", ty := .str }, { key := "selectable", ty := .bool }]
 
@@ -78,7 +79,9 @@ def nodes : List NodeKind :=
       .l "LNBuildRow(box, 44);"] },
   { tag := "button", fields := [str "label", enum "role" "Role" "plain", bool "enabled" true],
     render := [
-      .l "if ([box.mode isEqualToString:@\"cell\"]) LNPin(LNRowButton(n, path), box, UIEdgeInsetsZero);",
+      .l "if ([n[@\"decor\"][@\"callout\"] boolValue]) LNPin(LNNoticeButton(n, path), box, UIEdgeInsetsZero);",
+      .l "else if ([n[@\"decor\"][@\"fullWidth\"] boolValue]) LNPin(LNButton(n, path, box.mode), box, UIEdgeInsetsZero);",
+      .l "else if ([box.mode isEqualToString:@\"cell\"]) LNPin(LNRowButton(n, path), box, UIEdgeInsetsZero);",
       .l "// a link is a row's title: its box's width, its label wrapping inside it (at its own width, a long",
       .l "// title squeezed it and spilled past both its edges)",
       .l "else if ([n[@\"decor\"][@\"chevron\"] boolValue]) LNPin(LNButton(n, path, box.mode), box, UIEdgeInsetsZero);",
@@ -253,7 +256,13 @@ def nodes : List NodeKind :=
       .l "if ([decor[@\"symbol\"] length] == 0) decor[@\"symbol\"] = @\"square.and.arrow.up\";",
       .l "BOOL row = [box.mode isEqualToString:@\"cell\"];",
       .l "UIButtonConfiguration *c = LNButtonStyle(@\"plain\", decor, row ? @\"\" : box.mode);",
-      .l "if (row) { LNNoInsets(c); c.imagePadding = 12; }",
+      .l "BOOL fullWidth = [decor[@\"fullWidth\"] boolValue];",
+      .l "if (fullWidth) {",
+      .l "    c = LNButtonStyle(@\"primary\", decor, @\"list\");",
+      .l "    c.cornerStyle = UIButtonConfigurationCornerStyleFixed; c.background.cornerRadius = 12;",
+      .l "    c.contentInsets = NSDirectionalEdgeInsetsMake(14, 16, 14, 16);",
+      .l "    LNButtonFont(c, YES);",
+      .l "} else if (row) { LNNoInsets(c); c.imagePadding = 12; }",
       .l "c.title = n[@\"label\"];",
       .l "BOOL file = [n[@\"file\"] boolValue];",
       .l "NSString *text = n[@\"text\"];",
@@ -263,7 +272,8 @@ def nodes : List NodeKind :=
           .l "UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:@[item] applicationActivities:nil];",
           .l "share.popoverPresentationController.sourceView = b;",
           .l "[LNTop(LNController(b)) presentViewController:share animated:YES completion:nil];"] "}]];",
-      .l "if (row) { b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading; LNPin(b, box, UIEdgeInsetsZero); }",
+      .l "if (fullWidth) LNPin(b, box, UIEdgeInsetsZero);",
+      .l "else if (row) { b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading; LNPin(b, box, UIEdgeInsetsZero); }",
       .l "else LNPinLeading(b, box);"] },
   { tag := "link", fields := [str "label", str "url"],
     render := [
