@@ -261,7 +261,11 @@ journeys`, and `ui-tests` with `UI_JOURNEY` for the simulator.
 `.github/workflows/ios-release.yml` is the reusable release workflow: it signs the app, checks it, uploads it
 to App Store Connect, hands it to TestFlight's internal group and publishes a GitHub release. Its steps are
 LeanNative's release tool, `leannative-release` (`framework/lean/LeanNativeRelease`), which drives
-xcodebuild, codesign, altool, openssl and curl:
+xcodebuild, codesign, altool, openssl and curl. It runs on GitHub's macOS runner unless `runs-on` names another
+(an owner's own Mac, a self-hosted runner's label), and its two small jobs that need no Mac on GitHub's Linux
+unless `linux-runs-on` does. On an owner's Mac the signing keychain is made in the job's temporary folder, put
+ahead of the user's keychains in their search list, and removed at the end, the list put back as it was.
+
 
 | Command | Does |
 |---|---|

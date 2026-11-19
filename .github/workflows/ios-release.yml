@@ -42,6 +42,10 @@ on:
         description: The macOS runner label
         type: string
         default: macos-26
+      linux-runs-on:
+        description: "The runner of the two small jobs that need no Mac (`tested`, `github-release`): GitHub's Linux by default; an app built on its owner's Macs may name them here too"
+        type: string
+        default: ubuntu-24.04
       timeout-minutes:
         type: number
         default: 120
@@ -135,7 +139,7 @@ jobs:
   # tree need not be the tag's. With none, run CI on the default branch by hand and rerun the release.
   tested:
     if: inputs.upload && inputs.preview-version == ''
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.linux-runs-on }}
     steps:
       - name: A successful CI run on this tree
         env:
@@ -285,7 +289,13 @@ jobs:
           security import "$SIGNING/dev.p12" -k "$KC" -P "$DEV_CERT_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
           rm "$SIGNING/dev.p12"
           security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" >/dev/null
-          security list-keychains -d user -s "$KC" login.keychain
+          # The signing keychain first in the user's search list, ahead of the ones already there, which are kept
+          # (on a person's own Mac, theirs) and put back as they were when the job ends (the last step).
+          KEEP="$RUNNER_TEMP/leannative-keychains"
+          security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//' > "$KEEP"
+          kept=()
+          while IFS= read -r k; do [ -n "$k" ] && [ "$k" != "$KC" ] && kept+=("$k"); done < "$KEEP"
+          security list-keychains -d user -s "$KC" "${kept[@]}"
           security find-identity -p codesigning "$KC" | head -3
       - name: App Store Connect answers with the key (read only)
         env:
@@ -355,12 +365,20 @@ jobs:
         if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/leannative-release.keychain-db" 2>/dev/null || true
+          # the user's search list as it was before the job (a person's own Mac keeps its keychains)
+          KEEP="$RUNNER_TEMP/leannative-keychains"
+          if [ -s "$KEEP" ]; then
+            kept=()
+            while IFS= read -r k; do [ -n "$k" ] && kept+=("$k"); done < "$KEEP"
+            security list-keychains -d user -s "${kept[@]}" || true
+            rm -f "$KEEP"
+          fi
           rm -rf "$SIGNING"
 
   github-release:
     needs: testflight
     if: ${{ !cancelled() && inputs.upload && inputs.preview-version == '' && needs.testflight.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.linux-runs-on }}
     timeout-minutes: 15
     permissions:
       contents: write
