@@ -281,6 +281,9 @@ jobs:
           "$LEANNATIVE_CI/run-tests"
       - name: Preserve the evidence
         if: always()
+        # a copy kept for a person to look at, not a check: an upload that fails (the account's artifact storage
+        # full, GitHub's service down) is a warning on a job whose checks passed, not a failure of it
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lean-${{ github.run_id }}-${{ github.run_attempt }}
@@ -413,6 +416,10 @@ jobs:
           overwrite: true
       - name: Preserve the evidence
         if: always()
+        # a copy kept for a person to look at, not a check: an upload that fails (the account's artifact storage
+        # full, GitHub's service down) is a warning on a job whose checks passed, not a failure of it. Except a
+        # part's: the media job downloads the parts' evidence, so there it must fail where it went missing
+        continue-on-error: ${{ matrix.shard == '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # a part's is app-<run>-<attempt>-part-<index>, which the media job downloads, whichever attempts made them
@@ -549,6 +556,9 @@ jobs:
           "$LEANNATIVE_CI/check-no-swift" "$CI_RESULTS/Release-ios.log" "$DERIVED_DATA/Build/Products/Release-iphoneos/$SCHEME.app"
       - name: Preserve the evidence
         if: always()
+        # a copy kept for a person to look at, not a check: an upload that fails (the account's artifact storage
+        # full, GitHub's service down) is a warning on a job whose checks passed, not a failure of it
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ github.run_id }}-${{ github.run_attempt }}
