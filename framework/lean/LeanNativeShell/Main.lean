@@ -17,10 +17,19 @@ def files : List (String × List Stmt) :=
   [ ("LeanNativeShell.h", headerFile), ("LNApp.m", appFile), ("LNStore.m", storeFile), ("LNNode.m", nodeFile),
     ("LNRender.m", renderFile), ("LNCapabilities.m", capsFile) ]
 
+/-- Every boxed comparison in the shell that is not cast to `BOOL` (`boxedInts`): JSON would print it `0` or
+`1`, and the typed client reading it takes only `true` or `false` (`cloudkit.query`'s `more` was one). -/
+def boxedProblems : List String :=
+  files.flatMap fun (name, body) => (body.flatMap (·.lines 0)).flatMap fun line =>
+    (boxedInts line).map fun e => s!"{name}: `@({e})` is a number in JSON, not a boolean: write `@((BOOL)({e}))`"
+
+#guard boxedProblems == []
+
 def main (args : List String) : IO UInt32 := do
   let [dir] := args | IO.eprintln "usage: leannative-shell <output dir>"; return 2
-  unless Check.problems.isEmpty do
-    for p in Check.problems do IO.eprintln s!"leannative-shell: {p}"
+  let problems := Check.problems ++ boxedProblems
+  unless problems.isEmpty do
+    for p in problems do IO.eprintln s!"leannative-shell: {p}"
     return 1
   IO.FS.createDirAll dir
   for (name, body) in files do
