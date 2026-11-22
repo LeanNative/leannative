@@ -58,6 +58,26 @@ def scrolling : Journey := ⟨"scrolling", do
   tap "probe-15"
   waitFor (.text "^(asking: )?HTTP bad proxy") 10⟩
 
+/-- Headless, a capability made to fail (`failNext`): the next `keychain.get` answers as a locked device's does
+(`errSecInteractionNotAllowed`, -25308), and the one after is the shell's own again (no such item, -25300); a
+failure kept for requests with an argument (`when`) waits for one (the sync item's read), passed over by the local
+reads before it. In a simulator the shell is the real one: the journey says so and does nothing. -/
+def failures : Journey := ⟨"failures", do
+  unless ← headless do
+    log "capabilities fail only headless"
+    return
+  launch
+  tap (.tab "Probes")
+  -- the sync item's read is not the local one's: it takes nothing of a failure meant for the local item
+  failNext "keychain.get" (when := [("synchronizable", "*")])
+  failNext "keychain.get"
+  tap (.button "Keychain local get")
+  waitFor (.text "^Keychain local get: .*-25308") 5
+  tap (.button "Keychain local get")
+  waitFor (.text "^Keychain local get: .*-25300") 5
+  tap (.button "Keychain sync get")
+  waitFor (.text "^Keychain sync get: .*-25308") 5⟩
+
 /-- Text patterns as journeys write them: a class with a count (`\d{2,3}`), an escaped metacharacter (`\.`), and
 `Find.beginning`, which escapes its text: a probe's label has parentheses, which unescaped are a group. -/
 def patterns : Journey := ⟨"patterns", do
@@ -122,5 +142,5 @@ end NativeDemo.Journeys
 
 open NativeDemo.Journeys in
 def main (args : List String) : IO UInt32 :=
-  LeanNative.Journey.main [counting, typing, refusals, scrolling, patterns, widgets, background, screenshots] args
+  LeanNative.Journey.main [counting, typing, refusals, scrolling, failures, patterns, widgets, background, screenshots] args
     (wire := some (LeanNative.Journey.Wire.app NativeDemo.app))

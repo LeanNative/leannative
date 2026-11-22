@@ -46,6 +46,12 @@ root = "LeanNativeTest.NativeRuntime"
 name = "manifest-test"
 root = "LeanNativeTest.Manifest"
 
+# The record a run keeps (LeanNative.Record, Native.runtime's `record`) and `deriving LeanNative.Tag`
+# (`make check`; not a default target).
+[[lean_exe]]
+name = "record-test"
+root = "LeanNativeTest.Record"
+
 # The headless journey driver's text patterns (Journey.Regex) and Journey.escapeRegex (`make check`; not a
 # default target).
 [[lean_exe]]

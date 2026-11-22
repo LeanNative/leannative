@@ -1,5 +1,6 @@
 import Lean.Data.Json
 import Std.Async
+import LeanNative.Record
 
 /-! # Journeys: an app's UI tests as Lean programs on the host
 
@@ -25,6 +26,14 @@ journey's message. Screenshots go to `<dir>/screenshots/<name>.png` and into the
 With `LEANNATIVE_DRIVER=wire` there is no simulator at all: the journeys executable runs the app itself, compiled
 into it, as a child process answering from its view tree (LeanNative.Journey.Wire; the executable's `main` passes
 the app as `wire`). A step costs a tree walk; what that does not test is the renderer and the shell.
+
+Headless, each run of the app keeps a record of what it did (`Native.Recorder`, `LeanNative.Record`): the messages
+`update` took and the commands `perform` was given, by tag when the app passed has `tagging` (`Native.Tagging`,
+derived with `LeanNative.TagDeriving` in the journeys executable), the capabilities it asked for and the answers
+that failed, and the element identifiers its views showed. `<dir>/coverage.json` adds them up, for each journey and
+for all, with the messages and commands that never came; the log says how many came of how many. And there the
+shell is the journey's, so a journey can have it fail (`failNext`): the next answers to a capability are the
+system's failure, where the app must show it and go on.
 
 Not under Mac Catalyst: its test runner is sandboxed, and whether it may connect to the host is untested. -/
 
@@ -108,6 +117,12 @@ structure Driver where
   /-- each command's count, total and longest time (ms) and the driver's looks (snapshots) for it in the running
   journey: where a journey's time goes -/
   timing : IO.Ref (Array (String × Nat × Nat × Nat × Nat))
+  /-- `Mode.wire`: the file the running app keeps its record in (`LEANNATIVE_COVERAGE`, `Native.Recorder`) -/
+  recordFile : Option System.FilePath := none
+  /-- what has been read of the running app's record, and what the running journey and all of them did -/
+  readSoFar : IO.Ref Tally
+  journeyTally : IO.Ref Tally
+  totalTally : IO.Ref Tally
 
 /-- What a journey runs in: IO, with the driver. -/
 abbrev UI := ReaderT Driver IO
@@ -174,6 +189,17 @@ private def accept (server : TCP.Socket.Server) (waitMs : Nat) (who : String) : 
 
 private def okJson : Json := Json.mkObj [("ok", true)]
 
+/-- What the running app has recorded since it was last read, added to the journey's and the run's. -/
+def takeRecord (d : Driver) : IO Unit := do
+  let some file := d.recordFile | return
+  unless ← file.pathExists do return
+  let some j := (Json.parse (← IO.FS.readFile file)).toOption | return
+  let now := Tally.ofJson j
+  let fresh := now.sub (← d.readSoFar.get)
+  d.readSoFar.set now
+  d.journeyTally.modify (·.add fresh)
+  d.totalTally.modify (·.add fresh)
+
 /-- What the host does itself when the app runs headless (`Mode.wire`): launch (the journeys executable again, as
 `--wire-app <port>`, with the environment asked for), terminate, end; none for what the app answers (`shot` and
 `activate` among them). -/
@@ -184,6 +210,11 @@ private def wireAnswer (d : Driver) (dir : String) (op : String) (fields : List 
       d.child.set none
       try c.kill catch _ => pure ()
       discard <| c.wait
+      -- what it did, before the next launch starts a record of its own
+      takeRecord d
+      d.readSoFar.set {}
+      if let some file := d.recordFile then
+        try IO.FS.removeFile file catch _ => pure ()
     d.link.set none
   match op with
   | "launch" =>
@@ -194,6 +225,9 @@ private def wireAnswer (d : Driver) (dir : String) (op : String) (fields : List 
       | .error _ => #[]
     let port := (← d.server.getSockName).port
     IO.FS.createDirAll dir
+    let env := match d.recordFile with
+      | some file => env.push ("LEANNATIVE_COVERAGE", some file.toString)
+      | none => env
     let child ← IO.Process.spawn { cmd := (← IO.appPath).toString, args := #["--wire-app", s!"{port}"],
                                    env := env.push ("LEANNATIVE_WIRE_DIR", some dir) }
     d.child.set (some child)
@@ -320,6 +354,21 @@ def home : UI Unit := discard <| request "home"
 /-- The app brought back to the foreground. -/
 def activate : UI Unit := discard <| request "activate"
 
+/-- Whether the app runs headless (`LEANNATIVE_DRIVER=wire`), where the shell is the journey's own. -/
+def headless : UI Bool := do return (← read).mode == .wire
+
+/-- (headless) The next `times` answers to the capability `cap` (a name, or a family ending in a dot,
+`cloudkit.`) fail: with `answer`, or as the system fails it (`Wire.Fault.defaultAnswer`: a locked device's Keychain,
+a cancelled authentication, no network). `when`: only requests whose arguments have these fields (`"*"`: with
+any value), so a read the app makes in the background does not take the failure meant for the one the journey
+causes. Then the shell answers as before. A relaunch forgets what is not spent. In a simulator the shell is the
+real one: the journey fails, saying so. -/
+def failNext (cap : String) (times : Nat := 1) (answer : Option Json := none) («when» : List (String × Json) := []) :
+    UI Unit := do
+  unless ← headless do failure s!"failNext {cap}: capabilities fail only headless (LEANNATIVE_DRIVER=wire)"
+  discard <| request "fault" ([("cap", Json.str cap), ("times", toJson times)] ++ answer.toList.map (("answer", ·)) ++
+    (if «when».isEmpty then [] else [("when", Json.mkObj «when»)]))
+
 /-- A line in the journey's log and the test's. -/
 def log (message : String) : UI Unit := do
   say s!"  {message}"
@@ -365,13 +414,26 @@ structure LeanNative.Journey where
 namespace LeanNative.Journey
 open Lean Std.Async
 
+/-- `<dir>/coverage.json`: what the journeys did together (`total`, a `Tally`), the messages and commands that
+never came (`neverMsgs`, `neverCmds`: the app's lists less what came), and which each journey sent and ran. And a
+line for the log. -/
+def writeCoverage (dir : System.FilePath) (total : Tally) (each : Array (String × Tally)) : IO Unit := do
+  let names (m : Std.HashMap String Nat) : Json := toJson ((m.toArray.map (·.1)).qsort (· < ·))
+  let perJourney := Json.mkObj (each.toList.map fun (name, t) =>
+    (name, Json.mkObj [("msgs", names t.msgs), ("cmds", names t.cmds), ("caps", names t.caps)]))
+  let j := Json.mkObj [("total", total.toJson), ("neverMsgs", toJson (Tally.never total.allMsgs total.msgs)),
+                       ("neverCmds", toJson (Tally.never total.allCmds total.cmds)), ("journeys", perJourney)]
+  IO.FS.writeFile (dir / "coverage.json") (j.pretty ++ "\n")
+  say s!"journeys: the app took {total.summary} (coverage.json)"
+
 /-- An app's journey executable: `main := Journey.main [j₁, j₂, …] args (wire := some (Wire.app app))`, run by framework/native/ci/ui-tests as
 `<exe> [journey names…] <evidence dir>` (all of them when no name is given; UI_JOURNEY="<exe> <name>" runs one). It listens on 127.0.0.1, writes the
 port to `<dir>/driver-port`, waits for the driver (LEANNATIVE_DRIVER_WAIT seconds, default 3600: xcodebuild
 builds the tests first), runs the journeys in order (one that fails is reported to the driver as a test failure,
 and the next still runs), and writes `<dir>/journeys.json` (each journey's result, time and screenshots). 1 if any failed.
 With `LEANNATIVE_DRIVER=wire` (and `wire` given) the app runs headless in a child of this executable
-(`<exe> --wire-app <port>`, which this `main` answers by serving the app). -/
+(`<exe> --wire-app <port>`, which this `main` answers by serving the app), and then writes `<dir>/coverage.json`
+too, from the record each run of the app kept. -/
 def main (journeys : List Journey) (args : List String) (wire : Option WireApp := none) : IO UInt32 := do
   if let ["--wire-app", port] := args then
     match wire, port.toNat? with
@@ -413,16 +475,22 @@ def main (journeys : List Journey) (args : List String) (wire : Option WireApp :
     say s!"journeys: the app itself, headless, on 127.0.0.1:{port}"
   let d : Driver := { mode := if wireDir.isSome then .wire else .xctest, link, server,
                       child := ← IO.mkRef none, wireDir, screenshots := some shots.toString, taken := ← IO.mkRef #[],
-                      timing := ← IO.mkRef #[] }
+                      timing := ← IO.mkRef #[],
+                      recordFile := wireDir.map fun w => (w : System.FilePath) / "record.json",
+                      readSoFar := ← IO.mkRef {}, journeyTally := ← IO.mkRef {}, totalTally := ← IO.mkRef {} }
+  let mut tallies : Array (String × Tally) := #[]
   let mut results : Array Json := #[]
   let mut failed := 0
   for j in chosen do
     say s!"journey {j.name}"
     d.taken.set #[]
     d.timing.set #[]
+    d.journeyTally.set {}
     let start ← IO.monoMsNow
     let outcome ← (j.run.run d).toBaseIO
     let secs := (Float.ofNat ((← IO.monoMsNow) - start)) / 1000
+    takeRecord d
+    tallies := tallies.push (j.name, ← d.journeyTally.get)
     let timing ← d.timing.get
     -- where the time went: each command's count, total and longest, for journeys.json and the log
     let timingJson := Json.mkObj (timing.toList.map fun (op, n, total, longest, looks) =>
@@ -449,7 +517,9 @@ def main (journeys : List Journey) (args : List String) (wire : Option WireApp :
   if let some c ← d.child.get then
     try c.kill catch _ => pure ()
     discard <| c.wait
+    takeRecord d
   IO.FS.writeFile (dir / "journeys.json") ((Json.arr results).pretty ++ "\n")
+  if d.recordFile.isSome then writeCoverage dir (← d.totalTally.get) tallies
   say s!"journeys: {chosen.length - failed} passed, {failed} failed"
   return if failed == 0 then 0 else 1
 

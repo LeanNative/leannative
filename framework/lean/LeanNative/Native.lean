@@ -2,6 +2,8 @@ import Lean.Data.Json
 import Std.Sync.Mutex
 import Std.Data.HashMap
 import LeanNative.CmdCli
+import LeanNative.Record
+import LeanNative.Tag
 
 /-! # TRUSTED SHELL: native mode (the app compiled to C, inside the iOS app)
 
@@ -38,6 +40,18 @@ structure Effects (Host : Type) where
   itself, e.g. a path before opening a file). Do not wait on it from the shell's main thread. -/
   ask : (name : String) → (args : Json) → IO (Task Json)
 
+/-- How the runtime names the messages and commands an app handles, for the record a run keeps
+(`LEANNATIVE_COVERAGE`): nothing by default, and `Tagging.derived` with the app's `LeanNative.Tag` instances, which
+are derived where the record is wanted (a journeys executable), not in the app that ships. -/
+structure Tagging (Msg Cmd : Type) where
+  msg : Option (Msg → String) := none
+  cmd : Option (Cmd → String) := none
+  allMsgs : Array String := #[]
+  allCmds : Array String := #[]
+
+def Tagging.derived [Tag Msg] [Tag Cmd] : Tagging Msg Cmd :=
+  { msg := some Tag.tag, cmd := some Tag.tag, allMsgs := Tag.all (α := Msg), allCmds := Tag.all (α := Cmd) }
+
 /-- An app in native mode: a `CmdApp` plus the Lean code that runs its commands. -/
 structure App (Model Msg Cmd Host : Type) extends CmdApp Model Msg Cmd Host where
   /-- Run one command. Called on the shell's main thread: start a task for anything slow. A task that runs
@@ -57,6 +71,8 @@ structure App (Model Msg Cmd Host : Type) extends CmdApp Model Msg Cmd Host wher
   launches a background task and `{"bgtaskExpired":{"id","kind","tag"}}` when it expires one): a host message,
   or nothing. -/
   system : Json → Option Host := fun _ => none
+  /-- How the record a run keeps names its messages and commands (`Tagging`); none: they are not named. -/
+  tagging : Tagging Msg Cmd := {}
 
 structure CapRequest where
   id : Nat
@@ -90,21 +106,58 @@ initialize registry : IO.Ref (Option Runtime) ← IO.mkRef none
 
 variable {Model Msg Cmd Host : Type}
 
+/-- The record a run keeps when `LEANNATIVE_COVERAGE` names a file (a journey's headless app is given one):
+every message `update` took and command `perform` was given, by tag (`App.tagging`), every capability asked of the
+shell and whether its answer was a failure, and every element identifier a view showed (`LeanNative.Tally`). The
+file is written whole, then renamed into place, after each step that changed the record, so a process killed
+between steps (a journey ends its app with a kill) leaves everything it did. Nothing is kept without the
+variable. -/
+structure Recorder where
+  path : System.FilePath
+  tally : IO.Ref Tally
+  dirty : IO.Ref Bool
+  /-- each pending capability's name, for its answer -/
+  asked : IO.Ref (Std.HashMap Nat String)
+
+def Recorder.start? (tagging : Tagging Msg Cmd) (to : Option System.FilePath := none) : IO (Option Recorder) := do
+  let some path ← (match to with | some p => pure (some p.toString) | none => IO.getEnv "LEANNATIVE_COVERAGE")
+    | return none
+  if path.isEmpty then return none
+  return some { path, tally := ← IO.mkRef { allMsgs := tagging.allMsgs, allCmds := tagging.allCmds },
+                dirty := ← IO.mkRef true, asked := ← IO.mkRef {} }
+
+def Recorder.note (r : Recorder) (f : Tally → Tally) : IO Unit := do
+  r.tally.modify f
+  r.dirty.set true
+
+/-- The record to its file, if it changed: written beside it, then renamed over it. -/
+def Recorder.flush (r : Recorder) : IO Unit := do
+  unless ← r.dirty.get do return
+  r.dirty.set false
+  let tmp := r.path.toString ++ ".tmp"
+  try
+    IO.FS.writeFile tmp ((← r.tally.get).toJson.compress ++ "\n")
+    IO.FS.rename tmp r.path
+  catch e => IO.eprintln s!"LeanNative: the record could not be written: {e}"
+
 def capJson (c : CapRequest) : Json :=
   Json.mkObj [("id", toJson c.id), ("name", Json.str c.name), ("args", c.args)]
 
-/-- Build the running app. `session` is touched only by the shell's main thread; `shared` by everyone. -/
-def runtime [ToJson Cmd] (app : App Model Msg Cmd Host) : IO Runtime := do
+/-- Build the running app. `session` is touched only by the shell's main thread; `shared` by everyone. `record`:
+where to keep the record of the run (`Recorder`), else `LEANNATIVE_COVERAGE`, else nowhere. -/
+def runtime [ToJson Cmd] (app : App Model Msg Cmd Host) (record : Option System.FilePath := none) : IO Runtime := do
   let session ← IO.mkRef (Session.start app.toApp)
+  let recorder ← Recorder.start? app.tagging record
   let shared ← Std.Mutex.new ({} : Shared Host)
   let cv ← Std.Condvar.new
   let post (h : Host) : IO Unit := do
     shared.atomically (modify fun s => { s with inbox := s.inbox.push h })
     cv.notifyAll
   let request (name : String) (args : Json) (k : Json → IO Unit) : IO Unit := do
-    shared.atomically (modify fun s =>
-      { s with caps := s.caps.push ⟨s.nextCap, name, args⟩, waiting := s.waiting.insert s.nextCap k,
-               nextCap := s.nextCap + 1 })
+    let id ← shared.atomically (modifyGet fun s =>
+      (s.nextCap, { s with caps := s.caps.push ⟨s.nextCap, name, args⟩, waiting := s.waiting.insert s.nextCap k,
+                           nextCap := s.nextCap + 1 }))
+    if let some r := recorder then r.asked.modify (·.insert id name)
     cv.notifyAll
   let effects : Effects Host :=
     { post
@@ -116,6 +169,8 @@ def runtime [ToJson Cmd] (app : App Model Msg Cmd Host) : IO Runtime := do
   -- a command's failure is its own: it is reported, the step's other commands run, the reply is still the view,
   -- and the answers queued behind it are still applied (an exception here used to end the whole drain)
   let runCmds (cs : List Cmd) : IO Unit := cs.forM fun c => do
+    if let (some r, some tag) := (recorder, app.tagging.cmd) then
+      r.note fun t => { t with cmds := Tally.bump t.cmds (tag c) }
     try app.perform c effects
     catch e => try IO.eprintln s!"LeanNative: a command's perform threw: {e}" catch _ => pure ()
   -- the shell receives the capability requests queued so far with every reply
@@ -126,10 +181,21 @@ def runtime [ToJson Cmd] (app : App Model Msg Cmd Host) : IO Runtime := do
     let base := match r with
       | .view seq w => Json.mkObj [("seq", toJson seq), ("view", w.toJson)]
       | other => other.toJson
+    if let some rec := recorder then
+      if let .view _ w := r then
+        rec.note fun t => { t with ids := w.identifiers.foldl (init := t.ids) fun m id => Tally.bump m id }
+      rec.flush
     pure (base.setObjVal! "caps" (Json.arr (caps.map capJson))).compress
   let step (i : Input Host) : IO Reply := do
-    let (s', r, cs) := (← session.get).step app.toCmdApp i
+    let s ← session.get
+    let (s', r, cs) := s.step app.toCmdApp i
     session.set s'
+    -- the message `update` took: a user event's, as `Session.step` finds it, or a host answer's
+    if let (some rec, some tag) := (recorder, app.tagging.msg) then
+      let msg? := match i with
+        | .event req => s.accept req
+        | .host h => some (app.host h)
+      if let some msg := msg? then rec.note fun t => { t with msgs := Tally.bump t.msgs (tag msg) }
     runCmds cs
     pure r
   pure
@@ -155,6 +221,12 @@ def runtime [ToJson Cmd] (app : App Model Msg Cmd Host) : IO Runtime := do
         let id := (j.getObjValAs? Nat "id").toOption.getD 0
         let result := (j.getObjVal? "result").toOption.getD Json.null
         let k? ← shared.atomically (modifyGet fun s => (s.waiting[id]?, { s with waiting := s.waiting.erase id }))
+        if let some rec := recorder then
+          let name? ← rec.asked.modifyGet fun m => (m[id]?, m.erase id)
+          if let some name := name? then
+            rec.note fun t => { t with caps := Tally.bump t.caps name,
+                                       capFailures := if capFailed result then Tally.bump t.capFailures name else t.capFailures }
+            rec.flush
         if let some k := k? then k result
       wait := shared.atomicallyOnce cv (do let s ← get; pure (!s.inbox.isEmpty || !s.caps.isEmpty)) (pure ())
       current := do let s ← session.get; pure (s.seq, s.lastView.toWire) }
