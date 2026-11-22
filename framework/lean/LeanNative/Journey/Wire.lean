@@ -75,6 +75,44 @@ structure KeychainEntry where
   userPresence : Bool := false
   deriving Repr
 
+/-- A failure a journey asked for (`Journey.failNext`): the next `times` answers to the capability `cap` (a name,
+or a family ending in a dot: `cloudkit.`) whose arguments have the fields of `when` are `answer`, in place of the
+shell's own. -/
+structure Fault where
+  cap : String
+  times : Nat
+  answer : Json
+  /-- an object whose fields the request's arguments must have (`"*"`: any value), or null for any request -/
+  «when» : Json := Json.null
+  deriving Inhabited
+
+def Fault.matches (f : Fault) (name : String) (args : Json) : Bool :=
+  f.times > 0 && (f.cap == name || (f.cap.endsWith "." && name.startsWith f.cap)) &&
+    match f.«when».getObj? with
+    | .ok fields => fields.toArray.all fun (k, v) => match args.getObjVal? k with
+        | .ok a => v == Json.str "*" || a == v
+        | .error _ => false
+    | .error _ => true
+
+/-- How a capability fails when a journey does not say how: as the system answers on a locked device (the
+Keychain: `errSecInteractionNotAllowed`), for a person who cancels (authentication), with the network gone (iCloud,
+HTTP), and otherwise an error naming the journey. -/
+def Fault.defaultAnswer (name : String) : Json :=
+  let why := Json.str "a failure the journey asked for"
+  if name == "keychain.get" then
+    Json.mkObj [("value", Json.null), ("hex", Json.null), ("status", toJson (-25308 : Int))]
+  else if name.startsWith "keychain." then
+    Json.mkObj [("ok", Json.bool false), ("status", toJson (-25308 : Int))]
+  else if name == "auth" then
+    Json.mkObj [("ok", Json.bool false), ("error", Json.str "Canceled by user."), ("name", Json.str "userCancel"),
+                ("code", toJson (-2 : Int)), ("domain", Json.str "com.apple.LocalAuthentication")]
+  else if name.startsWith "cloudkit." then
+    Json.mkObj [("error", Json.str "networkUnavailable"), ("code", toJson (3 : Int)), ("detail", why)]
+  else if name.startsWith "http." then
+    Json.mkObj [("error", Json.str "The Internet connection appears to be offline."), ("code", toJson (-1009 : Int)),
+                ("domain", Json.str "NSURLErrorDomain")]
+  else Json.mkObj [("error", Json.str "injected"), ("detail", why)]
+
 /-- The fake shell's state: its files under `dir`, the Keychain kept in `dir/keychain.json` so that it survives a
 relaunch as a device's does, the clipboard, and the authentications kept (`auth` with `keep`), which do not
 survive one. -/
@@ -87,6 +125,9 @@ structure Shell where
   contexts : IO.Ref (Array String × Nat)
   /-- An app's own answers, tried first: `none` for the default. -/
   override : String → Json → IO (Option Json) := fun _ _ => pure none
+  /-- The failures the journey asked for (`fault`), tried before everything: each answers in place of the shell
+  as many times as it was asked to, then is spent. A relaunch starts without any. -/
+  faults : IO.Ref (Array Fault)
 
 namespace Shell
 
@@ -118,7 +159,7 @@ def loadKeychain (path : System.FilePath) : IO (Array KeychainEntry) := do
 def new (dir : System.FilePath) (override : String → Json → IO (Option Json) := fun _ _ => pure none) : IO Shell := do
   IO.FS.createDirAll dir
   return { dir, keychain := ← IO.mkRef (← loadKeychain (dir / "keychain.json")), clipboard := ← IO.mkRef none,
-           contexts := ← IO.mkRef (#[], 0), override }
+           contexts := ← IO.mkRef (#[], 0), override, faults := ← IO.mkRef #[] }
 
 private def str (args : Json) (k : String) : Option String := (args.getObjValAs? String k).toOption
 private def flag (args : Json) (k : String) : Bool := (args.getObjValAs? Bool k).toOption.getD false
@@ -289,6 +330,11 @@ def defaultAnswer (sh : Shell) (name : String) (args : Json) : IO Json := do
     return Json.mkObj [("error", Json.str "unsupported")]
 
 def answer (sh : Shell) (name : String) (args : Json) : IO Json := do
+  let injected ← sh.faults.modifyGet fun fs =>
+    match fs.findIdx? (·.matches name args) with
+    | some i => (some fs[i]!.answer, fs.modify i fun f => { f with times := f.times - 1 })
+    | none => (none, fs)
+  if let some j := injected then return j
   match ← sh.override name args with
   | some j => return j
   | none => sh.defaultAnswer name args
@@ -701,6 +747,14 @@ def answer (st : State) (command : Json) : IO (Json × Bool) := do
   | "end" => return (ok, true)
   -- the host prints the journey's log and failures itself
   | "log" | "fail" => return (ok, false)
+  -- `Journey.failNext`: the next answers to a capability fail, as asked or as the system would
+  | "fault" =>
+    let some cap := fieldStr "cap" | return (refuse "fault: no capability named (cap)", false)
+    let times := (command.getObjValAs? Nat "times").toOption.getD 1
+    let answer := (command.getObjVal? "answer").toOption.getD (Fault.defaultAnswer cap)
+    let «when» := (command.getObjVal? "when").toOption.getD Json.null
+    st.shell.faults.modify (·.push { cap, times, answer, «when» })
+    return (ok, false)
   | "home" =>
     st.scenePhase "inactive"
     st.scenePhase "background"

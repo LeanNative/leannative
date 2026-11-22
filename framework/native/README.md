@@ -687,6 +687,26 @@ kit's 20 s and 15 s; either can also be set for a whole run). What it does not
 test is the renderer, real touches and the shell's capabilities: keep one simulator run for those, and for the
 screenshots and recording.
 
+**Failures on purpose.** Headless, the shell is the journey's own, so a journey can make it fail:
+`failNext "keychain.get"` has the next answer to that capability fail as the system's would (a locked device's
+Keychain, `-25308`; a cancelled authentication, `userCancel`; iCloud or HTTP without a network), `times` makes it
+the next several, `answer` gives the failure itself, `when` takes only requests with these arguments (`"*"`: any
+value; a read under an authentication, `context`, and not the app's reads in the background), and a family ends in
+a dot (`cloudkit.`). Then the shell
+answers as before; a relaunch forgets what is not spent. In a simulator the shell is the real one, and
+`failNext` fails the journey saying so (`headless` tells a journey which it is in). native-demo's `failures`
+journey makes a Keychain read fail and reads the probe's answer.
+
+**What the journeys did.** Headless, each run of the app keeps a record (`LEANNATIVE_COVERAGE`, which the
+journeys executable sets for its child: `Native.Recorder`, `LeanNative.Record`): every message `update` took and
+command `perform` was given, every capability asked for and how many of its answers failed, every element
+identifier a view showed. Messages and commands are named by tag (`LeanNative.Tag`: a constructor's name, with a
+tagged field's tag after a dot, `home.feeBump`, `host.loaded.error`) when the app passed as `wire` has `tagging`
+(`Native.Tagging.derived`). Deriving the tags needs `Lean`, so an app derives them in its journeys executable
+(`import LeanNative.TagDeriving`, `deriving instance LeanNative.Tag for HomeMsg, Msg, Cmd`), never in the app that
+ships. `<evidence dir>/coverage.json` adds the runs up, for each journey and for all, with `neverMsgs` and
+`neverCmds`: what the app has that no journey sent or ran; the log's last lines say how many came of how many.
+
 CI runs them on both platforms (check.yml): `ui` on an iOS simulator, `ui-catalyst` under Mac Catalyst on
 the same GitHub-hosted macOS runner (an arm64 virtual Mac), each with its evidence exported. Under
 Catalyst every test runs but Face ID: the click, scroll-wheel and Command-A paths, the selftest (BackgroundRun
